@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: psychapp
+      POSTGRES_PASSWORD: psychapp
+      POSTGRES_DB: psychapp
+    volumes:
+      - psychapp_db_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psychapp -d psychapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://psychapp:psychapp@db:5432/psychapp
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:8001:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/v1/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:5173:80"
+    volumes:
+      - ./mobile-dist:/usr/share/nginx/html/download:ro
+
+volumes:
+  psychapp_db_data:

@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <Import Project="$(NuGetPackageRoot)microsoft.windows.sdk.buildtools.msix\1.7.251221100\buildTransitive\Microsoft.Windows.SDK.BuildTools.MSIX.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windows.sdk.buildtools.msix\1.7.251221100\buildTransitive\Microsoft.Windows.SDK.BuildTools.MSIX.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windows.sdk.buildtools\10.0.26100.4654\buildTransitive\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windows.sdk.buildtools\10.0.26100.4654\buildTransitive\Microsoft.Windows.SDK.BuildTools.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk.base\2.0.4\buildTransitive\Microsoft.WindowsAppSDK.Base.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk.base\2.0.4\buildTransitive\Microsoft.WindowsAppSDK.Base.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk.runtime\2.3.1\buildTransitive\Microsoft.WindowsAppSDK.Runtime.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk.runtime\2.3.1\buildTransitive\Microsoft.WindowsAppSDK.Runtime.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk.interactiveexperiences\2.0.13\buildTransitive\Microsoft.WindowsAppSDK.InteractiveExperiences.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk.interactiveexperiences\2.0.13\buildTransitive\Microsoft.WindowsAppSDK.InteractiveExperiences.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk.foundation\2.0.21\buildTransitive\Microsoft.WindowsAppSDK.Foundation.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk.foundation\2.0.21\buildTransitive\Microsoft.WindowsAppSDK.Foundation.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windows.ai.machinelearning\2.1.74\buildTransitive\Microsoft.Windows.AI.MachineLearning.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windows.ai.machinelearning\2.1.74\buildTransitive\Microsoft.Windows.AI.MachineLearning.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk.ml\2.1.74\buildTransitive\Microsoft.WindowsAppSDK.ML.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk.ml\2.1.74\buildTransitive\Microsoft.WindowsAppSDK.ML.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2957.106\buildTransitive\Microsoft.Web.WebView2.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.web.webview2\1.0.2957.106\buildTransitive\Microsoft.Web.WebView2.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.windowsappsdk\1.6.250108002\buildTransitive\Microsoft.WindowsAppSDK.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.windowsappsdk\1.6.250108002\buildTransitive\Microsoft.WindowsAppSDK.targets')" />
+  </ImportGroup>
+</Project>

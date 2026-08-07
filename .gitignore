@@ -1,0 +1,4 @@
+remote-credentials.txt
+frontend/.htpasswd
+.env
+remote-url.txt

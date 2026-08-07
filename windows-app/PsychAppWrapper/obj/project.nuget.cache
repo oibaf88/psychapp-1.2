@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "dgSpecHash": "nxEN8bYc6Yc=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\bugal\\psychdeep-1.2\\windows-app\\PsychAppWrapper\\PsychAppWrapper.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.web.webview2\\1.0.2957.106\\microsoft.web.webview2.1.0.2957.106.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windows.ai.machinelearning\\2.1.74\\microsoft.windows.ai.machinelearning.2.1.74.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windows.sdk.buildtools\\10.0.26100.4654\\microsoft.windows.sdk.buildtools.10.0.26100.4654.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windows.sdk.buildtools.msix\\1.7.251221100\\microsoft.windows.sdk.buildtools.msix.1.7.251221100.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk\\1.6.250108002\\microsoft.windowsappsdk.1.6.250108002.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk.base\\2.0.4\\microsoft.windowsappsdk.base.2.0.4.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk.foundation\\2.0.21\\microsoft.windowsappsdk.foundation.2.0.21.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk.interactiveexperiences\\2.0.13\\microsoft.windowsappsdk.interactiveexperiences.2.0.13.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk.ml\\2.1.74\\microsoft.windowsappsdk.ml.2.1.74.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsappsdk.runtime\\2.3.1\\microsoft.windowsappsdk.runtime.2.3.1.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\system.numerics.tensors\\9.0.0\\system.numerics.tensors.9.0.0.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-arm64\\9.0.18\\microsoft.aspnetcore.app.runtime.win-arm64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\9.0.18\\microsoft.aspnetcore.app.runtime.win-x64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x86\\9.0.18\\microsoft.aspnetcore.app.runtime.win-x86.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.netcore.app.runtime.win-arm64\\9.0.18\\microsoft.netcore.app.runtime.win-arm64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\9.0.18\\microsoft.netcore.app.runtime.win-x64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x86\\9.0.18\\microsoft.netcore.app.runtime.win-x86.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.57\\microsoft.windows.sdk.net.ref.10.0.19041.57.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-arm64\\9.0.18\\microsoft.windowsdesktop.app.runtime.win-arm64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\9.0.18\\microsoft.windowsdesktop.app.runtime.win-x64.9.0.18.nupkg.sha512",
+    "C:\\Users\\bugal\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x86\\9.0.18\\microsoft.windowsdesktop.app.runtime.win-x86.9.0.18.nupkg.sha512"
+  ],
+  "logs": []
+}
