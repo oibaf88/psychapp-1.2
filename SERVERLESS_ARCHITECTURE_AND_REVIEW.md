@@ -8,7 +8,7 @@ La aplicación actual tiene una arquitectura clásica de contenedores con tres s
 ## 1. La Base de Datos
 El proyecto **sí cuenta con una base de datos** relacional (PostgreSQL). Toda la persistencia (pacientes, profesionales, check-ins, diarios, análisis de riesgo, etc.) se almacena allí utilizando SQLAlchemy como ORM. Actualmente se despliega localmente en el contenedor `db` vía Docker Compose.
 Para desplegar en la nube (serverless):
-- **Opción Serverless:** Puedes utilizar una base de datos gestionada o verdaderamente *serverless* como **Neon (Postgres Serverless)** o **Supabase**. También opciones en la nube como AWS RDS Proxy o Amazon Aurora Serverless (PostgreSQL-compatible) si buscas escalabilidad bajo demanda.
+- **Opción Serverless:** Puedes utilizar una base de datos gestionada o verdaderamente *serverless* como **Neon (Postgres Serverless)** . También opciones en la nube como AWS RDS Proxy o Amazon Aurora Serverless (PostgreSQL-compatible) si buscas escalabilidad bajo demanda.
 - Solo debes proveer la cadena de conexión en la variable de entorno `DATABASE_URL` al backend.
 
 ## 2. Despliegue del Frontend Serverless
@@ -19,7 +19,6 @@ El frontend construido (archivos estáticos) no necesita Nginx en un contenedor 
 ## 3. Despliegue del Backend Serverless
 FastAPI puede ejecutarse de manera *serverless* en la nube en lugar de ejecutarse continuamente en un contenedor de Docker:
 - **AWS Lambda + API Gateway:** Usando un adaptador como **Mangum** (`pip install mangum`), puedes envolver tu aplicación FastAPI para que AWS Lambda la ejecute por petición.
-- **Render o Railway (No estrictamente serverless de funciones, pero PaaS serverless):** Permite subir tu repositorio y lo escalan bajo demanda. Es mucho más sencillo que AWS Lambda para FastAPI.
 - **Google Cloud Run:** Crea un contenedor de tu backend que escala a 0 (no cuesta cuando no se usa), acercándose al paradigma serverless.
 
 ## 4. LLMs Locales o APIs Adicionales
