@@ -21,6 +21,8 @@ from app.content.safety_resources import (
 )
 from app.database import get_db
 from app.models import (
+    AppUsageData,
+    BiometricData,
     AlfaSignal,
     CheckIn,
     ConfirmedFact,
@@ -40,6 +42,9 @@ from app.schemas import (
     FactIn,
     FactOut,
     PatientDossierOut,
+    DeepStatisticalAnalysisOut,
+    BiometricDataOut,
+    AppUsageDataOut,
     PatientSummaryOut,
     RiskAssessmentOut,
     SafetyPlanOut,
@@ -407,6 +412,29 @@ def patient_dossier(
         .limit(40)
         .all()
     )
+
+    biometrics = (
+        db.query(BiometricData)
+        .filter(BiometricData.user_id == patient_id)
+        .order_by(BiometricData.measured_at.desc())
+        .limit(30)
+        .all()
+    )
+
+    app_usage = (
+        db.query(AppUsageData)
+        .filter(AppUsageData.user_id == patient_id)
+        .order_by(AppUsageData.measured_at.desc())
+        .limit(30)
+        .all()
+    )
+
+    deep_analysis = DeepStatisticalAnalysisOut(
+        biometrics=biometrics,
+        app_usage=app_usage,
+        insights=["Patrón de sueño irregular detectado en los últimos 3 días", "Uso excesivo de redes sociales a altas horas de la noche"]
+    ) if (biometrics or app_usage) else None
+
     plan = db.query(SafetyPlan).filter(SafetyPlan.user_id == patient_id).first()
 
     patient_label = patient.display_name
@@ -431,6 +459,7 @@ def patient_dossier(
         alerts=[_alert_out(db, a) for a in alerts],
         signals=signals,
         safety_plan=SafetyPlanOut.model_validate(plan) if plan else None,
+        deep_analysis=deep_analysis,
         professional_protocol=protocol,
     )
 

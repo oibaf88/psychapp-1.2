@@ -2,8 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Consent, SafetyPlan, User
-from app.schemas import LoginRequest, Token, UserCreate, UserOut
+from typing import Optional
+from datetime import datetime, timedelta
+import uuid
+
+from fastapi import Body
+
+from app.models import Consent, SafetyPlan, User, PasswordResetToken
+from app.schemas import LoginRequest, Token, UserCreate, UserOut, PasswordResetRequest, PasswordResetConfirm, GoogleLoginRequest
 from app.security import create_access_token, get_current_user, hash_password, verify_password
 from app.services import audit
 
@@ -58,6 +64,107 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Account disabled")
 
     audit.log(db, actor_id=user.id, actor_role=user.role, action="login", entity_type="user", entity_id=user.id)
+
+    token = create_access_token(user.id, user.role)
+    return Token(access_token=token, user=UserOut.model_validate(user))
+
+
+@router.post("/password-reset-request")
+def password_reset_request(payload: PasswordResetRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        # Don't reveal if user exists or not
+        return {"message": "If the email exists, a reset link has been sent."}
+
+    # Generate token
+    token = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + timedelta(hours=1)
+
+    reset_token = PasswordResetToken(
+        user_id=user.id,
+        token=token,
+        expires_at=expires_at
+    )
+    db.add(reset_token)
+    db.commit()
+
+    # In a real app, send an email here with the token.
+    # For now, we will just log it in the audit log or pretend it's sent.
+    audit.log(db, actor_id=user.id, actor_role=user.role, action="password_reset_requested", entity_type="user", entity_id=user.id)
+
+    return {"message": "If the email exists, a reset link has been sent.", "dev_token": token}  # NOTE: remove dev_token in prod
+
+
+@router.post("/password-reset-confirm")
+def password_reset_confirm(payload: PasswordResetConfirm, db: Session = Depends(get_db)):
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == payload.token,
+        PasswordResetToken.is_used == False,
+        PasswordResetToken.expires_at > datetime.utcnow()
+    ).first()
+
+    if not reset_token:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    user.hashed_password = hash_password(payload.new_password)
+    reset_token.is_used = True
+    db.commit()
+
+    audit.log(db, actor_id=user.id, actor_role=user.role, action="password_reset_completed", entity_type="user", entity_id=user.id)
+
+    return {"message": "Password has been reset successfully."}
+
+@router.post("/google-login", response_model=Token)
+def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+    # In a real app you'd verify the token with Google using something like google-auth
+    # from google.oauth2 import id_token
+    # from google.auth.transport import requests
+    # try:
+    #     idinfo = id_token.verify_oauth2_token(payload.id_token, requests.Request(), GOOGLE_CLIENT_ID)
+    # except ValueError:
+    #     raise HTTPException(status_code=401, detail="Invalid token")
+    # email = idinfo['email']
+    # display_name = idinfo.get('name', email)
+
+    # Mocking validation for now
+    if not payload.id_token:
+        raise HTTPException(status_code=401, detail="Missing token")
+
+    # We will simulate decoding by just accepting the token as the email (FOR DEMO ONLY)
+    email = payload.id_token
+    display_name = payload.id_token.split('@')[0] if '@' in payload.id_token else payload.id_token
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        if payload.role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"role must be one of {sorted(VALID_ROLES)}")
+
+        user = User(
+            email=email,
+            # Generate a random password since they login with google
+            hashed_password=hash_password(str(uuid.uuid4())),
+            display_name=display_name,
+            role=payload.role,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        db.add(Consent(user_id=user.id, consent_type="data_processing", granted=True))
+        if user.role == "patient":
+            db.add(SafetyPlan(user_id=user.id))
+        db.commit()
+        audit.log(db, actor_id=user.id, actor_role=user.role, action="register_google", entity_type="user", entity_id=user.id)
+    else:
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="Account disabled")
+
+    audit.log(db, actor_id=user.id, actor_role=user.role, action="login_google", entity_type="user", entity_id=user.id)
 
     token = create_access_token(user.id, user.role)
     return Token(access_token=token, user=UserOut.model_validate(user))
