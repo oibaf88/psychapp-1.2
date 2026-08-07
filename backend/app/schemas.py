@@ -35,6 +35,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+    role: str = "patient" # Optional role if user is new
+
+
+
+
 # ------------------------------------------------------------- consents ----
 class ConsentIn(BaseModel):
     consent_type: str
@@ -51,6 +66,46 @@ class ConsentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+# ------------------------------------------------------------- metrics ---
+class BiometricDataIn(BaseModel):
+    device_type: str
+    heart_rate_avg: Optional[float] = None
+    heart_rate_variability: Optional[float] = None
+    sleep_duration_hours: Optional[float] = None
+    sleep_quality_score: Optional[float] = None
+    deep_sleep_hours: Optional[float] = None
+    rem_sleep_hours: Optional[float] = None
+    steps: Optional[int] = None
+    active_calories: Optional[float] = None
+    measured_at: datetime = Field(default_factory=datetime.utcnow)
+
+class BiometricDataOut(BiometricDataIn):
+    id: uuid.UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AppUsageDataIn(BaseModel):
+    apps_usage_stats: dict
+    screen_time_minutes: Optional[int] = None
+    measured_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AppUsageDataOut(AppUsageDataIn):
+    id: uuid.UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class DeepStatisticalAnalysisOut(BaseModel):
+    biometrics: list[BiometricDataOut]
+    app_usage: list[AppUsageDataOut]
+    insights: list[str]
 
 
 # ------------------------------------------------------------- check-ins ---
@@ -260,5 +315,6 @@ class PatientDossierOut(BaseModel):
     assessments: list[RiskAssessmentOut]
     alerts: list[AlertOut]
     signals: list[SignalOut]
+    deep_analysis: Optional[DeepStatisticalAnalysisOut] = None
     safety_plan: Optional[SafetyPlanOut] = None
     professional_protocol: dict[str, str]

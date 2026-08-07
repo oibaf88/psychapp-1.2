@@ -21,6 +21,7 @@ from app.routers import (
     professional,
     safety,
     timeline,
+    metrics,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -120,3 +121,4 @@ app.include_router(assignments.router)
 app.include_router(professional.router)
 app.include_router(notifications.router)
 app.include_router(audit.router)
+app.include_router(metrics.router)
