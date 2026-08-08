@@ -1,0 +1,116 @@
+# Render Blueprint for PsychDeep 1.2
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repository.
+# Render reads this file and creates both services.
+#
+# Data lives in Supabase (Postgres). Render runs only the API and the
+# static frontend — there is no Render database in this blueprint.
+#
+# Secrets marked `sync: false` are NOT stored in git. Render prompts for
+# them on first deploy; set them in the dashboard afterwards.
+services:
+  # ---------------------------------------------------------------------
+  # FastAPI backend (Agent 1 + Agent 2 both call the Anthropic API)
+  # ---------------------------------------------------------------------
+  - type: web
+    name: psychdeep-api
+    runtime: docker
+    repo: https://github.com/oibaf88/psychapp-1.2
+    branch: master
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # `free` spins down after ~15 min idle and cold-starts in ~1 min.
+    # Change to `starter` for an always-on instance (paid).
+    plan: free
+    # Frankfurt is the closest Render region to the Supabase project
+    # (eu-north-1), which keeps database round-trips short.
+    region: frankfurt
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      # --- Supabase Postgres -------------------------------------------
+      # Use the CONNECTION POOLER string from Supabase -> Connect, not the
+      # direct db.<ref>.supabase.co host: direct hosts are IPv6-only and
+      # Render cannot reach them. Append ?sslmode=require.
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Anthropic ----------------------------------------------------
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_CHAT_MODEL
+        value: claude-opus-5
+      - key: ANTHROPIC_CHAT_EFFORT
+        value: medium
+      - key: ANTHROPIC_ANALYSIS_MODEL
+        value: claude-opus-5
+      - key: ANTHROPIC_ANALYSIS_EFFORT
+        value: high
+      - key: ANTHROPIC_MAX_TOKENS
+        value: "8192"
+
+      # --- Auth ---------------------------------------------------------
+      - key: JWT_SECRET
+        generateValue: true
+
+      # --- App ----------------------------------------------------------
+      - key: APP_ENV
+        value: production
+      - key: APP_LOCALE
+        value: es-ES
+      # Must list the exact frontend origins. In production the API does
+      # NOT fall back to permissive LAN/tunnel regexes.
+      - key: CORS_ORIGINS
+        value: https://psychapp.bfab.io
+      # Never seed the four demo accounts into a public deployment —
+      # they have well-known passwords.
+      - key: SEED_DEMO_DATA
+        value: "false"
+
+      # --- Optional outbound email for professional alerts --------------
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        value: psychapp@bfab.io
+
+  # ---------------------------------------------------------------------
+  # React/Vite frontend — served as a static site
+  # ---------------------------------------------------------------------
+  - type: web
+    name: psychdeep-web
+    runtime: static
+    repo: https://github.com/oibaf88/psychapp-1.2
+    branch: master
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    autoDeploy: true
+    envVars:
+      # Baked in at build time. Set to the psychdeep-api service URL
+      # (https://psychdeep-api.onrender.com, or your own API domain).
+      # A static site cannot proxy /api to another service the way the
+      # Docker Compose nginx does, so this must be an absolute URL.
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      # Single-page app: let React Router handle unknown paths.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
