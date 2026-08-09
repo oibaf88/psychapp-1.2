@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     # --- Database -----------------------------------------------------
     database_url: str = "postgresql://psychapp:psychapp@db:5432/psychapp"
+    database_schema: str = ""
 
     # --- Auth -----------------------------------------------------------
     jwt_secret: str = "CHANGE_ME_DEV_ONLY_NOT_FOR_PRODUCTION"
@@ -48,7 +49,7 @@ class Settings(BaseSettings):
     # /auth/google-login currently trusts the client-supplied id_token as
     # the user's email instead of verifying it with Google, so enabling it
     # lets anyone obtain a session for any account. Keep it false until
-    # real Google token verification is implemented.
+    # real Google verification is implemented.
     allow_mock_google_login: bool = False
 
     @property
