@@ -7,7 +7,7 @@ settings = get_settings()
 
 connect_args = {}
 if settings.database_schema:
-    connect_args["options"] = f"-csearch_path={settings.database_schema}"
+    connect_args["options"] = f"-c search_path={settings.database_schema}"
 
 engine = create_engine(
     settings.database_url,
