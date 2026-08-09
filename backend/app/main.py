@@ -105,7 +105,8 @@ def health():
         "status": "ok",
         "llm_configured": bool(settings.anthropic_api_key),
         "llm_provider": settings.llm_provider,
-        "model": settings.anthropic_model,
+        "chat_model": settings.anthropic_chat_model,
+        "analysis_model": settings.anthropic_analysis_model,
     }
 
 

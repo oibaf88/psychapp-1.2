@@ -20,15 +20,25 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 12  # 12h, local/demo convenience
 
     # --- LLM (Anthropic / Claude) ---------------------------------------
-    # No Claude model can run fully offline: there are no downloadable
-    # weights. This app is "locally executable" in the sense that the
-    # server, database and UI all run on your machine, but the
-    # conversational (Agent 1) and linguistic-analysis (Agent 2) features
-    # call the Anthropic API over the network and require a valid key.
-    llm_provider: str = "anthropic"  # swappable, see app/services/llm/
+    # Both agents run on the Anthropic API. No Claude model can run fully
+    # offline: there are no downloadable weights. This app is "self-hosted"
+    # in the sense that the server, database and UI run on infrastructure
+    # you control, but Agent 1 (conversational) and Agent 2 (linguistic
+    # analysis) call the Anthropic API over the network.
+    llm_provider: str = "anthropic"
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-5-20250929"
-    anthropic_max_tokens: int = 1024
+
+    # Agent 1 — the conversational reply the patient reads.
+    anthropic_chat_model: str = "claude-opus-5"
+    anthropic_chat_effort: str = "medium"
+
+    # Agent 2 — structured linguistic analysis feeding the risk engine.
+    # Accuracy here drives alert levels, so it defaults to high effort.
+    anthropic_analysis_model: str = "claude-opus-5"
+    anthropic_analysis_effort: str = "high"
+
+    # Caps thinking + response text together, so leave headroom.
+    anthropic_max_tokens: int = 8192
 
     # --- App / locale -----------------------------------------------------
     app_locale: str = "es-ES"

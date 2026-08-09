@@ -1,4 +1,21 @@
 remote-credentials.txt
 frontend/.htpasswd
 .env
+.env.local
 remote-url.txt
+
+# Dependencies and build output — rebuilt by CI/Render, never committed.
+node_modules/
+frontend/dist/
+backend/.venv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Editor / IDE
+.vs/
+.idea/
+.vscode/
+*.swp
+.DS_Store
