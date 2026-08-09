@@ -69,6 +69,24 @@ class User(Base):
     )
 
 
+class PasswordResetToken(Base):
+    """Single-use, time-limited password reset token.
+
+    Referenced by app/routers/auth.py. The router shipped without this
+    model, which made `from app.models import ... PasswordResetToken`
+    fail and prevented the whole API from importing.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Consent(Base):
     __tablename__ = "user_consents"
 
@@ -148,6 +166,47 @@ class Baseline(Base):
     window_end: Mapped[datetime] = mapped_column(DateTime)
     stats: Mapped[dict] = mapped_column(JSON, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BiometricData(Base):
+    """Passively collected wearable measurements.
+
+    Columns mirror BiometricDataIn in app/schemas.py exactly, because
+    app/routers/metrics.py constructs this with **payload.model_dump().
+    """
+
+    __tablename__ = "biometric_data"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
+    device_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    heart_rate_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heart_rate_variability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sleep_duration_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sleep_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    deep_sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rem_sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_calories: Mapped[float | None] = mapped_column(Float, nullable=True)
+    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AppUsageData(Base):
+    """Passively collected phone-usage statistics.
+
+    Columns mirror AppUsageDataIn in app/schemas.py exactly, because
+    app/routers/metrics.py constructs this with **payload.model_dump().
+    """
+
+    __tablename__ = "app_usage_data"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
+    apps_usage_stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    screen_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

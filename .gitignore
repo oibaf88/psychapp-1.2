@@ -19,3 +19,5 @@ __pycache__/
 .vscode/
 *.swp
 .DS_Store
+frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo

@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     app_locale: str = "es-ES"
     app_env: str = "local"
 
+    # --- Unfinished auth features (off by default) ----------------------
+    # /auth/google-login currently trusts the client-supplied id_token as
+    # the user's email instead of verifying it with Google, so enabling it
+    # lets anyone obtain a session for any account. Keep it false until
+    # real Google token verification is implemented.
+    allow_mock_google_login: bool = False
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env not in ("local", "dev", "development")
+
     # --- Notifications (all optional; app works with none configured) ---
     smtp_host: str = ""
     smtp_port: int = 587
