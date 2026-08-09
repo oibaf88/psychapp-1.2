@@ -8,12 +8,15 @@ import uuid
 
 from fastapi import Body
 
+from app.config import get_settings
 from app.models import Consent, SafetyPlan, User, PasswordResetToken
 from app.schemas import LoginRequest, Token, UserCreate, UserOut, PasswordResetRequest, PasswordResetConfirm, GoogleLoginRequest
 from app.security import create_access_token, get_current_user, hash_password, verify_password
 from app.services import audit
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+settings = get_settings()
 
 VALID_ROLES = {"patient", "therapist", "supervisor", "admin_clinical"}
 
@@ -92,7 +95,13 @@ def password_reset_request(payload: PasswordResetRequest, db: Session = Depends(
     # For now, we will just log it in the audit log or pretend it's sent.
     audit.log(db, actor_id=user.id, actor_role=user.role, action="password_reset_requested", entity_type="user", entity_id=user.id)
 
-    return {"message": "If the email exists, a reset link has been sent.", "dev_token": token}  # NOTE: remove dev_token in prod
+    response = {"message": "If the email exists, a reset link has been sent."}
+    # Returning the token to the caller lets anyone who knows an email
+    # address take over that account, so it is confined to local/dev where
+    # there is no mail transport to pick the token up from.
+    if not settings.is_production:
+        response["dev_token"] = token
+    return response
 
 
 @router.post("/password-reset-confirm")
@@ -130,7 +139,20 @@ def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     # email = idinfo['email']
     # display_name = idinfo.get('name', email)
 
-    # Mocking validation for now
+    # This handler does NOT verify the token with Google — it treats the
+    # client-supplied id_token as the user's email, so enabling it lets
+    # anyone obtain a session for any account. It stays disabled until
+    # real verification is implemented.
+    if not settings.allow_mock_google_login:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "Google login is not available: the handler does not verify tokens "
+                "with Google yet. Set ALLOW_MOCK_GOOGLE_LOGIN=true only on a trusted "
+                "local machine."
+            ),
+        )
+
     if not payload.id_token:
         raise HTTPException(status_code=401, detail="Missing token")
 
