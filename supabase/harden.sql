@@ -1,59 +1,77 @@
 -- PsychDeep — Supabase hardening, run AFTER the first successful deploy.
 --
--- Why this exists
--- ---------------
--- The backend creates its tables with SQLAlchemy's create_all() on startup,
--- so they do not exist until the API has booted once. The migration
--- `lock_public_schema_from_postgrest_roles` already revoked the default
--- privileges that Supabase would otherwise grant to `anon` and
--- `authenticated` on new tables in `public`, which is the primary control.
+-- IMPORTANT: this script targets the schema the backend actually writes to,
+-- which is NOT necessarily `public`.
 --
--- This script is the belt-and-braces second layer: it enables row level
--- security on every table in `public`. With RLS on and no policies
--- defined, PostgREST roles are denied by default, while the direct
--- Postgres connection the backend uses (and `service_role`) bypasses RLS
--- and keeps working. PsychDeep enforces all of its own authorisation in
--- FastAPI, so no policies are needed here.
+-- The backend's schema is whatever DATABASE_URL / DATABASE_SCHEMA selects:
 --
--- Safe to run repeatedly.
+--   ...?options=-csearch_path%3Dpsychdeep_v12    -> psychdeep_v12
+--   DATABASE_SCHEMA=psychdeep_v12                -> psychdeep_v12
+--   neither set                                  -> public
 --
--- Run it from Supabase Dashboard -> SQL Editor, or:
---   psql "$DATABASE_URL" -f supabase/harden.sql
+-- Running it against the wrong schema silently reports success on an empty
+-- schema. The verification query at the bottom scans EVERY schema so that
+-- can't happen unnoticed.
+--
+-- >>> Set TARGET_SCHEMA on the next line to match your DATABASE_URL. <<<
 
 do $$
 declare
+  target_schema constant text := 'psychdeep_v12';   -- <<< EDIT THIS
   t record;
+  n int := 0;
 begin
+  if not exists (select 1 from pg_namespace where nspname = target_schema) then
+    raise exception 'Schema % does not exist. Check DATABASE_URL/DATABASE_SCHEMA.', target_schema;
+  end if;
+
+  -- Enable row level security on every table in the schema. With RLS on and
+  -- no policies defined, the PostgREST roles are denied by default, while
+  -- the direct Postgres connection the backend uses (and service_role)
+  -- bypasses RLS and keeps working. PsychDeep enforces all of its own
+  -- authorisation in FastAPI, so no policies are needed here.
   for t in
     select c.relname
     from pg_class c
-    join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public'
-      and c.relkind = 'r'          -- ordinary tables only
-      and not c.relrowsecurity     -- skip ones already covered
+    join pg_namespace ns on ns.oid = c.relnamespace
+    where ns.nspname = target_schema
+      and c.relkind = 'r'
+      and not c.relrowsecurity
   loop
-    execute format('alter table public.%I enable row level security', t.relname);
-    raise notice 'RLS enabled on public.%', t.relname;
+    execute format('alter table %I.%I enable row level security', target_schema, t.relname);
+    raise notice 'RLS enabled on %.%', target_schema, t.relname;
+    n := n + 1;
   end loop;
+
+  -- Keep the PostgREST roles out of the schema entirely. A non-`public`
+  -- schema is not exposed by PostgREST by default, so this is belt and
+  -- braces rather than the primary control.
+  execute format('revoke all on schema %I from anon, authenticated', target_schema);
+  execute format('revoke all on all tables in schema %I from anon, authenticated', target_schema);
+  execute format('revoke all on all sequences in schema %I from anon, authenticated', target_schema);
+  execute format('alter default privileges in schema %I revoke all on tables from anon, authenticated', target_schema);
+  execute format('alter default privileges in schema %I revoke all on sequences from anon, authenticated', target_schema);
+
+  raise notice 'Done. RLS newly enabled on % table(s) in %.', n, target_schema;
 end
 $$;
 
--- Re-revoke explicitly, in case a table was created by a role whose own
--- default privileges still grant the PostgREST roles.
-revoke all on all tables    in schema public from anon, authenticated;
-revoke all on all sequences in schema public from anon, authenticated;
-
--- Verification: every row should show rls_enabled = true, and neither
--- anon nor authenticated should appear in any table's ACL.
-select c.relname                             as table_name,
-       c.relrowsecurity                      as rls_enabled,
-       coalesce(
-         (select count(*) from pg_policies p
-          where p.schemaname = 'public' and p.tablename = c.relname), 0
-       )                                     as policy_count,
+-- Verification — scans every schema, not just the one above, so a script
+-- pointed at the wrong schema cannot report a false all-clear.
+--
+-- Expect: every application table shows rls_enabled = true and both
+-- *_can_select columns false. A schema you don't recognise holding your
+-- tables means DATABASE_URL is pointing somewhere unexpected.
+select n.nspname                                       as schema,
+       c.relname                                       as table_name,
+       c.relrowsecurity                                as rls_enabled,
        has_table_privilege('anon', c.oid, 'SELECT')          as anon_can_select,
        has_table_privilege('authenticated', c.oid, 'SELECT') as auth_can_select
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
-where n.nspname = 'public' and c.relkind = 'r'
-order by c.relname;
+where c.relkind = 'r'
+  and n.nspname not like 'pg\_%'
+  and n.nspname not in ('information_schema', 'auth', 'storage', 'realtime',
+                        'vault', 'extensions', 'graphql', 'graphql_public',
+                        'supabase_migrations')
+order by n.nspname, c.relname;
