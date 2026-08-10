@@ -62,7 +62,7 @@ services:
       # Must list the exact frontend origins. In production the API does
       # NOT fall back to permissive LAN/tunnel regexes.
       - key: CORS_ORIGINS
-        value: https://psychapp.bfab.io
+        value: https://psychdeep-web.onrender.com,https://psychapp.bfab.io
       # Never seed the four demo accounts into a public deployment —
       # they have well-known passwords.
       - key: SEED_DEMO_DATA
