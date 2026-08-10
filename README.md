@@ -52,11 +52,15 @@ that was just the working filename. Core ideas from the docs:
 - **Backend**: FastAPI (Python 3.11), SQLAlchemy 2.0, PostgreSQL 16, JWT auth
   (python-jose) with `bcrypt` used directly for password hashing.
 - **Frontend**: React 18 + TypeScript + Vite, Recharts for timeline charts.
-- **LLM**: Anthropic Python SDK, calling Claude via the Messages API. Agent 2
-  (linguistic analysis) uses forced tool-use so its output is always
-  well-formed JSON, never free text.
-- **Orchestration**: Docker Compose (db + backend + frontend). No Kubernetes,
-  no cloud dependency beyond the Anthropic API call itself.
+- **LLM**: Anthropic Python SDK, calling Claude via the Messages API. Both
+  agents run on Claude, each with its own configurable model:
+  `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation) and
+  `ANTHROPIC_ANALYSIS_MODEL` for Agent 2 (linguistic analysis). Agent 2 uses
+  **structured outputs** (`output_config.format`), so its result is always a
+  JSON object matching a fixed schema, never free text.
+- **Orchestration**: Docker Compose locally (db + backend + frontend). For a
+  hosted deployment — Render for the services, Supabase for Postgres — see
+  [DEPLOY.md](./DEPLOY.md).
 
 ### Why Claude via API, not a fully offline model
 
@@ -151,11 +155,60 @@ provider could be swapped in without touching the rest of the app.
 To stop: `Ctrl+C`, then `docker compose down` (add `-v` to also drop the Postgres
 volume and start clean next time).
 
+### Checking that both Claude agents work
+
+Agent 2 fails silently by design: if the analysis call breaks, the chat still
+answers and the risk engine simply proceeds without a linguistic signal. That
+makes a broken analyst invisible from the UI, so there is a direct check:
+
+```bash
+# from the project root, with the stack running
+docker compose exec backend python scripts/smoke_llm.py
+
+# or from backend/, with ANTHROPIC_API_KEY set in the environment
+python scripts/smoke_llm.py
+```
+
+It calls both agents once, prints Agent 1's reply and Agent 2's parsed JSON,
+and exits non-zero if either fails. It writes nothing to the database and
+seeds no data. On a hosted deployment, run it from the service shell (on
+Render: the service's **Shell** tab, `python scripts/smoke_llm.py`).
+
+Runtime failures of Agent 2 are logged at ERROR with a traceback — check the
+backend logs if the smoke test passes but signals are missing.
+
 ### Running the backend outside Docker (optional)
 
 If you want to run the API directly against a local Postgres instead of the
 `db` container: point `DATABASE_URL` in `.env` at your Postgres instance, then
 from `backend/`: `pip install -r requirements.txt && uvicorn app.main:app --reload`.
+
+### Using a dedicated Postgres schema
+
+By default the tables are created in `public`. To put them in their own schema
+instead — recommended on Supabase, because `public` is exposed through
+PostgREST — either set `DATABASE_SCHEMA`:
+
+```
+DATABASE_SCHEMA=psychdeep_v12
+```
+
+or carry it in the URL, which is what a hosted deployment usually does:
+
+```
+DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:5432/postgres?sslmode=require&options=-csearch_path%3Dpsychdeep_v12
+```
+
+Use one or the other, not both. **The schema must already exist** —
+`create_all()` creates tables, not schemas:
+
+```sql
+create schema if not exists psychdeep_v12;
+```
+
+Whichever you choose, `supabase/harden.sql` has a `TARGET_SCHEMA` at the top
+that must be edited to match, or it will report success against an empty
+`public` schema.
 
 ## 5. Verification status — please read
 
