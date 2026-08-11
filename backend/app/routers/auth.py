@@ -18,14 +18,11 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 settings = get_settings()
 
-VALID_ROLES = {"patient", "therapist", "supervisor", "admin_clinical"}
+PUBLIC_SIGNUP_ROLE = "patient"
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    if payload.role not in VALID_ROLES:
-        raise HTTPException(status_code=400, detail=f"role must be one of {sorted(VALID_ROLES)}")
-
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -34,7 +31,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
         email=payload.email,
         hashed_password=hash_password(payload.password),
         display_name=payload.display_name,
-        role=payload.role,
+        role=PUBLIC_SIGNUP_ROLE,
     )
     db.add(user)
     db.commit()
@@ -163,15 +160,12 @@ def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == email).first()
 
     if not user:
-        if payload.role not in VALID_ROLES:
-            raise HTTPException(status_code=400, detail=f"role must be one of {sorted(VALID_ROLES)}")
-
         user = User(
             email=email,
             # Generate a random password since they login with google
             hashed_password=hash_password(str(uuid.uuid4())),
             display_name=display_name,
-            role=payload.role,
+            role=PUBLIC_SIGNUP_ROLE,
         )
         db.add(user)
         db.commit()

@@ -10,7 +10,9 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     display_name: str
-    role: str = "patient"  # patient | therapist | supervisor | admin_clinical
+    # Public signup always creates a patient. This field is kept only so
+    # older clients that still send it do not fail validation.
+    role: str = "patient"
 
 
 class UserOut(BaseModel):
@@ -45,7 +47,8 @@ class PasswordResetConfirm(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     id_token: str
-    role: str = "patient" # Optional role if user is new
+    # Public/mock Google signup also creates a patient.
+    role: str = "patient"
 
 
 

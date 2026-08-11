@@ -9,7 +9,6 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [role, setRole] = useState("patient");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -18,7 +17,7 @@ export default function RegisterPage() {
     setError(null);
     setBusy(true);
     try {
-      const user = await register(email, password, displayName, role);
+      const user = await register(email, password, displayName);
       navigate(homePathForRole(user.role), { replace: true });
     } catch (err) {
       setError((err as Error).message);
@@ -40,18 +39,12 @@ export default function RegisterPage() {
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <label>
-          Contraseña (mínimo 8 caracteres)
+          Contrasena (minimo 8 caracteres)
           <input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
-        <label>
-          Tipo de cuenta
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="patient">Paciente</option>
-            <option value="therapist">Profesional (terapeuta)</option>
-            <option value="supervisor">Supervisor clínico</option>
-            <option value="admin_clinical">Administración clínica</option>
-          </select>
-        </label>
+        <p className="info">
+          El registro publico crea cuentas de paciente. Las cuentas profesionales se provisionan de forma interna.
+        </p>
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={busy}>
           {busy ? "Creando..." : "Crear cuenta"}

@@ -1,46 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-/**
- * Visual breathing pacer, ~5.5-6 breaths/min (doc 3 & doc 6: "ritmo
- * 5.5-6 resp/min para favorecer activación parasimpática").
- * IMPORTANT (doc 6): this is explicitly NOT biofeedback -- it does not
- * read any sensor -- and the UI must say so.
- */
-const INHALE_MS = 4000;
-const EXHALE_MS = 6000; // ~6s exhale -> 10s cycle -> 6 breaths/min
+type BreathPhase = "inhale" | "hold" | "exhale";
+
+const PHASES: Array<{ id: BreathPhase; label: string; durationMs: number }> = [
+  { id: "inhale", label: "Inhala suave", durationMs: 4000 },
+  { id: "hold", label: "Sosten un momento", durationMs: 2000 },
+  { id: "exhale", label: "Exhala lento", durationMs: 6000 },
+];
+
+const TOTAL_SECONDS = PHASES.reduce((sum, phase) => sum + phase.durationMs, 0) / 1000;
 
 export default function BreathingPacer() {
   const [running, setRunning] = useState(false);
-  const [phase, setPhase] = useState<"inhale" | "exhale">("inhale");
+  const [phaseIndex, setPhaseIndex] = useState(0);
+  const phase = PHASES[phaseIndex];
 
-  function start() {
+  useEffect(() => {
+    if (!running) return undefined;
+
+    const timer = window.setTimeout(() => {
+      setPhaseIndex((current) => (current + 1) % PHASES.length);
+    }, phase.durationMs);
+
+    return () => window.clearTimeout(timer);
+  }, [running, phase.durationMs]);
+
+  function toggle() {
+    if (running) {
+      setRunning(false);
+      setPhaseIndex(0);
+      return;
+    }
+
+    setPhaseIndex(0);
     setRunning(true);
-    setPhase("inhale");
-    const cycle = () => {
-      setPhase("inhale");
-      const t1 = setTimeout(() => setPhase("exhale"), INHALE_MS);
-      const t2 = setTimeout(cycle, INHALE_MS + EXHALE_MS);
-      return () => {
-        clearTimeout(t1);
-        clearTimeout(t2);
-      };
-    };
-    cycle();
-  }
-
-  function stop() {
-    setRunning(false);
   }
 
   return (
     <div className="breathing-pacer">
-      <div className={`breathing-circle ${running ? phase : "idle"}`} />
-      <p className="breathing-label">
-        {running ? (phase === "inhale" ? "Inhala..." : "Exhala...") : "Pulsa iniciar para comenzar"}
-      </p>
-      <button onClick={running ? stop : start}>{running ? "Detener" : "Iniciar respiración guiada"}</button>
+      <div className={`breathing-orb ${running ? phase.id : "idle"}`} aria-hidden="true">
+        <span />
+      </div>
+      <p className="breathing-label">{running ? phase.label : "Pulsa iniciar para comenzar"}</p>
+      <p className="breathing-ratio">4 s inspirar - 2 s sostener - 6 s exhalar - {TOTAL_SECONDS}s por ciclo</p>
+      <button onClick={toggle}>{running ? "Detener" : "Iniciar respiracion guiada"}</button>
       <p className="disclaimer">
-        Esto es una guía visual de ritmo respiratorio, no un dispositivo médico ni biofeedback real: no mide tu cuerpo.
+        Esto es una guia visual de ritmo respiratorio, no un dispositivo medico ni biofeedback real: no mide tu cuerpo.
       </p>
     </div>
   );

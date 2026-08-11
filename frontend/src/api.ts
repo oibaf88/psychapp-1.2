@@ -1,19 +1,21 @@
-// API base URL resolution (browser / PWA / native wrapper):
-// 1) localStorage "psychapp_api_base" (set in Ajustes — used by phone app)
-// 2) VITE_API_BASE_URL at build time
-// 3) "" = same-origin (Docker nginx proxies /api → backend)
+// VITE_API_BASE_URL is the only deployed API source. Legacy localStorage
+// overrides are ignored so a bad saved host cannot lock users out.
 const API_BASE_KEY = "psychapp_api_base";
 
 export function getApiBase(): string {
-  const stored = (localStorage.getItem(API_BASE_KEY) || "").trim().replace(/\/$/, "");
-  if (stored) return stored;
   return (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 }
 
-export function setApiBase(url: string | null) {
-  const cleaned = (url || "").trim().replace(/\/$/, "");
-  if (cleaned) localStorage.setItem(API_BASE_KEY, cleaned);
-  else localStorage.removeItem(API_BASE_KEY);
+export function getLegacyApiBaseOverride(): string {
+  return (localStorage.getItem(API_BASE_KEY) || "").trim();
+}
+
+export function clearLegacyApiBaseOverride() {
+  localStorage.removeItem(API_BASE_KEY);
+}
+
+export function setApiBase(_url: string | null) {
+  clearLegacyApiBaseOverride();
 }
 
 export function getToken(): string | null {
