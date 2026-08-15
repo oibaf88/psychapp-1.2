@@ -293,6 +293,10 @@ class RiskAssessmentOut(BaseModel):
 
     class Config:
         from_attributes = True
+        # ``model_version`` is part of the deterministic risk-engine contract,
+        # not a Pydantic model helper. Explicitly allow that field name so
+        # production startup stays warning-free.
+        protected_namespaces = ()
 
 
 class SignalOut(BaseModel):
