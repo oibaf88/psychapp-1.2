@@ -34,8 +34,23 @@ tracked file.
 ## 1. Supabase
 
 The `psychdeep` project already exists and is `ACTIVE_HEALTHY`. The
-backend creates its own tables via SQLAlchemy `create_all()` on first
-boot, so there is no schema to apply by hand.
+production backend does **not** run SQLAlchemy `create_all()`: schema changes
+must be applied explicitly before a Render release. This prevents the API from
+creating an unhashed/unprotected trace table or starting against half-migrated
+columns.
+
+For the risk-explanation/Agent 2 tracking release, apply
+[`20260815120000_add_risk_explanations_agent2_tracking.sql`](./supabase/migrations/20260815120000_add_risk_explanations_agent2_tracking.sql)
+to project `ifwexmoltnybvmrsuwtu` **before merging/deploying the application**.
+It is an expand-only transaction: existing rows remain valid, the new trace
+table is owned by `psychdeep_backend`, FORCE RLS is enabled, and `public`,
+`anon`, `authenticated` and `service_role` receive no table privileges. The
+temporary role membership needed to alter the backend-owned tables is verified,
+scoped to the transaction and removed before commit.
+
+The API validates the required columns, owner, FORCE RLS and backend policy at
+startup and fails closed if this migration is missing. Local/dev environments
+may still use `create_all()` for disposable databases.
 
 Already applied for you — migration
 `lock_public_schema_from_postgrest_roles`: revokes the default privileges
@@ -160,7 +175,11 @@ regexes.
      "llm_configured": true,
      "llm_provider": "anthropic",
      "chat_model": "claude-opus-5",
-     "analysis_model": "claude-opus-5"
+     "analysis_model": "claude-opus-5",
+     "risk_engine_version": "risk-engine-v1.2",
+     "risk_explanation_schema": "risk-explanation-v1",
+     "agent2_tracking": true,
+     "release": "<deployed-git-sha>"
    }
    ```
 
@@ -174,9 +193,9 @@ regexes.
    It calls Agent 1 and Agent 2 once each and prints what came back,
    exiting non-zero if either fails. No database writes, no seeded data.
 
-   Agent 2 fails silently at runtime by design — the chat keeps answering
-   and the risk engine just proceeds without a linguistic signal — so this
-   is the only direct way to confirm the analyst works.
+   Agent 2 fails safely at runtime — the deterministic engine continues and
+   the attempt remains visible with a sanitized status in the clinical tracking
+   screen. The smoke script confirms the provider/model independently.
 
    > Locally the equivalent is `docker compose exec backend python
    > scripts/smoke_llm.py`, run **from the project root**. Run from
@@ -196,6 +215,24 @@ regexes.
    The final `select` scans **every** schema for exactly this reason.
    Each application table should show `rls_enabled = true` and both
    `*_can_select` columns `false`.
+
+4. With synthetic accounts, verify the clinical UI as both an assigned
+   therapist and a supervisor:
+
+   - **Motor de riesgo** shows all 11 evaluated rules, the selected rule,
+     formulas, baseline/recent values, z-scores, thresholds, sleep slope,
+     persistence dates and the stored conclusion.
+   - **Agent 2** shows the exact source text, validated JSON response, source /
+     signal / correlation / assessment identifiers, whether the signal was
+     actually consumed, model/provider metadata, tokens, latency and sanitized
+     failure fields.
+   - An unassigned therapist, a patient and `admin_clinical` receive `403` for
+     the clinical trace endpoints.
+
+5. Confirm `agent2_analysis_traces` has `relrowsecurity=true`,
+   `relforcerowsecurity=true`, owner `psychdeep_backend`, one
+   `backend_full_access` policy, and no privileges for PostgREST roles. Remove
+   every synthetic row/account used by the smoke test after verification.
 
 ---
 

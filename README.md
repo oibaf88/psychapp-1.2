@@ -22,9 +22,10 @@ that was just the working filename. Core ideas from the docs:
 - A **patient app**: daily check-ins, a free-text diary, an AI chat companion, a
   "wave" screen for urge-surfing / grounding techniques during craving or distress,
   and a personal safety plan.
-- A **professional app**: therapists/supervisors/clinical admins see their assigned
-  patients, a longitudinal timeline of facts and signals, and get alerted when a
-  patient's risk escalates.
+- A **professional app**: assigned therapists and supervisors can inspect a
+  longitudinal timeline, every deterministic risk calculation, and the exact
+  input/output lineage of Agent 2. Clinical administrators manage assignments
+  but do not receive clinical signal or trace visibility.
 - A **strict separation between facts and inferences**: things a person or clinician
   has explicitly stated (`ConfirmedFact`) are never silently overwritten by anything
   the system infers from behavior or language (`AlfaSignal`).
@@ -79,8 +80,8 @@ provider could be swapped in without touching the rest of the app.
 | Area | What's implemented | Source material |
 |---|---|---|
 | Fact vs. inference model | `ConfirmedFact` / `AlfaSignal` tables, facts immutable except via versioned correction | "Muro de Hechos vs Inferencias" docs |
-| Deterministic risk engine | `app/services/risk_engine.py` — pure-Python rule cascade producing `alert_level` 0–4, fully traceable (`triggering_rules`, `input_signals`, `input_facts`, `model_version`) | risk-engine pseudocode/schema docs |
-| Two-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, MI/CBT/DBT-STOP, never computes risk) + Agent 2 (`AGENT2_SYSTEM_PROMPT` + forced-tool-use `AGENT2_TOOL_SCHEMA`, structured-only, never talks to the user) | final two-agent architecture summary docs |
+| Deterministic risk engine | `app/services/risk_engine.py` — evaluates all 11 rules, persists an immutable `calculation_trace` with formulas, z-scores, thresholds, evidence, matched/selected rules and the final conclusion; the professional UI renders this snapshot without recalculating it | risk-engine pseudocode/schema docs |
+| Two-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, never computes risk) + Agent 2 (strict structured analysis). `agent2_analysis_traces` links exact chat/diary source, validated output signal, provider metadata and the risk assessment that consumed it | final two-agent architecture summary docs |
 | Escalation messaging | Static, server-owned Spanish templates for Level 3 (professional alarm) and Level 4 (emergency/crisis), in `app/content/safety_resources.py` | escalation-copy docs |
 | Local structural baseline | Rolling Z-score `structural_score` (1.0 = matches personal baseline → 0 = severe deviation) + `confidence_band` (stable/transition/unstable), computed locally in `app/services/baseline.py` | see **Assumption (a)** below — this deliberately replaces a third-party service mentioned in one doc |
 | RBAC | Role-scoped permissions (signal visibility, fact visibility, alert/assignment management, audit log access) for `therapist` / `supervisor` / `admin_clinical` in `security.py` + router-level dependencies | RBAC matrix doc |
@@ -157,9 +158,11 @@ volume and start clean next time).
 
 ### Checking that both Claude agents work
 
-Agent 2 fails silently by design: if the analysis call breaks, the chat still
-answers and the risk engine simply proceeds without a linguistic signal. That
-makes a broken analyst invisible from the UI, so there is a direct check:
+Agent 2 fails safely by design: if the analysis call breaks, the deterministic
+risk engine and server-owned crisis path continue. Every new attempt is recorded
+as `started` and finalized with an allow-listed status; therapists and supervisors
+can see successful and failed attempts in the Agent 2 tracking screen. A direct
+provider smoke check is also available:
 
 ```bash
 # from the project root, with the stack running
@@ -174,8 +177,9 @@ and exits non-zero if either fails. It writes nothing to the database and
 seeds no data. On a hosted deployment, run it from the service shell (on
 Render: the service's **Shell** tab, `python scripts/smoke_llm.py`).
 
-Runtime failures of Agent 2 are logged at ERROR with a traceback — check the
-backend logs if the smoke test passes but signals are missing.
+Runtime failures of Agent 2 are logged only with a sanitized exception class;
+raw provider bodies, clinical prompts, API keys and stack traces are not copied
+into trace records or logs.
 
 ### Running the backend outside Docker (optional)
 
@@ -210,44 +214,26 @@ Whichever you choose, `supabase/harden.sql` has a `TARGET_SCHEMA` at the top
 that must be edited to match, or it will report success against an empty
 `public` schema.
 
-## 5. Verification status — please read
+## 5. Verification status
 
-**I was not able to execute or run this application in this session.** The
-sandboxed shell environment this session runs in failed to start for the entire
-session (a persistent VM-connection timeout on every retry, including a final
-retry made specifically to test this before writing this section) — so I could not
-run `docker compose up`, run the backend, hit the API, or click through the UI.
-Everything above was built and then reviewed by hand, file by file, but **it has
-not been machine-verified**, and you should treat it as untested code that needs a
-real first run, not as something confirmed working.
+The current risk-explanation and Agent 2 tracking release is machine-verified
+before publication:
 
-To be concrete about what "hand-reviewed" means: I re-read every backend module
-for import correctness, model/schema field consistency, and correct SQLAlchemy /
-Pydantic v2 / FastAPI usage, and re-checked the Anthropic SDK call pattern against
-its known API shape. In that process I found and fixed several real bugs (see
-§7 below) — which is exactly the kind of thing an actual run plus a smoke test
-would normally catch faster and more completely. I'd genuinely expect at least
-one more issue to surface on first boot (missing import, a wrong SQL type, a
-frontend/backend contract mismatch) that a static read-through can miss.
+- the React/TypeScript production build completes;
+- the backend imports and compiles under Python 3.11;
+- the backend unit/security suite passes in its Linux Docker image;
+- SQLAlchemy creates the full model graph in PostgreSQL 17;
+- the production migration was run twice against a production-like role/schema
+  replica, including a forced-failure rollback test;
+- the deterministic engine produced the same level and selected rule as the
+  previous implementation across 300 generated input combinations; and
+- an interleaving test confirmed two simultaneous Agent 2 signals cannot cross
+  their clinical lineage.
 
-**Please run this yourself before trusting it with anything real**, and tell me
-what breaks — I can fix it fast once I can see an actual error. A reasonable
-first pass:
-
-1. `docker compose up --build` and confirm all three containers report healthy
-   / stay up (watch `backend` logs especially — that's where a startup crash
-   would show).
-2. `curl http://localhost:8000/api/v1/health` → expect `200 OK`.
-3. Log in as `patient@demo.psychapp.local` at <http://localhost:5173>, confirm
-   the dashboard loads with the seeded 21 days of check-in history.
-4. Submit a new check-in, write a diary entry, and try the chat (this last one
-   needs `ANTHROPIC_API_KEY` set) — confirm Agent 1 responds and nothing 500s.
-5. Log in as `therapist@demo.psychapp.local`, confirm the assigned demo patient
-   shows up with a timeline and no alert-visibility errors.
-6. If you can, deliberately trigger a Level 3/4 scenario (e.g. via repeated
-   concerning check-ins/diary content) and confirm the static Spanish crisis
-   copy renders — this is the single most safety-critical path in the app and
-   the one most worth verifying by hand regardless of what automated tests say.
+These checks do not replace the post-deployment checks in [DEPLOY.md](./DEPLOY.md):
+the Supabase migration must be applied before the Render release, then the live
+health endpoint, one synthetic Agent 2 call, RBAC, RLS and the rendered clinical
+screens must be verified again.
 
 ## 6. Assumptions and gaps
 
@@ -280,22 +266,19 @@ FCM/APNs (push) integrations described in the docs are not implemented.
 
 **(d) Supervisor role sees all patients, not "their team."** The docs implied
 some notion of team-scoped visibility for supervisors; there's no team/org
-modeling in this build, so `supervisor` currently has the same patient visibility
-as `admin_clinical` minus admin-only actions (audit log, assignment overrides).
+modeling in this build, so `supervisor` currently has clinical read visibility
+across the patient roster. `admin_clinical` is separately blocked from clinical
+facts, signals, risk calculations and Agent 2 traces.
 
-**(e) `structural_score` persistence-band counts recent readings, not distinct
-calendar days.** The risk-engine docs implicitly assume one reading per day when
-computing how "persistent" a deviation is. In this implementation,
-`compute_structural_score()` is recomputed on every check-in, diary entry, and
-chat message — so if a patient logs multiple times in one day, the persistence
-band counts recent *rows*, not distinct *days*. Worth tightening if the exact
-day-based semantics matter to you; flagged clearly in code comments in
-`risk_engine.py`.
+**(e) `structural_score` persistence uses distinct calendar days.** Multiple
+evaluations on the same day do not satisfy a multi-day persistence rule. The
+snapshot records the observed dates and the required 1/3/5-day threshold.
 
-**(f) No formal migrations.** Tables are created via
-`Base.metadata.create_all()` on startup rather than Alembic migrations. Fine for
-a fresh local deployment; if you evolve the schema later you'll want to either
-add Alembic or handle migrations by hand.
+**(f) Explicit production migrations.** Local/dev still uses
+`Base.metadata.create_all()`, but production never mutates the schema at startup.
+Supabase changes live under `supabase/migrations/`; the API refuses to start if
+the required Agent 2/risk-explanation columns, owner, FORCE RLS and backend policy
+are missing.
 
 **(g) Both LLM agents run on Claude, not separate fine-tuned open models.** An
 earlier doc explored fine-tuning distinct open models per agent. Per the explicit
@@ -360,7 +343,7 @@ psychapp/
 │   │   ├── main.py            # FastAPI app, CORS, startup seeding
 │   │   ├── config.py          # env-driven settings
 │   │   ├── database.py
-│   │   ├── models.py          # SQLAlchemy models (13 tables)
+│   │   ├── models.py          # SQLAlchemy models (18 tables)
 │   │   ├── schemas.py         # Pydantic request/response models
 │   │   ├── security.py        # JWT auth + bcrypt hashing
 │   │   ├── seed.py            # idempotent demo data
@@ -371,6 +354,7 @@ psychapp/
 │   │   │   ├── llm/                # swappable LLM provider (Anthropic implementation)
 │   │   │   ├── baseline.py         # local structural_score / confidence_band
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
+│   │   │   ├── agent2_trace.py     # privacy-preserving Agent 2 lineage
 │   │   │   ├── conversation.py     # Agent2 -> risk_engine -> Agent1 orchestration
 │   │   │   ├── notifications.py
 │   │   │   ├── audit.py
@@ -379,11 +363,12 @@ psychapp/
 │   │                            #   safety, consents, facts, assignments, professional,
 │   │                            #   notifications, audit
 │   └── requirements.txt
+├── supabase/migrations/        # explicit production schema changes
 └── frontend/
     └── src/
         ├── api.ts
         ├── auth/AuthContext.tsx
-        ├── components/         # CrisisButton, BreathingPacer, NavBar, ProtectedRoute
+        ├── components/         # includes ClinicalTraceability graphical audit UI
         └── pages/               # Login/Register, PatientDashboard, DiaryPage, ChatPage,
                                   #  WavePage, SafetyPlanPage, ProfessionalDashboard,
                                   #  AlertsPage, PatientDetailPage

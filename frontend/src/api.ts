@@ -136,6 +136,40 @@ export interface PatientSummaryOut {
   last_checkin_at?: string | null;
 }
 
+export interface RiskRuleEvaluation {
+  rule_id?: string;
+  rule?: string;
+  label?: string;
+  level?: number;
+  alert_level?: number;
+  evaluated?: boolean;
+  matched?: boolean;
+  passed?: boolean;
+  result?: boolean;
+  condition?: string;
+  explanation?: string;
+  observed?: unknown;
+  threshold?: unknown;
+  evidence?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface RiskCalculationTrace {
+  engine_version?: string;
+  formula?: string;
+  structural_score?: number | null;
+  confidence_band?: string | null;
+  z_scores?: Record<string, number | null> | null;
+  evaluated_rules?: RiskRuleEvaluation[] | Record<string, unknown> | null;
+  rule_evaluations?: RiskRuleEvaluation[] | Record<string, unknown> | null;
+  decision_path?: RiskRuleEvaluation[] | Record<string, unknown> | null;
+  selected_rule?: string | null;
+  stopped_at_rule?: string | null;
+  thresholds?: Record<string, unknown> | null;
+  components?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
 export interface RiskAssessmentOut {
   id: string;
   alert_level: number;
@@ -147,6 +181,11 @@ export interface RiskAssessmentOut {
   model_version: string;
   calculated_at: string;
   generated_alert_id?: string | null;
+  correlation_id?: string | null;
+  analysis_trace_id?: string | null;
+  agent2_trace_id?: string | null;
+  linguistic_signal_id_used?: string | null;
+  calculation_trace?: RiskCalculationTrace | null;
 }
 
 export interface SignalOut {
@@ -155,6 +194,46 @@ export interface SignalOut {
   value: Record<string, unknown>;
   confidence_band?: string | null;
   timestamp: string;
+  agent2_trace_id?: string | null;
+}
+
+export interface Agent2TraceOut {
+  id: string;
+  correlation_id?: string | null;
+  status: string;
+  source_type?: string | null;
+  source_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  response_model?: string | null;
+  requested_model?: string | null;
+  effort?: string | null;
+  max_tokens?: number | null;
+  source_text?: string | null;
+  analysis?: Record<string, unknown> | null;
+  output?: Record<string, unknown> | null;
+  signal_id?: string | null;
+  risk_assessment_id?: string | null;
+  used_by_risk_engine?: boolean;
+  provider_message_id?: string | null;
+  provider_request_id?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  latency_ms?: number | null;
+  stop_reason?: string | null;
+  error_kind?: string | null;
+  error_code?: string | null;
+  http_status?: number | null;
+  prompt_version?: string | null;
+  prompt_sha256?: string | null;
+  schema_version?: string | null;
+  schema_sha256?: string | null;
+  app_release?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
 }
 
 export interface PatientDossierOut {
@@ -175,6 +254,7 @@ export interface PatientDossierOut {
   assessments: RiskAssessmentOut[];
   alerts: AlertOut[];
   signals: SignalOut[];
+  agent2_traces?: Agent2TraceOut[];
   safety_plan?: SafetyPlanOut | null;
   professional_protocol: Record<string, string>;
 }

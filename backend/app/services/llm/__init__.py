@@ -6,9 +6,17 @@ See app/services/llm/anthropic_provider.py.
 """
 from app.config import get_settings
 from app.services.llm.anthropic_provider import AnthropicProvider, RefusalError
-from app.services.llm.base import LLMProvider
+from app.services.llm.base import LLMProvider, ProviderMetadata, StructuredAnalysisError, StructuredAnalysisResult
 
-__all__ = ["LLMProvider", "AnthropicProvider", "RefusalError", "get_llm_provider"]
+__all__ = [
+    "LLMProvider",
+    "ProviderMetadata",
+    "StructuredAnalysisError",
+    "StructuredAnalysisResult",
+    "AnthropicProvider",
+    "RefusalError",
+    "get_llm_provider",
+]
 
 _settings = get_settings()
 

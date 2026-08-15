@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -25,8 +27,22 @@ def create_entry(payload: DiaryIn, db: Session = Depends(get_db), user: User = D
 
     audit.log(db, actor_id=user.id, actor_role=user.role, action="diary_created", entity_type="diary_entry", entity_id=entry.id)
 
-    conversation.analyze_text_and_store(db, user.id, payload.content)
-    assessment = risk_engine.run_and_persist(db, user.id)
+    correlation_id = uuid.uuid4()
+    analysis = conversation.analyze_text_and_store(
+        db,
+        user.id,
+        payload.content,
+        source_type="diary_entry",
+        source_id=entry.id,
+        correlation_id=correlation_id,
+    )
+    assessment = risk_engine.run_and_persist(
+        db,
+        user.id,
+        correlation_id=correlation_id,
+        agent2_trace_id=analysis.trace_id,
+        linguistic_signal_id=analysis.signal_id,
+    )
 
     if assessment.alert_level == 4:
         ui_mode = "crisis"
