@@ -21,7 +21,11 @@ decided beforehand by the deterministic risk engine and are unaffected by
 anything the model says.
 """
 import logging
+import uuid
+from dataclasses import dataclass
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.content.prompts import (
@@ -39,37 +43,104 @@ from app.content.safety_resources import (
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
 from app.services import risk_engine
-from app.services.llm import get_llm_provider
+from app.services import agent2_trace
+from app.services.llm import StructuredAnalysisError, get_llm_provider
 
 logger = logging.getLogger("psychapp.conversation")
 
 MAX_HISTORY_MESSAGES = 12
 
 
-def analyze_text_and_store(db: Session, user_id, text: str) -> dict | None:
-    """Call Agent 2 on free text and persist the result as an inference.
-    Never raises: analysis failures degrade gracefully (no signal recorded,
-    the risk engine simply proceeds without a fresh linguistic signal)."""
+class LinguisticAnalysis(BaseModel):
+    """Strict boundary between untrusted model output and the risk engine."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    rumination_score: float = Field(ge=0, le=1)
+    negative_valence: float = Field(ge=0, le=1)
+    urgency_level: float = Field(ge=0, le=1)
+    ideation_indirect: bool
+    ideation_direct: bool
+    consumption_crisis: bool
+    ambivalence: float = Field(ge=0, le=1)
+    emotional_complexity: Literal["low", "medium", "high"]
+    short_rationale: str = Field(min_length=1, max_length=500)
+
+
+@dataclass(frozen=True)
+class AnalysisOutcome:
+    correlation_id: uuid.UUID
+    trace_id: uuid.UUID | None
+    signal_id: uuid.UUID | None
+    status: str
+    value: dict | None
+
+
+def analyze_text_and_store(
+    db: Session,
+    user_id,
+    text: str,
+    *,
+    source_type: str,
+    source_id: uuid.UUID,
+    correlation_id: uuid.UUID,
+) -> AnalysisOutcome:
+    """Trace Agent 2, validate its output and persist it as an inference.
+
+    Never raises to the patient-facing flow.  If the trace cannot be
+    committed first, no external request is made and the deterministic
+    engine proceeds without a fresh signal.
+    """
     try:
-        provider = get_llm_provider()
-        result = provider.analyze_structured(AGENT2_SYSTEM_PROMPT, text, AGENT2_TOOL_SCHEMA)
-    except Exception:  # noqa: BLE001
-        # Logged at ERROR with a traceback on purpose: this degrades the
-        # risk engine silently from the user's point of view (the chat
-        # still answers), so the log is the only place the failure is
-        # visible. Use scripts/smoke_llm.py to check both agents directly.
-        logger.exception("Agent2 linguistic analysis failed; risk engine runs without a fresh signal")
-        return None
+        trace = agent2_trace.start(
+            db,
+            user_id=user_id,
+            source_type=source_type,
+            source_id=source_id,
+            correlation_id=correlation_id,
+        )
+    except agent2_trace.TracePersistenceError:
+        logger.error("Agent2 skipped because its trace could not be persisted")
+        return AnalysisOutcome(correlation_id, None, None, "trace_persistence_error", None)
+
+    try:
+        provider_result = get_llm_provider().analyze_structured(
+            AGENT2_SYSTEM_PROMPT,
+            text,
+            AGENT2_TOOL_SCHEMA,
+        )
+        result = LinguisticAnalysis.model_validate(provider_result.value).model_dump()
+    except Exception as exc:  # noqa: BLE001
+        # Persist only an allow-listed category and class name.  Raw SDK
+        # error messages can echo request data and therefore never enter
+        # the database or Render logs.
+        agent2_trace.mark_failed(db, trace, exc)
+        logger.error("Agent2 analysis failed safely: %s", type(exc).__name__)
+        return AnalysisOutcome(correlation_id, trace.id, None, trace.status, None)
 
     signal = AlfaSignal(
         user_id=user_id,
         signal_type="linguistic_analysis",
         value=result,
         confidence_band=None,
+        agent2_trace_id=trace.id,
     )
-    db.add(signal)
-    db.commit()
-    return result
+    try:
+        agent2_trace.mark_succeeded(trace, provider_result.metadata)
+        db.add(trace)
+        db.add(signal)
+        db.commit()
+        db.refresh(signal)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        agent2_trace.mark_failed(
+            db,
+            trace,
+            StructuredAnalysisError("provider_error", error_code="result_persistence_failed"),
+        )
+        logger.error("Agent2 result could not be persisted")
+        return AnalysisOutcome(correlation_id, trace.id, None, trace.status, None)
+    return AnalysisOutcome(correlation_id, trace.id, signal.id, "succeeded", result)
 
 
 def _has_active_professional(db: Session, user_id) -> bool:
@@ -115,20 +186,36 @@ def _agent1_crisis_accompaniment(db: Session, user_id, context_block: str) -> st
         )
         return reply.strip() or None
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Agent1 crisis accompaniment failed, using fixed safety copy only: %s", exc)
+        logger.warning("Agent1 crisis accompaniment failed; using fixed safety copy only: %s", type(exc).__name__)
         return None
 
 
 def get_reply(db: Session, user: User, user_message: str) -> dict:
     # 1. Persist the user's message.
-    db.add(ChatMessage(user_id=user.id, role="user", content=user_message))
+    correlation_id = uuid.uuid4()
+    source_message = ChatMessage(user_id=user.id, role="user", content=user_message)
+    db.add(source_message)
     db.commit()
+    db.refresh(source_message)
 
     # 2. Agent 2: analyze the free text and store as an inference signal.
-    analyze_text_and_store(db, user.id, user_message)
+    analysis = analyze_text_and_store(
+        db,
+        user.id,
+        user_message,
+        source_type="chat_message",
+        source_id=source_message.id,
+        correlation_id=correlation_id,
+    )
 
     # 3. Deterministic risk engine: the ONLY place alert_level is decided.
-    assessment = risk_engine.run_and_persist(db, user.id)
+    assessment = risk_engine.run_and_persist(
+        db,
+        user.id,
+        correlation_id=correlation_id,
+        agent2_trace_id=analysis.trace_id,
+        linguistic_signal_id=analysis.signal_id,
+    )
     level = assessment.alert_level
 
     # 4. Build the reply.
@@ -168,16 +255,16 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
             provider = get_llm_provider()
             reply_text = provider.chat(AGENT1_SYSTEM_PROMPT + "\n\n" + context_block, messages)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Agent1 chat failed: %s", exc)
-            err = str(exc).lower()
-            if "authentication" in err or "invalid x-api-key" in err or "401" in err:
+            logger.warning("Agent1 chat failed safely: %s", type(exc).__name__)
+            error_type = type(exc).__name__.lower()
+            if "authentication" in error_type:
                 reply_text = (
                     "El chat con Claude no está disponible: la ANTHROPIC_API_KEY no es válida. "
                     "En console.anthropic.com crea una API key (formato sk-ant-api…, no un token OAuth oat) "
                     "y ponla en el archivo .env del proyecto; luego reinicia con docker compose up -d. "
                     "Tus datos y check-ins se han guardado con normalidad."
                 )
-            elif "not configured" in err or "api_key" in err:
+            elif isinstance(exc, RuntimeError):
                 reply_text = (
                     "Ahora mismo no puedo generar una respuesta conversacional "
                     "(revisa que ANTHROPIC_API_KEY esté configurada en .env). "
@@ -195,4 +282,9 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
     db.add(ChatMessage(user_id=user.id, role="assistant", content=reply_text, ui_mode=ui_mode))
     db.commit()
 
-    return {"reply": reply_text, "ui_mode": ui_mode, "resources": resources}
+    return {
+        "reply": reply_text,
+        "ui_mode": ui_mode,
+        "resources": resources,
+        "correlation_id": correlation_id,
+    }

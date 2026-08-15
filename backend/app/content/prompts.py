@@ -18,6 +18,11 @@ project brief. See README "Assumptions" for why Claude was used instead
 of the fine-tuned local model the docs originally sketched.
 """
 
+# Persisted with every Agent 2 invocation so reviewers can tell exactly
+# which instruction/schema contract produced a historic analysis.
+AGENT2_PROMPT_VERSION = "agent2-prompt-2026-08-15"
+AGENT2_SCHEMA_VERSION = "agent2-schema-2026-08-15"
+
 AGENT1_SYSTEM_PROMPT = """\
 Eres el asistente conversacional de PsychApp, un sistema de acompañamiento \
 digital en salud mental para personas en tratamiento por consumo de \

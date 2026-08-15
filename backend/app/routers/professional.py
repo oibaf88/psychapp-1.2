@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.content.safety_resources import (
@@ -21,11 +22,13 @@ from app.content.safety_resources import (
 )
 from app.database import get_db
 from app.models import (
+    Agent2AnalysisTrace,
     AppUsageData,
     BiometricData,
     AlfaSignal,
     CheckIn,
     ConfirmedFact,
+    ChatMessage,
     DiaryEntry,
     PatientProfessionalAssignment,
     ProfessionalAlert,
@@ -34,6 +37,7 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    Agent2AnalysisTraceOut,
     AlertDismissIn,
     AlertOut,
     AlertResolveIn,
@@ -56,6 +60,160 @@ from app.services import audit, risk_engine
 from app.services.timeline import build_timeline
 
 router = APIRouter(prefix="/api/v1/professional", tags=["professional"])
+
+
+def _agent2_trace_out(
+    db: Session,
+    trace: Agent2AnalysisTrace,
+    *,
+    source=None,
+    signal: AlfaSignal | None = None,
+    assessment: RiskAssessment | None = None,
+    prefetched: bool = False,
+) -> Agent2AnalysisTraceOut:
+    source_id = trace.chat_message_id if trace.source_type == "chat_message" else trace.diary_entry_id
+    if not prefetched:
+        source_model = ChatMessage if trace.source_type == "chat_message" else DiaryEntry
+        source = db.get(source_model, source_id)
+
+    # Guard against corrupt/cross-patient links even though the database
+    # constraints and write path already set them together.
+    source_text = ""
+    if source is not None and source.user_id == trace.user_id:
+        source_text = source.content
+
+    if not prefetched:
+        signal = (
+            db.query(AlfaSignal)
+            .filter(AlfaSignal.user_id == trace.user_id, AlfaSignal.agent2_trace_id == trace.id)
+            .order_by(AlfaSignal.timestamp.desc())
+            .first()
+        )
+        assessment_query = db.query(RiskAssessment).filter(RiskAssessment.user_id == trace.user_id)
+        if signal:
+            assessment_query = assessment_query.filter(
+                or_(
+                    RiskAssessment.agent2_trace_id == trace.id,
+                    RiskAssessment.linguistic_signal_id_used == signal.id,
+                )
+            )
+        else:
+            assessment_query = assessment_query.filter(RiskAssessment.agent2_trace_id == trace.id)
+        assessment = assessment_query.order_by(RiskAssessment.calculated_at.desc()).first()
+
+    return Agent2AnalysisTraceOut(
+        id=trace.id,
+        correlation_id=trace.correlation_id,
+        source_type=trace.source_type,
+        source_id=source_id,
+        source_text=source_text,
+        status=trace.status,
+        provider=trace.provider,
+        requested_model=trace.requested_model,
+        response_model=trace.response_model,
+        effort=trace.effort,
+        max_tokens=trace.max_tokens,
+        prompt_version=trace.prompt_version,
+        prompt_sha256=trace.prompt_sha256,
+        schema_version=trace.schema_version,
+        schema_sha256=trace.schema_sha256,
+        provider_message_id=trace.provider_message_id,
+        provider_request_id=trace.provider_request_id,
+        stop_reason=trace.stop_reason,
+        input_tokens=trace.input_tokens,
+        output_tokens=trace.output_tokens,
+        cache_creation_input_tokens=trace.cache_creation_input_tokens,
+        cache_read_input_tokens=trace.cache_read_input_tokens,
+        latency_ms=trace.latency_ms,
+        error_kind=trace.error_kind,
+        error_code=trace.error_code,
+        http_status=trace.http_status,
+        app_release=trace.app_release,
+        started_at=trace.started_at,
+        completed_at=trace.completed_at,
+        analysis=signal.value if signal else None,
+        signal_id=signal.id if signal else None,
+        risk_assessment_id=assessment.id if assessment else None,
+        used_by_risk_engine=bool(
+            signal and assessment and assessment.linguistic_signal_id_used == signal.id
+        ),
+    )
+
+
+def _agent2_traces_out(db: Session, traces: list[Agent2AnalysisTrace]) -> list[Agent2AnalysisTraceOut]:
+    """Hydrate a page of traces in four bounded queries instead of N+1."""
+    if not traces:
+        return []
+
+    trace_ids = [trace.id for trace in traces]
+    trace_user_by_id = {trace.id: trace.user_id for trace in traces}
+    allowed_user_ids = {trace.user_id for trace in traces}
+    chat_ids = [trace.chat_message_id for trace in traces if trace.chat_message_id]
+    diary_ids = [trace.diary_entry_id for trace in traces if trace.diary_entry_id]
+    sources: dict[uuid.UUID, object] = {}
+    if chat_ids:
+        sources.update({row.id: row for row in db.query(ChatMessage).filter(ChatMessage.id.in_(chat_ids)).all()})
+    if diary_ids:
+        sources.update({row.id: row for row in db.query(DiaryEntry).filter(DiaryEntry.id.in_(diary_ids)).all()})
+
+    signals = (
+        db.query(AlfaSignal)
+        .filter(
+            AlfaSignal.agent2_trace_id.in_(trace_ids),
+            AlfaSignal.user_id.in_(allowed_user_ids),
+        )
+        .order_by(AlfaSignal.timestamp.desc())
+        .all()
+    )
+    signal_by_trace: dict[uuid.UUID, AlfaSignal] = {}
+    trace_by_signal: dict[uuid.UUID, uuid.UUID] = {}
+    for signal in signals:
+        if trace_user_by_id.get(signal.agent2_trace_id) != signal.user_id:
+            continue
+        if signal.agent2_trace_id not in signal_by_trace:
+            signal_by_trace[signal.agent2_trace_id] = signal
+        trace_by_signal[signal.id] = signal.agent2_trace_id
+
+    assessment_filters = [RiskAssessment.agent2_trace_id.in_(trace_ids)]
+    if trace_by_signal:
+        assessment_filters.append(RiskAssessment.linguistic_signal_id_used.in_(list(trace_by_signal)))
+    assessments = (
+        db.query(RiskAssessment)
+        .filter(
+            RiskAssessment.user_id.in_(allowed_user_ids),
+            or_(*assessment_filters),
+        )
+        .order_by(RiskAssessment.calculated_at.desc())
+        .all()
+    )
+    assessment_by_trace: dict[uuid.UUID, RiskAssessment] = {}
+    trace_id_set = set(trace_ids)
+    for assessment in assessments:
+        related_trace_ids: set[uuid.UUID] = set()
+        if (
+            assessment.agent2_trace_id in trace_id_set
+            and trace_user_by_id.get(assessment.agent2_trace_id) == assessment.user_id
+        ):
+            related_trace_ids.add(assessment.agent2_trace_id)
+        signal_trace_id = trace_by_signal.get(assessment.linguistic_signal_id_used)
+        if signal_trace_id and trace_user_by_id.get(signal_trace_id) == assessment.user_id:
+            related_trace_ids.add(signal_trace_id)
+        for trace_id in related_trace_ids:
+            assessment_by_trace.setdefault(trace_id, assessment)
+
+    return [
+        _agent2_trace_out(
+            db,
+            trace,
+            source=sources.get(
+                trace.chat_message_id if trace.source_type == "chat_message" else trace.diary_entry_id
+            ),
+            signal=signal_by_trace.get(trace.id),
+            assessment=assessment_by_trace.get(trace.id),
+            prefetched=True,
+        )
+        for trace in traces
+    ]
 
 
 def _assignment(db: Session, patient_id, professional_id, statuses=("active",)) -> PatientProfessionalAssignment | None:
@@ -303,7 +461,8 @@ def patient_diary(
 @router.get("/patients/{patient_id}/assessments", response_model=list[RiskAssessmentOut])
 def patient_assessments(
     patient_id: uuid.UUID,
-    limit: int = 30,
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     professional: User = Depends(require_professional),
 ):
@@ -312,7 +471,8 @@ def patient_assessments(
         db.query(RiskAssessment)
         .filter(RiskAssessment.user_id == patient_id)
         .order_by(RiskAssessment.calculated_at.desc())
-        .limit(min(limit, 100))
+        .offset(offset)
+        .limit(limit)
         .all()
     )
 
@@ -332,6 +492,37 @@ def patient_signals(
         .limit(min(limit, 100))
         .all()
     )
+
+
+@router.get("/patients/{patient_id}/agent2-analyses", response_model=list[Agent2AnalysisTraceOut])
+def patient_agent2_analyses(
+    patient_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Text input, validated Agent 2 output and call lineage for clinical review."""
+    _require_clinical_read(db, professional, patient_id)
+    rows = (
+        db.query(Agent2AnalysisTrace)
+        .filter(Agent2AnalysisTrace.user_id == patient_id)
+        .order_by(Agent2AnalysisTrace.started_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    result = _agent2_traces_out(db, rows)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="agent2_analysis_history_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"row_count": len(rows), "offset": offset, "limit": limit},
+    )
+    return result
 
 
 @router.get("/patients/{patient_id}/safety-plan", response_model=SafetyPlanOut | None)
@@ -412,6 +603,13 @@ def patient_dossier(
         .limit(40)
         .all()
     )
+    agent2_traces = (
+        db.query(Agent2AnalysisTrace)
+        .filter(Agent2AnalysisTrace.user_id == patient_id)
+        .order_by(Agent2AnalysisTrace.started_at.desc())
+        .limit(50)
+        .all()
+    )
 
     biometrics = (
         db.query(BiometricData)
@@ -448,7 +646,7 @@ def patient_dossier(
         ),
     }
 
-    return PatientDossierOut(
+    result = PatientDossierOut(
         patient=_patient_summary(db, patient, status_label),
         current_risk=RiskAssessmentOut.model_validate(assessment) if assessment else None,
         timeline=TimelineOut(**timeline),
@@ -458,10 +656,25 @@ def patient_dossier(
         assessments=assessments,
         alerts=[_alert_out(db, a) for a in alerts],
         signals=signals,
+        agent2_traces=_agent2_traces_out(db, agent2_traces),
         safety_plan=SafetyPlanOut.model_validate(plan) if plan else None,
         deep_analysis=deep_analysis,
         professional_protocol=protocol,
     )
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="patient_dossier_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={
+            "assessment_count": len(assessments),
+            "agent2_trace_count": len(agent2_traces),
+            "window_days": window_days,
+        },
+    )
+    return result
 
 
 @router.post("/patients/{patient_id}/reevaluate", response_model=RiskAssessmentOut)

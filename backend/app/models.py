@@ -27,6 +27,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -154,6 +155,9 @@ class AlfaSignal(Base):
     # stable | transition | unstable | insufficient_data
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     superseded_by_fact: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    agent2_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent2_analysis_traces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -246,6 +250,17 @@ class RiskAssessment(Base):
     model_version: Mapped[str] = mapped_column(String(32), default="risk-engine-v1.0")
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     generated_alert_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    agent2_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent2_analysis_traces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    linguistic_signal_id_used: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("alfa_signals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Immutable, human-readable snapshot of every formula, threshold and
+    # rule evaluated for this decision.  The UI renders this stored value;
+    # it never attempts to reconstruct a historic decision from newer data.
+    calculation_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (CheckConstraint("alert_level BETWEEN 0 AND 4", name="ck_risk_alert_level"),)
 
@@ -327,3 +342,75 @@ class AuditLog(Base):
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Agent2AnalysisTrace(Base):
+    """Auditable lineage for one Agent 2 structured-analysis request.
+
+    No raw input or output is duplicated here. ``chat_message_id`` or
+    ``diary_entry_id`` points to the clinical source record and
+    ``AlfaSignal.agent2_trace_id`` points back from the validated result.
+    """
+
+    __tablename__ = "agent2_analysis_traces"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    chat_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    diary_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("diary_entries.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="anthropic")
+    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    response_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    effort: Mapped[str] = mapped_column(String(16), nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stop_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    app_release: Mapped[str] = mapped_column(String(64), nullable=False, default="local")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("source_type IN ('chat_message','diary_entry')", name="ck_agent2_trace_source_type"),
+        CheckConstraint(
+            "(source_type = 'chat_message' AND chat_message_id IS NOT NULL AND diary_entry_id IS NULL) OR "
+            "(source_type = 'diary_entry' AND diary_entry_id IS NOT NULL AND chat_message_id IS NULL)",
+            name="ck_agent2_trace_exact_source",
+        ),
+        CheckConstraint(
+            "status IN ('started','succeeded','refused','invalid_output','configuration_error',"
+            "'provider_error','timeout','abandoned')",
+            name="ck_agent2_trace_status",
+        ),
+        CheckConstraint("input_tokens IS NULL OR input_tokens >= 0", name="ck_agent2_trace_input_tokens"),
+        CheckConstraint("output_tokens IS NULL OR output_tokens >= 0", name="ck_agent2_trace_output_tokens"),
+        CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="ck_agent2_trace_latency"),
+        Index("ix_agent2_trace_user_started", "user_id", "started_at"),
+        Index("ix_agent2_trace_status_started", "status", "started_at"),
+    )

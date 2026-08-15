@@ -40,6 +40,18 @@ class StructuralScoreResult:
     z_scores: dict[str, float]
     baseline_n: int
     recent_n: int
+    baseline_stats: dict[str, dict[str, float]]
+    recent_means: dict[str, float]
+    composite_z: float | None
+
+
+@dataclass
+class TrendResult:
+    label: str
+    slope: float | None
+    sample_count: int
+    increasing_threshold: float = 0.15
+    decreasing_threshold: float = -0.15
 
 
 def _checkin_vector(c: CheckIn) -> dict[str, float]:
@@ -105,7 +117,14 @@ def compute_structural_score(db: Session, user_id) -> StructuralScoreResult:
     baseline = get_active_baseline(db, user_id) or compute_or_refresh_baseline(db, user_id)
     if baseline is None:
         return StructuralScoreResult(
-            score=None, confidence_band="insufficient_data", z_scores={}, baseline_n=0, recent_n=0
+            score=None,
+            confidence_band="insufficient_data",
+            z_scores={},
+            baseline_n=0,
+            recent_n=0,
+            baseline_stats={},
+            recent_means={},
+            composite_z=None,
         )
 
     recent_start = datetime.utcnow() - timedelta(days=RECENT_WINDOW_DAYS)
@@ -116,17 +135,26 @@ def compute_structural_score(db: Session, user_id) -> StructuralScoreResult:
     )
     if not recent:
         return StructuralScoreResult(
-            score=None, confidence_band="insufficient_data", z_scores={}, baseline_n=0, recent_n=0
+            score=None,
+            confidence_band="insufficient_data",
+            z_scores={},
+            baseline_n=sum(v.get("n", 0) for v in baseline.stats.values()) // max(len(VARIABLES), 1),
+            recent_n=0,
+            baseline_stats=baseline.stats,
+            recent_means={},
+            composite_z=None,
         )
 
     recent_vectors = [_checkin_vector(c) for c in recent]
     z_scores: dict[str, float] = {}
+    recent_means: dict[str, float] = {}
     abs_z_values: list[float] = []
     for var in VARIABLES:
         var_stats = baseline.stats.get(var, {})
         mean = var_stats.get("mean", 0.0)
         std = var_stats.get("std", 0.0)
         recent_mean = statistics.fmean([v[var] for v in recent_vectors])
+        recent_means[var] = round(recent_mean, 3)
         if std > 0:
             z = (recent_mean - mean) / std
         else:
@@ -161,6 +189,9 @@ def compute_structural_score(db: Session, user_id) -> StructuralScoreResult:
         z_scores=z_scores,
         baseline_n=sum(v.get("n", 0) for v in baseline.stats.values()) // max(len(VARIABLES), 1),
         recent_n=len(recent),
+        baseline_stats=baseline.stats,
+        recent_means=recent_means,
+        composite_z=round(composite_z, 3),
     )
 
 
@@ -170,8 +201,13 @@ def calculate_trend(db: Session, user_id, values: list[float]) -> str:
     `calcular_tendencia` helper in doc 18 (simple regression, insufficient
     data below 3 points, thresholded slope -> aumentando/empeorando/estable).
     """
+    return calculate_trend_detail(values).label
+
+
+def calculate_trend_detail(values: list[float]) -> TrendResult:
+    """Return the label *and* the exact regression inputs used to derive it."""
     if len(values) < 3:
-        return "insuficiente"
+        return TrendResult(label="insuficiente", slope=None, sample_count=len(values))
 
     n = len(values)
     xs = list(range(n))
@@ -183,7 +219,7 @@ def calculate_trend(db: Session, user_id, values: list[float]) -> str:
 
     # thresholds are intentionally conservative / symmetric
     if slope > 0.15:
-        return "aumentando"
+        return TrendResult(label="aumentando", slope=round(slope, 4), sample_count=n)
     if slope < -0.15:
-        return "empeorando"
-    return "estable"
+        return TrendResult(label="empeorando", slope=round(slope, 4), sample_count=n)
+    return TrendResult(label="estable", slope=round(slope, 4), sample_count=n)

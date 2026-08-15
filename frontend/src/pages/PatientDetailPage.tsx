@@ -1,10 +1,20 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
-import { api, FACT_CATEGORIES, PatientDossierOut } from "../api";
+import { Agent2TraceOut, api, FACT_CATEGORIES, PatientDossierOut, RiskAssessmentOut } from "../api";
 import { useAuth } from "../auth/AuthContext";
+import { Agent2TraceList, RiskAssessmentTraceList } from "../components/ClinicalTraceability";
 
-type Tab = "resumen" | "checkins" | "diario" | "hechos" | "evaluaciones" | "alertas" | "plan" | "protocolo";
+type Tab =
+  | "resumen"
+  | "checkins"
+  | "diario"
+  | "hechos"
+  | "evaluaciones"
+  | "agent2"
+  | "alertas"
+  | "plan"
+  | "protocolo";
 
 export default function PatientDetailPage() {
   const { patientId } = useParams();
@@ -16,6 +26,9 @@ export default function PatientDetailPage() {
   const [factCategory, setFactCategory] = useState(FACT_CATEGORIES[0].value);
   const [factContent, setFactContent] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [historyBusy, setHistoryBusy] = useState<"assessments" | "agent2" | null>(null);
+  const [assessmentHasMore, setAssessmentHasMore] = useState(false);
+  const [agent2HasMore, setAgent2HasMore] = useState(false);
 
   const isTherapist = user?.role === "therapist";
 
@@ -27,9 +40,55 @@ export default function PatientDetailPage() {
         `/api/v1/professional/patients/${patientId}/dossier?window_days=30`
       );
       setDossier(data);
+      setAssessmentHasMore(data.assessments.length === 30);
+      setAgent2HasMore((data.agent2_traces?.length ?? 0) === 50);
     } catch (e) {
       setError((e as Error).message);
       setDossier(null);
+    }
+  }
+
+  async function loadOlderAssessments() {
+    if (!patientId || !dossier || historyBusy) return;
+    setHistoryBusy("assessments");
+    setError(null);
+    try {
+      const rows = await api.get<RiskAssessmentOut[]>(
+        `/api/v1/professional/patients/${patientId}/assessments?limit=100&offset=${dossier.assessments.length}`
+      );
+      setDossier((current) => {
+        if (!current) return current;
+        const known = new Set(current.assessments.map((row) => row.id));
+        return { ...current, assessments: [...current.assessments, ...rows.filter((row) => !known.has(row.id))] };
+      });
+      setAssessmentHasMore(rows.length === 100);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setHistoryBusy(null);
+    }
+  }
+
+  async function loadOlderAgent2Traces() {
+    if (!patientId || !dossier || historyBusy) return;
+    const currentRows = dossier.agent2_traces ?? [];
+    setHistoryBusy("agent2");
+    setError(null);
+    try {
+      const rows = await api.get<Agent2TraceOut[]>(
+        `/api/v1/professional/patients/${patientId}/agent2-analyses?limit=100&offset=${currentRows.length}`
+      );
+      setDossier((current) => {
+        if (!current) return current;
+        const existing = current.agent2_traces ?? [];
+        const known = new Set(existing.map((row) => row.id));
+        return { ...current, agent2_traces: [...existing, ...rows.filter((row) => !known.has(row.id))] };
+      });
+      setAgent2HasMore(rows.length === 100);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setHistoryBusy(null);
     }
   }
 
@@ -96,7 +155,8 @@ export default function PatientDetailPage() {
     { id: "checkins", label: `Check-ins (${dossier.checkins.length})` },
     { id: "diario", label: `Diario (${dossier.diary.length})` },
     { id: "hechos", label: `Hechos (${dossier.facts.length})` },
-    { id: "evaluaciones", label: "Evaluaciones" },
+    { id: "evaluaciones", label: `Motor de riesgo (${dossier.assessments.length})` },
+    { id: "agent2", label: `Agent 2 (${dossier.agent2_traces?.length ?? 0})` },
     { id: "alertas", label: `Alertas (${dossier.alerts.length})` },
     { id: "plan", label: "Plan seguridad" },
     { id: "protocolo", label: "Protocolo" },
@@ -150,19 +210,38 @@ export default function PatientDetailPage() {
         {error && <p className="error">{error}</p>}
       </section>
 
-      <div className="tabs">
-        {tabs.map((t) => (
+      <div className="tabs" role="tablist" aria-label="Secciones del historial clínico">
+        {tabs.map((t, index) => (
           <button
             key={t.id}
+            id={`tab-${t.id}`}
             type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            aria-controls={`tabpanel-${t.id}`}
+            tabIndex={tab === t.id ? 0 : -1}
             className={tab === t.id ? "tab active" : "tab"}
             onClick={() => setTab(t.id)}
+            onKeyDown={(event) => {
+              let nextIndex: number | null = null;
+              if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+              if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+              if (event.key === "Home") nextIndex = 0;
+              if (event.key === "End") nextIndex = tabs.length - 1;
+              if (nextIndex !== null) {
+                event.preventDefault();
+                const nextTab = tabs[nextIndex].id;
+                setTab(nextTab);
+                requestAnimationFrame(() => document.getElementById(`tab-${nextTab}`)?.focus());
+              }
+            }}
           >
             {t.label}
           </button>
         ))}
       </div>
 
+      <div id={`tabpanel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       {tab === "resumen" && (
         <section className="card">
           <h2>Tendencia 30 días</h2>
@@ -300,42 +379,49 @@ export default function PatientDetailPage() {
 
       {tab === "evaluaciones" && (
         <section className="card">
-          <h2>Histórico del motor de riesgo</h2>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th>Nivel</th>
-                  <th>Motivo</th>
-                  <th>Reglas</th>
-                  <th>Modelo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dossier.assessments.map((a) => (
-                  <tr key={a.id}>
-                    <td className="meta">{new Date(a.calculated_at).toLocaleString()}</td>
-                    <td>
-                      <strong>L{a.alert_level}</strong>
-                    </td>
-                    <td>{a.assessment_reason}</td>
-                    <td className="meta">
-                      {Array.isArray(a.triggering_rules)
-                        ? a.triggering_rules.join(", ")
-                        : JSON.stringify(a.triggering_rules)}
-                    </td>
-                    <td className="meta">{a.model_version}</td>
-                  </tr>
-                ))}
-                {dossier.assessments.length === 0 && (
-                  <tr>
-                    <td colSpan={5}>Sin evaluaciones. Usa «Reevaluar riesgo».</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <h2>Desglose del motor de riesgo determinista</h2>
+          <p className="subtitle">
+            Cada evaluación muestra la conclusión, los datos empleados y la ruta de reglas registrada por el
+            servidor. Agent 2 aporta inferencias lingüísticas, pero no decide el nivel.
+          </p>
+          <p className="trace-integrity-note">
+            <strong>Lectura clínica:</strong> esta pantalla explica el cálculo persistido; no vuelve a calcularlo
+            en el navegador. Abre una evaluación para inspeccionar umbrales, valores observados y evidencia completa.
+          </p>
+          <RiskAssessmentTraceList assessments={dossier.assessments} />
+          {assessmentHasMore && (
+            <button type="button" disabled={historyBusy !== null} onClick={loadOlderAssessments}>
+              {historyBusy === "assessments" ? "Cargando…" : "Cargar evaluaciones anteriores"}
+            </button>
+          )}
+          <p className="meta">Mostrando {dossier.assessments.length} evaluaciones, de más reciente a más antigua.</p>
+        </section>
+      )}
+
+      {tab === "agent2" && (
+        <section className="card">
+          <h2>Tracking de Agent 2 · analizador de conversación</h2>
+          <p className="subtitle">
+            Entrada textual, respuesta estructurada y metadatos de cada ejecución. Las respuestas son inferencias
+            del modelo y deben revisarse junto con los hechos confirmados y el cálculo determinista.
+          </p>
+          <p className="trace-integrity-note">
+            <strong>Cadena de evidencia:</strong> usa el identificador de correlación para vincular una llamada con
+            su señal lingüística y la evaluación de riesgo que realmente la consumió.
+          </p>
+          <Agent2TraceList
+            traces={dossier.agent2_traces ?? []}
+            assessments={dossier.assessments}
+            legacySignalCount={dossier.signals.filter(
+              (signal) => signal.signal_type === "linguistic_analysis" && !signal.agent2_trace_id
+            ).length}
+          />
+          {agent2HasMore && (
+            <button type="button" disabled={historyBusy !== null} onClick={loadOlderAgent2Traces}>
+              {historyBusy === "agent2" ? "Cargando…" : "Cargar trazas anteriores"}
+            </button>
+          )}
+          <p className="meta">Mostrando {dossier.agent2_traces?.length ?? 0} trazas, de más reciente a más antigua.</p>
         </section>
       )}
 
@@ -408,6 +494,7 @@ export default function PatientDetailPage() {
           </ul>
         </section>
       )}
+      </div>
     </div>
   );
 }

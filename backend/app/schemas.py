@@ -1,8 +1,16 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_serializer
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------- auth ----
@@ -186,6 +194,7 @@ class ChatOut(BaseModel):
     reply: str
     ui_mode: str  # normal | support | crisis
     resources: Optional[list[dict[str, str]]] = None
+    correlation_id: Optional[uuid.UUID] = None
 
 
 class ChatMessageOut(BaseModel):
@@ -290,6 +299,10 @@ class RiskAssessmentOut(BaseModel):
     model_version: str
     calculated_at: datetime
     generated_alert_id: Optional[uuid.UUID] = None
+    correlation_id: Optional[uuid.UUID] = None
+    agent2_trace_id: Optional[uuid.UUID] = None
+    linguistic_signal_id_used: Optional[uuid.UUID] = None
+    calculation_trace: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -298,6 +311,10 @@ class RiskAssessmentOut(BaseModel):
         # production startup stays warning-free.
         protected_namespaces = ()
 
+    @field_serializer("calculated_at")
+    def serialize_calculated_at(self, value: datetime) -> str:
+        return _utc_iso(value) or ""
+
 
 class SignalOut(BaseModel):
     id: uuid.UUID
@@ -305,9 +322,54 @@ class SignalOut(BaseModel):
     value: Any
     confidence_band: Optional[str] = None
     timestamp: datetime
+    agent2_trace_id: Optional[uuid.UUID] = None
 
     class Config:
         from_attributes = True
+
+    @field_serializer("timestamp")
+    def serialize_timestamp(self, value: datetime) -> str:
+        return _utc_iso(value) or ""
+
+
+class Agent2AnalysisTraceOut(BaseModel):
+    id: uuid.UUID
+    correlation_id: uuid.UUID
+    source_type: str
+    source_id: uuid.UUID
+    source_text: str
+    status: str
+    provider: str
+    requested_model: str
+    response_model: Optional[str] = None
+    effort: str
+    max_tokens: int
+    prompt_version: str
+    prompt_sha256: str
+    schema_version: str
+    schema_sha256: str
+    provider_message_id: Optional[str] = None
+    provider_request_id: Optional[str] = None
+    stop_reason: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
+    cache_read_input_tokens: Optional[int] = None
+    latency_ms: Optional[int] = None
+    error_kind: Optional[str] = None
+    error_code: Optional[str] = None
+    http_status: Optional[int] = None
+    app_release: str
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    analysis: Optional[Any] = None
+    signal_id: Optional[uuid.UUID] = None
+    risk_assessment_id: Optional[uuid.UUID] = None
+    used_by_risk_engine: bool = False
+
+    @field_serializer("started_at", "completed_at")
+    def serialize_trace_timestamps(self, value: datetime | None) -> str | None:
+        return _utc_iso(value)
 
 
 class PatientDossierOut(BaseModel):
@@ -322,6 +384,7 @@ class PatientDossierOut(BaseModel):
     assessments: list[RiskAssessmentOut]
     alerts: list[AlertOut]
     signals: list[SignalOut]
+    agent2_traces: list[Agent2AnalysisTraceOut]
     deep_analysis: Optional[DeepStatisticalAnalysisOut] = None
     safety_plan: Optional[SafetyPlanOut] = None
     professional_protocol: dict[str, str]

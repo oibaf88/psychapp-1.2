@@ -74,11 +74,18 @@ def main() -> int:
 
     # --- Agent 2: structured linguistic analysis ----------------------
     try:
-        result = provider.analyze_structured(AGENT2_SYSTEM_PROMPT, SAMPLE_TEXT, AGENT2_TOOL_SCHEMA)
+        analysis = provider.analyze_structured(AGENT2_SYSTEM_PROMPT, SAMPLE_TEXT, AGENT2_TOOL_SCHEMA)
+        result = analysis.value
         missing = EXPECTED_FIELDS - set(result)
         if missing:
             raise RuntimeError(f"missing fields in response: {sorted(missing)}")
         print("PASS  Agent 2 (linguistic analysis)")
+        print(
+            f"      model={analysis.metadata.response_model or analysis.metadata.requested_model} "
+            f"request_id={analysis.metadata.request_id or 'n/a'} "
+            f"tokens={analysis.metadata.input_tokens or 0}+{analysis.metadata.output_tokens or 0} "
+            f"latency_ms={analysis.metadata.latency_ms or 0}"
+        )
         print(json.dumps(result, indent=2, ensure_ascii=False))
     except Exception as exc:  # noqa: BLE001
         ok = False

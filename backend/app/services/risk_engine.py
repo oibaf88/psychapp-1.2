@@ -7,7 +7,7 @@ single source of truth for alert_level (0-4). No LLM call ever happens
 inside this module.
 """
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,7 @@ from app.models import AlfaSignal, ConfirmedFact, ProfessionalAlert, RiskAssessm
 from app.services import baseline as baseline_service
 from app.services import notifications as notification_service
 
-MODEL_VERSION = "risk-engine-v1.1"
+MODEL_VERSION = "risk-engine-v1.2"
 
 # N4 (emergencia): only explicit self-harm crisis declarations / ideation.
 N4_FACT_CATEGORIES = {"ideation_active", "planning"}
@@ -28,6 +28,13 @@ STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE = 5
 ALERT_DEDUPE_HOURS = 24
 
 
+def _utc_iso(value: datetime) -> str:
+    """Serialize legacy naive database timestamps explicitly as UTC."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 @dataclass
 class RiskDecision:
     level: int
@@ -35,6 +42,8 @@ class RiskDecision:
     reason: str
     input_signals: dict
     input_facts: dict
+    calculation_trace: dict | None = None
+    linguistic_signal_id: object | None = None
 
 
 def _facts_in_categories(db: Session, user_id, categories: set[str], window_hours: int) -> list[dict]:
@@ -49,7 +58,13 @@ def _facts_in_categories(db: Session, user_id, categories: set[str], window_hour
         )
         .all()
     )
-    return [{"category": f.category, "content": f.content, "created_at": f.created_at.isoformat()} for f in facts]
+    # The persisted calculation snapshot needs the evidence identity and
+    # category, not a second copy of the sensitive free-text fact.  Clinical
+    # content remains in confirmed_facts under its existing RBAC rules.
+    return [
+        {"id": str(f.id), "category": f.category, "created_at": _utc_iso(f.created_at)}
+        for f in facts
+    ]
 
 
 def _latest_linguistic_signal(db: Session, user_id) -> dict:
@@ -62,24 +77,31 @@ def _latest_linguistic_signal(db: Session, user_id) -> dict:
     return (sig.value if sig else {}) or {}
 
 
-def _linguistic_flags(db: Session, user_id, window_hours: int = 12) -> dict:
+def _linguistic_flags(
+    db: Session,
+    user_id,
+    window_hours: int = 12,
+    *,
+    signal_id=None,
+) -> dict:
     """
     Only *recent* Agent-2 linguistic analyses count toward live risk.
     A short window avoids a single diary/chat turn permanently locking the
     patient at N4 until the next analysis overwrites it days later.
     """
     since = datetime.utcnow() - timedelta(hours=window_hours)
-    signals = (
-        db.query(AlfaSignal)
-        .filter(
-            AlfaSignal.user_id == user_id,
-            AlfaSignal.signal_type == "linguistic_analysis",
-            AlfaSignal.is_active == True,  # noqa: E712
-            AlfaSignal.timestamp >= since,
-        )
-        .order_by(AlfaSignal.timestamp.desc())
-        .first()
+    query = db.query(AlfaSignal).filter(
+        AlfaSignal.user_id == user_id,
+        AlfaSignal.signal_type == "linguistic_analysis",
+        AlfaSignal.is_active == True,  # noqa: E712
+        AlfaSignal.timestamp >= since,
     )
+    if signal_id is not None:
+        # Chat/diary evaluations must consume the exact signal produced for
+        # their own source text.  Selecting the global latest signal here
+        # would let concurrent requests for one patient cross their lineage.
+        query = query.filter(AlfaSignal.id == signal_id)
+    signals = query.order_by(AlfaSignal.timestamp.desc()).first()
     value = (signals.value if signals else {}) or {}
     # Agent 2 sometimes returns strings "true"/"false"; coerce carefully.
     def _truthy(v) -> bool:
@@ -92,6 +114,11 @@ def _linguistic_flags(db: Session, user_id, window_hours: int = 12) -> dict:
         return False
 
     return {
+        "_signal_uuid": signals.id if signals else None,
+        "signal_id": str(signals.id) if signals else None,
+        "signal_timestamp": _utc_iso(signals.timestamp) if signals else None,
+        "eligible_for_risk": bool(signals),
+        "freshness_window_hours": window_hours,
         "ideation_direct": _truthy(value.get("ideation_direct")),
         "consumption_crisis": _truthy(value.get("consumption_crisis")),
         "rumination_score": value.get("rumination_score"),
@@ -120,13 +147,38 @@ def _persistence_band(db: Session, user_id, band: str, days_minimum: int) -> boo
     return len(days_in_band) >= days_minimum
 
 
+def _persistence_detail(db: Session, user_id, band: str, days_minimum: int) -> dict:
+    since = datetime.utcnow() - timedelta(days=days_minimum)
+    history = (
+        db.query(AlfaSignal)
+        .filter(
+            AlfaSignal.user_id == user_id,
+            AlfaSignal.signal_type == "structural_score",
+            AlfaSignal.is_active == True,  # noqa: E712
+            AlfaSignal.timestamp >= since,
+        )
+        .order_by(AlfaSignal.timestamp.desc())
+        .all()
+    )
+    days = sorted({row.timestamp.strftime("%Y-%m-%d") for row in history if row.confidence_band == band})
+    return {
+        "band": band,
+        "window_days": days_minimum,
+        "required_distinct_days": days_minimum,
+        "observed_distinct_days": len(days),
+        "observed_dates": days,
+        "passed": len(days) >= days_minimum,
+    }
+
+
 def _convergencia_critica_extrema(structural_score: float | None, rumination: float | None, sleep_worsening: bool) -> bool:
     if structural_score is None or rumination is None:
         return False
     return structural_score < 0.20 and rumination > 0.85 and sleep_worsening
 
 
-def calculate_risk_level(db: Session, user_id) -> RiskDecision:
+def _calculate_risk_level_legacy(db: Session, user_id) -> RiskDecision:
+    """Pre-trace implementation retained temporarily for migration comparison tests."""
     structural = baseline_service.compute_structural_score(db, user_id)
     ling_flags = _linguistic_flags(db, user_id)
     linguistic = ling_flags.get("raw") or _latest_linguistic_signal(db, user_id)
@@ -289,6 +341,360 @@ def calculate_risk_level(db: Session, user_id) -> RiskDecision:
     )
 
 
+def _trace_condition(label: str, actual, operator: str, expected, passed: bool | None) -> dict:
+    return {
+        "label": label,
+        "actual": actual,
+        "operator": operator,
+        "expected": expected,
+        "result": passed,
+    }
+
+
+def _trace_rule(code: str, level: int, label: str, conditions: list[dict], matched: bool | None) -> dict:
+    return {
+        "priority": 0,
+        "code": code,
+        "target_level": level,
+        "label": label,
+        "conditions": conditions,
+        "matched": matched,
+        "selected": False,
+        "status": "not_evaluable" if matched is None else ("matched_not_selected" if matched else "not_matched"),
+    }
+
+
+def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> RiskDecision:
+    """Evaluate every deterministic rule and persistable intermediate.
+
+    Unlike the legacy early-return cascade, this function records all rule
+    outcomes and then selects the first match.  The ordering and final level
+    remain identical, while clinicians can inspect the complete calculation.
+    """
+
+    evaluated_at = datetime.utcnow()
+    structural = baseline_service.compute_structural_score(db, user_id)
+    ling = _linguistic_flags(db, user_id, signal_id=linguistic_signal_id)
+    linguistic = ling.get("raw") or {}
+    rumination = ling.get("rumination_score")
+
+    from app.models import CheckIn
+
+    recent_checkins = (
+        db.query(CheckIn)
+        .filter(CheckIn.user_id == user_id)
+        .order_by(CheckIn.created_at.desc())
+        .limit(7)
+        .all()
+    )
+    ordered_checkins = list(reversed(recent_checkins))
+    sleep_values = [float(row.sleep_hours) for row in ordered_checkins]
+    sleep_detail = baseline_service.calculate_trend_detail(sleep_values)
+    sleep_worsening = sleep_detail.label == "empeorando"
+    rumination_high = isinstance(rumination, (int, float)) and rumination > 0.60
+
+    n4_facts = _facts_in_categories(db, user_id, N4_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
+    n3_facts = _facts_in_categories(db, user_id, N3_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
+    persistence_1 = _persistence_detail(db, user_id, "unstable", 1)
+    persistence_3 = _persistence_detail(db, user_id, "unstable", STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT)
+    persistence_5 = _persistence_detail(db, user_id, "unstable", STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE)
+
+    structural_extreme = structural.score is not None and structural.score < 0.20
+    rumination_extreme = isinstance(rumination, (int, float)) and rumination > 0.85
+    extreme_convergence = structural_extreme and rumination_extreme and sleep_worsening
+    agent2_available = bool(ling["eligible_for_risk"])
+
+    rules = [
+        _trace_rule(
+            "N4_declaracion_ideacion_o_plan",
+            4,
+            "Hecho confirmado reciente de ideación activa o planificación",
+            [_trace_condition("Hechos N4 en 48 h", len(n4_facts), "gt", 0, bool(n4_facts))],
+            bool(n4_facts),
+        ),
+        _trace_rule(
+            "N4_senal_linguistica_ideacion_directa",
+            4,
+            "Agente 2 detectó ideación directa en una señal vigente",
+            [
+                _trace_condition("Señal de Agente 2 vigente", agent2_available, "eq", True, agent2_available),
+                _trace_condition(
+                    "ideation_direct",
+                    ling["ideation_direct"] if agent2_available else None,
+                    "eq",
+                    True,
+                    ling["ideation_direct"] if agent2_available else None,
+                ),
+            ],
+            (ling["ideation_direct"] if agent2_available else None),
+        ),
+        _trace_rule(
+            "N4_convergencia_critica_extrema",
+            4,
+            "Convergencia extrema de score estructural, rumiación y sueño",
+            [
+                _trace_condition("structural_score", structural.score, "lt", 0.20, structural_extreme if structural.score is not None else None),
+                _trace_condition("rumination_score", rumination, "gt", 0.85, rumination_extreme if rumination is not None else None),
+                _trace_condition("tendencia de sueño", sleep_detail.label, "eq", "empeorando", sleep_worsening),
+            ],
+            extreme_convergence if structural.score is not None and rumination is not None else None,
+        ),
+        _trace_rule(
+            "N3_declaracion_crisis_consumo",
+            3,
+            "Hecho confirmado reciente de crisis de consumo",
+            [_trace_condition("Hechos N3 en 48 h", len(n3_facts), "gt", 0, bool(n3_facts))],
+            bool(n3_facts),
+        ),
+        _trace_rule(
+            "N3_senal_linguistica_crisis_consumo",
+            3,
+            "Agente 2 detectó crisis de consumo en una señal vigente",
+            [
+                _trace_condition("Señal de Agente 2 vigente", agent2_available, "eq", True, agent2_available),
+                _trace_condition(
+                    "consumption_crisis",
+                    ling["consumption_crisis"] if agent2_available else None,
+                    "eq",
+                    True,
+                    ling["consumption_crisis"] if agent2_available else None,
+                ),
+            ],
+            (ling["consumption_crisis"] if agent2_available else None),
+        ),
+        _trace_rule(
+            "N3_unstable_persistente_con_convergencia",
+            3,
+            "Inestabilidad persistente 3 días con otra señal convergente",
+            [
+                _trace_condition("banda estructural", structural.confidence_band, "eq", "unstable", structural.confidence_band == "unstable"),
+                _trace_condition("días inestables distintos", persistence_3["observed_distinct_days"], "gte", 3, persistence_3["passed"]),
+                _trace_condition(
+                    "sueño empeorando o rumiación > 0.60",
+                    {"sleep_trend": sleep_detail.label, "rumination_score": rumination},
+                    "any",
+                    {"sleep_trend": "empeorando", "rumination_score_gt": 0.60},
+                    sleep_worsening or rumination_high,
+                ),
+            ],
+            structural.confidence_band == "unstable" and persistence_3["passed"] and (sleep_worsening or rumination_high),
+        ),
+        _trace_rule(
+            "N3_unstable_persistente",
+            3,
+            "Inestabilidad estructural persistente durante 5 días",
+            [
+                _trace_condition("banda estructural", structural.confidence_band, "eq", "unstable", structural.confidence_band == "unstable"),
+                _trace_condition("días inestables distintos", persistence_5["observed_distinct_days"], "gte", 5, persistence_5["passed"]),
+            ],
+            structural.confidence_band == "unstable" and persistence_5["passed"],
+        ),
+        _trace_rule(
+            "N2_desviacion_moderada",
+            2,
+            "Banda de transición o inicio de inestabilidad",
+            [
+                _trace_condition(
+                    "transition o unstable durante al menos 1 día",
+                    {"band": structural.confidence_band, "unstable_days": persistence_1["observed_distinct_days"]},
+                    "any",
+                    {"band": "transition", "unstable_days_gte": 1},
+                    structural.confidence_band == "transition"
+                    or (structural.confidence_band == "unstable" and persistence_1["passed"]),
+                )
+            ],
+            structural.confidence_band == "transition"
+            or (structural.confidence_band == "unstable" and persistence_1["passed"]),
+        ),
+        _trace_rule(
+            "N0_estable",
+            0,
+            "Situación estable respecto a la línea base",
+            [_trace_condition("banda estructural", structural.confidence_band, "eq", "stable", structural.confidence_band == "stable")],
+            structural.confidence_band == "stable",
+        ),
+        _trace_rule(
+            "N1_datos_insuficientes_o_sin_criterios",
+            1,
+            "Datos insuficientes para una desviación estructural",
+            [_trace_condition("banda estructural", structural.confidence_band, "eq", "insufficient_data", structural.confidence_band == "insufficient_data")],
+            structural.confidence_band == "insufficient_data",
+        ),
+        _trace_rule(
+            "N1_sin_criterios_superiores",
+            1,
+            "Regla de cierre si no se cumple ningún criterio anterior",
+            [_trace_condition("ninguna regla anterior seleccionada", True, "fallback", True, True)],
+            True,
+        ),
+    ]
+
+    # The closing rule is a true fallback: it only matches when none of the
+    # preceding ten rules did.  Recording it as an unconditional match would
+    # make every historic explanation claim two simultaneous conclusions.
+    fallback = rules[-1]
+    fallback_matches = not any(rule["matched"] is True for rule in rules[:-1])
+    fallback["matched"] = fallback_matches
+    fallback["conditions"][0]["actual"] = fallback_matches
+    fallback["conditions"][0]["result"] = fallback_matches
+    fallback["status"] = "matched_not_selected" if fallback_matches else "not_matched"
+
+    for priority, rule in enumerate(rules, start=1):
+        rule["priority"] = priority
+    selected = next(rule for rule in rules if rule["matched"] is True)
+    selected["selected"] = True
+    selected["status"] = "selected"
+
+    reasons = {
+        "N4_declaracion_ideacion_o_plan": "Declaración confirmada de ideación activa o planificación (hecho, no inferencia)",
+        "N4_senal_linguistica_ideacion_directa": "Señal lingüística reciente de ideación directa (inferencia Agent 2; revisión humana prioritaria)",
+        "N4_convergencia_critica_extrema": "Convergencia extrema: score estructural muy bajo + rumiación alta + sueño empeorando",
+        "N3_declaracion_crisis_consumo": "Declaración de crisis de consumo (alarma profesional, no emergencia 112 automática)",
+        "N3_senal_linguistica_crisis_consumo": "Señal lingüística de crisis de consumo (inferencia; revisión profesional)",
+        "N3_unstable_persistente_con_convergencia": "Desviación estructural persistente (≥3 días inestable) con convergencia de señales",
+        "N3_unstable_persistente": "structural_score en banda inestable de forma sostenida (≥5 días)",
+        "N2_desviacion_moderada": "Desviación moderada o inicio de inestabilidad (prevención, sin alerta profesional automática)",
+        "N0_estable": "Situación estable respecto a la línea base personal",
+        "N1_datos_insuficientes_o_sin_criterios": "Sin criterios de nivel superior (datos insuficientes o sin desviación clara)",
+        "N1_sin_criterios_superiores": "Situación dentro de parámetros de autogestión",
+    }
+    reason = reasons[selected["code"]]
+
+    input_signals = {
+        "structural_score": structural.score,
+        "confidence_band": structural.confidence_band,
+        "z_scores": structural.z_scores,
+        "linguistic": linguistic,
+        "linguistic_signal_id": ling["signal_id"],
+        "linguistic_signal_timestamp": ling["signal_timestamp"],
+        "linguistic_signal_eligible_for_risk": agent2_available,
+        "linguistic_flags": {
+            "ideation_direct": ling["ideation_direct"] if agent2_available else None,
+            "consumption_crisis": ling["consumption_crisis"] if agent2_available else None,
+        },
+        "sleep_trend": sleep_detail.label,
+        "sleep_trend_slope": sleep_detail.slope,
+        "rumination_threshold_exceeded": rumination_high if rumination is not None else None,
+    }
+    input_facts = {
+        "n4_declarations": n4_facts,
+        "n3_declarations": n3_facts,
+        "critical_declarations": n4_facts + n3_facts,
+    }
+
+    variable_calculations = []
+    for key in baseline_service.VARIABLES:
+        baseline_stats = structural.baseline_stats.get(key, {})
+        baseline_mean = baseline_stats.get("mean")
+        recent_mean = structural.recent_means.get(key)
+        z_score = structural.z_scores.get(key)
+        variable_calculations.append(
+            {
+                "key": key,
+                "transformation": "10 - craving" if key == "craving_inv" else "identity",
+                "baseline_mean": baseline_mean,
+                "baseline_population_std": baseline_stats.get("std"),
+                "recent_mean": recent_mean,
+                "difference": round(recent_mean - baseline_mean, 3)
+                if isinstance(recent_mean, (int, float)) and isinstance(baseline_mean, (int, float))
+                else None,
+                "formula": "(recent_mean - baseline_mean) / baseline_population_std",
+                "zero_std_policy": "z_equals_zero",
+                "z_score": z_score,
+                "absolute_z": abs(z_score) if isinstance(z_score, (int, float)) else None,
+            }
+        )
+
+    matched_codes = [rule["code"] for rule in rules if rule["matched"] is True]
+    calculation_trace = {
+        "schema_version": "risk-explanation-v1",
+        "engine": {
+            "name": "deterministic-risk-engine",
+            "version": MODEL_VERSION,
+            "evaluated_at": _utc_iso(evaluated_at),
+            "evaluation_order": [rule["code"] for rule in rules],
+            "thresholds": {
+                "baseline_window_days": baseline_service.BASELINE_WINDOW_DAYS,
+                "recent_window_days": baseline_service.RECENT_WINDOW_DAYS,
+                "minimum_baseline_checkins": baseline_service.MIN_CHECKINS_FOR_BASELINE,
+                "agent2_freshness_hours": 12,
+                "critical_fact_window_hours": CRITICAL_DECLARATION_WINDOW_HOURS,
+                "structural_stable_gte": 0.60,
+                "structural_transition_gte": 0.35,
+                "structural_extreme_lt": 0.20,
+                "rumination_high_gt": 0.60,
+                "rumination_extreme_gt": 0.85,
+                "sleep_worsening_slope_lt": -0.15,
+            },
+        },
+        "inputs": {
+            "structural": {
+                "baseline_sample_count": structural.baseline_n,
+                "recent_sample_count": structural.recent_n,
+                "variables": variable_calculations,
+                "composite": {
+                    "formula": "mean(abs(z_score))",
+                    "composite_z": structural.composite_z,
+                    "score_formula": "clamp(1 - composite_z / 3, 0, 1)",
+                    "score": structural.score,
+                    "band": structural.confidence_band,
+                },
+            },
+            "sleep_trend": {
+                "points": [
+                    {
+                        "checkin_id": str(row.id),
+                        "created_at": _utc_iso(row.created_at),
+                        "x": index,
+                        "sleep_hours": float(row.sleep_hours),
+                    }
+                    for index, row in enumerate(ordered_checkins)
+                ],
+                "sample_count": sleep_detail.sample_count,
+                "slope": sleep_detail.slope,
+                "formula": "sum((x-x_mean)*(y-y_mean)) / sum((x-x_mean)^2)",
+                "classification": sleep_detail.label,
+            },
+            "agent2": {
+                "freshness_window_hours": ling["freshness_window_hours"],
+                "selected_signal_id": ling["signal_id"],
+                "signal_timestamp": ling["signal_timestamp"],
+                "eligible_for_risk": agent2_available,
+                "values_used": linguistic if agent2_available else None,
+            },
+            "confirmed_facts": {"window_hours": CRITICAL_DECLARATION_WINDOW_HOURS, "n4": n4_facts, "n3": n3_facts},
+            "persistence": {"unstable_1d": persistence_1, "unstable_3d": persistence_3, "unstable_5d": persistence_5},
+        },
+        "derivations": {
+            "structural_score": structural.score,
+            "confidence_band": structural.confidence_band,
+            "sleep_worsening": sleep_worsening,
+            "rumination_score": rumination,
+            "rumination_high": rumination_high if rumination is not None else None,
+            "agent2_signal_available": agent2_available,
+            "n4_fact_count": len(n4_facts),
+            "n3_fact_count": len(n3_facts),
+        },
+        "rules": rules,
+        "conclusion": {
+            "level": selected["target_level"],
+            "selected_rule_code": selected["code"],
+            "matched_rule_codes": matched_codes,
+            "reason": reason,
+        },
+    }
+
+    return RiskDecision(
+        level=selected["target_level"],
+        triggering_rules=[selected["code"]],
+        reason=reason,
+        input_signals=input_signals,
+        input_facts=input_facts,
+        calculation_trace=calculation_trace,
+        linguistic_signal_id=ling["_signal_uuid"],
+    )
+
+
 def _find_open_alert(db: Session, user_id, level: int) -> ProfessionalAlert | None:
     since = datetime.utcnow() - timedelta(hours=ALERT_DEDUPE_HOURS)
     return (
@@ -318,12 +724,26 @@ def _highest_open_level(db: Session, user_id) -> int:
     return row.alert_level if row else 0
 
 
-def run_and_persist(db: Session, user_id) -> RiskAssessment:
+def run_and_persist(
+    db: Session,
+    user_id,
+    *,
+    correlation_id=None,
+    agent2_trace_id=None,
+    linguistic_signal_id=None,
+) -> RiskAssessment:
     """
     Full pipeline: evaluate -> persist assessment -> create professional_alerts
     if level >= 3 (deduped) -> enqueue notifications.
     """
-    decision = calculate_risk_level(db, user_id)
+    decision = calculate_risk_level(db, user_id, linguistic_signal_id=linguistic_signal_id)
+
+    calculation_trace = dict(decision.calculation_trace or {})
+    calculation_trace["correlation_id"] = str(correlation_id) if correlation_id else None
+    calculation_trace["agent2_attempt_trace_id"] = str(agent2_trace_id) if agent2_trace_id else None
+    calculation_trace["linguistic_signal_id_used"] = (
+        str(decision.linguistic_signal_id) if decision.linguistic_signal_id else None
+    )
 
     assessment = RiskAssessment(
         user_id=user_id,
@@ -334,6 +754,10 @@ def run_and_persist(db: Session, user_id) -> RiskAssessment:
         confidence=decision.input_signals.get("structural_score"),
         assessment_reason=decision.reason,
         model_version=MODEL_VERSION,
+        correlation_id=correlation_id,
+        agent2_trace_id=agent2_trace_id,
+        linguistic_signal_id_used=decision.linguistic_signal_id,
+        calculation_trace=calculation_trace,
     )
     db.add(assessment)
     db.commit()
@@ -376,6 +800,13 @@ def run_and_persist(db: Session, user_id) -> RiskAssessment:
             db.commit()
 
             notification_service.dispatch_for_alert(db, alert)
+
+    final_trace = dict(assessment.calculation_trace or {})
+    conclusion = dict(final_trace.get("conclusion") or {})
+    conclusion["generated_alert_id"] = str(assessment.generated_alert_id) if assessment.generated_alert_id else None
+    final_trace["conclusion"] = conclusion
+    assessment.calculation_trace = final_trace
+    db.commit()
 
     return assessment
 

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 from fastapi import FastAPI
@@ -23,6 +24,7 @@ from app.routers import (
     timeline,
     metrics,
 )
+from app.services.risk_engine import MODEL_VERSION as RISK_ENGINE_VERSION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("psychapp")
@@ -36,7 +38,7 @@ app = FastAPI(
         "Not a medical device. Conversational and linguistic-analysis features are "
         "powered by Claude via the Anthropic API and require ANTHROPIC_API_KEY."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
@@ -77,11 +79,78 @@ def _wait_for_db(max_attempts: int = 30, delay_seconds: float = 2.0) -> None:
     raise RuntimeError("Could not connect to the database after multiple attempts.")
 
 
+def _verify_production_schema() -> None:
+    """Fail before serving if the expand migration was not applied."""
+    required = {
+        ("agent2_analysis_traces", "id"),
+        ("alfa_signals", "agent2_trace_id"),
+        ("risk_assessments", "correlation_id"),
+        ("risk_assessments", "agent2_trace_id"),
+        ("risk_assessments", "linguistic_signal_id_used"),
+        ("risk_assessments", "calculation_trace"),
+    }
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT table_name, column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = current_schema()"
+            )
+        ).all()
+        hardening = conn.execute(
+            text(
+                "SELECT owner_role.rolname, relation.relrowsecurity, relation.relforcerowsecurity "
+                "FROM pg_class relation "
+                "JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace "
+                "JOIN pg_roles owner_role ON owner_role.oid = relation.relowner "
+                "WHERE namespace.nspname = current_schema() "
+                "AND relation.relname = 'agent2_analysis_traces'"
+            )
+        ).first()
+        backend_policy = conn.execute(
+            text(
+                "SELECT 1 FROM pg_policies "
+                "WHERE schemaname = current_schema() "
+                "AND tablename = 'agent2_analysis_traces' "
+                "AND policyname = 'backend_full_access' "
+                "AND 'psychdeep_backend' = ANY(roles)"
+            )
+        ).first()
+    available = {(row[0], row[1]) for row in rows}
+    missing = sorted(required - available)
+    if missing:
+        raise RuntimeError(
+            "Production schema is missing the Agent 2/risk-explanation migration: "
+            + ", ".join(f"{table}.{column}" for table, column in missing)
+        )
+    if not hardening or hardening[0] != "psychdeep_backend" or not hardening[1] or not hardening[2]:
+        raise RuntimeError("Agent 2 trace table owner/RLS hardening is incomplete")
+    if not backend_policy:
+        raise RuntimeError("Agent 2 trace table backend RLS policy is missing")
+
+
 @app.on_event("startup")
 def on_startup():
     _wait_for_db()
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database schema ensured (create_all).")
+    if settings.is_production:
+        # Production schema changes are explicit Supabase migrations.  This
+        # prevents create_all() from creating an un-hardened table ahead of
+        # its RLS policy or silently omitting ALTER TABLE changes.
+        _verify_production_schema()
+        logger.info("Production database migration contract verified.")
+    else:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Local database schema ensured (create_all).")
+
+    from app.services.agent2_trace import mark_stale_started_as_abandoned
+
+    db = SessionLocal()
+    try:
+        abandoned = mark_stale_started_as_abandoned(db)
+        if abandoned:
+            logger.warning("Marked %s interrupted Agent 2 trace(s) as abandoned.", abandoned)
+    finally:
+        db.close()
 
     if settings.seed_demo_data:
         from app.seed import seed_demo_data
@@ -107,6 +176,10 @@ def health():
         "llm_provider": settings.llm_provider,
         "chat_model": settings.anthropic_chat_model,
         "analysis_model": settings.anthropic_analysis_model,
+        "risk_engine_version": RISK_ENGINE_VERSION,
+        "risk_explanation_schema": "risk-explanation-v1",
+        "agent2_tracking": True,
+        "release": (os.getenv("RENDER_GIT_COMMIT") or os.getenv("APP_RELEASE") or "local")[:64],
     }
 
 
