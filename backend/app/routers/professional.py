@@ -10,7 +10,7 @@ as a single-tenant MVP reasonably can:
                      alert-management rights.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
@@ -32,6 +32,7 @@ from app.models import (
     DiaryEntry,
     PatientProfessionalAssignment,
     ProfessionalAlert,
+    PsychosocialObservation,
     RiskAssessment,
     SafetyPlan,
     User,
@@ -53,6 +54,9 @@ from app.schemas import (
     PatientChatMessageOut,
     PatientDossierOut,
     PatientMetricsOut,
+    PsychosocialAdjudicationIn,
+    PsychosocialExplanationOut,
+    PsychosocialObservationOut,
     DeepStatisticalAnalysisOut,
     BiometricDataOut,
     AppUsageDataOut,
@@ -64,10 +68,19 @@ from app.schemas import (
     TimelineOut,
 )
 from app.security import require_professional
-from app.services import audit, clinical_copilot, clinical_view, risk_engine
+from app.services import audit, clinical_copilot, clinical_view, psychosocial, risk_engine
 from app.services.timeline import build_timeline
 
 router = APIRouter(prefix="/api/v1/professional", tags=["professional"])
+
+
+def _iso(value: datetime | None) -> str | None:
+    """Serialize legacy naive database timestamps explicitly as UTC."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _agent2_trace_out(
@@ -560,7 +573,10 @@ def patient_agent2_analyses(
     _require_clinical_read(db, professional, patient_id)
     rows = (
         db.query(Agent2AnalysisTrace)
-        .filter(Agent2AnalysisTrace.user_id == patient_id)
+        .filter(
+            Agent2AnalysisTrace.user_id == patient_id,
+            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+        )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .offset(offset)
         .limit(limit)
@@ -659,7 +675,10 @@ def patient_dossier(
     )
     agent2_traces = (
         db.query(Agent2AnalysisTrace)
-        .filter(Agent2AnalysisTrace.user_id == patient_id)
+        .filter(
+            Agent2AnalysisTrace.user_id == patient_id,
+            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+        )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .limit(50)
         .all()
@@ -719,6 +738,9 @@ def patient_dossier(
             )
         ),
         structural_explanation=StructuralExplanationOut(**clinical_view.structural_explanation(assessment)),
+        psychosocial_explanation=PsychosocialExplanationOut(
+            **clinical_view.psychosocial_explanation(None, psychosocial.assess(db, patient_id))
+        ),
         metrics=PatientMetricsOut(**clinical_view.build_metrics(db, patient_id, max(window_days, 90))),
         evidence=[EvidenceItemOut(**item) for item in clinical_view.build_evidence_feed(db, patient_id)],
         timeline=TimelineOut(**timeline),
@@ -821,6 +843,123 @@ def patient_evidence(
         extra={"row_count": len(rows)},
     )
     return rows
+
+
+def _psychosocial_observation_out(row: PsychosocialObservation) -> PsychosocialObservationOut:
+    return PsychosocialObservationOut(
+        id=row.id,
+        domain=row.domain,
+        domain_label=psychosocial.DOMAIN_LABELS.get(row.domain, row.domain),
+        category=row.category,
+        category_label=psychosocial.CATEGORY_LABELS.get(row.category, row.category),
+        valence=row.valence,
+        intensity=row.intensity,
+        confidence=row.confidence,
+        is_change=row.is_change,
+        status=row.status,
+        summary=row.summary,
+        evidence_quote=row.evidence_quote,
+        source_type=row.source_type,
+        source_label="Chat" if row.source_type == "chat_message" else "Diario",
+        source_id=row.chat_message_id or row.diary_entry_id,
+        adjudication_note=row.adjudication_note,
+        adjudicated_at=_iso(row.adjudicated_at),
+        observed_at=_iso(row.observed_at),
+    )
+
+
+@router.get("/patients/{patient_id}/psychosocial", response_model=PsychosocialExplanationOut)
+def patient_psychosocial(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """The patient's social context: index, per-domain breakdown and quotes."""
+    _require_clinical_read(db, professional, patient_id)
+    live = psychosocial.assess(db, patient_id)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="patient_psychosocial_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"active_domains": live.active_count, "index": live.index},
+    )
+    return PsychosocialExplanationOut(**clinical_view.psychosocial_explanation(None, live))
+
+
+@router.get(
+    "/patients/{patient_id}/psychosocial/observations",
+    response_model=list[PsychosocialObservationOut],
+)
+def patient_psychosocial_observations(
+    patient_id: uuid.UUID,
+    limit: int = Query(100, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Full append-only history of extracted social determinants."""
+    _require_clinical_read(db, professional, patient_id)
+    rows = (
+        db.query(PsychosocialObservation)
+        .filter(PsychosocialObservation.user_id == patient_id)
+        .order_by(PsychosocialObservation.observed_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_psychosocial_observation_out(row) for row in rows]
+
+
+@router.post(
+    "/patients/{patient_id}/psychosocial/observations/{observation_id}",
+    response_model=PsychosocialObservationOut,
+)
+def adjudicate_psychosocial_observation(
+    patient_id: uuid.UUID,
+    observation_id: uuid.UUID,
+    payload: PsychosocialAdjudicationIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Confirm or refute an extracted observation.
+
+    This is the human half of the fact/inference wall for social context: a
+    confirmed observation counts at full weight in the deterministic index
+    regardless of what the model's own confidence was, and a refuted one stops
+    counting entirely. Only the assigned therapist may adjudicate, matching
+    the rule already used for confirmed facts.
+    """
+    _require_fact_access(professional, db, patient_id)
+    row = db.get(PsychosocialObservation, observation_id)
+    if row is None or row.user_id != patient_id:
+        raise HTTPException(status_code=404, detail="Observación no encontrada")
+
+    previous = row.status
+    psychosocial.adjudicate(
+        db, row, status=payload.status, actor_id=professional.id, note=payload.note
+    )
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="psychosocial_observation_adjudicated",
+        entity_type="psychosocial_observation",
+        entity_id=row.id,
+        extra={
+            "patient_id": str(patient_id),
+            "from": previous,
+            "to": payload.status,
+            "domain": row.domain,
+            "category": row.category,
+        },
+    )
+    # Adjudication changes the index, which can change the level. Re-run the
+    # deterministic engine so the panel is not left showing a stale decision.
+    risk_engine.run_and_persist(db, patient_id)
+    return _psychosocial_observation_out(row)
 
 
 @router.get("/patients/{patient_id}/explanation", response_model=LevelExplanationOut)

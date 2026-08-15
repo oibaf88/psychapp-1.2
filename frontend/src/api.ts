@@ -245,6 +245,7 @@ export type DriverFamily =
   | "senal_linguistica"
   | "desviacion_estructural"
   | "convergencia"
+  | "contexto_psicosocial"
   | "sin_criterios";
 
 export interface EvidenceRef {
@@ -260,6 +261,10 @@ export interface EvidenceRef {
   analysis?: Record<string, unknown> | null;
   trace_id?: string | null;
   signal_id?: string | null;
+  domain_label?: string | null;
+  summary?: string | null;
+  status?: string | null;
+  observation_id?: string | null;
 }
 
 export interface LevelExplanationOut {
@@ -312,6 +317,107 @@ export interface StructuralExplanationOut {
   sleep_trend?: string | null;
   sleep_trend_slope?: number | null;
   caveats: string[];
+}
+
+// ------------------------------------------------- psychosocial context ---
+/** A social determinant the patient mentioned, as extracted by Agent 4.
+ *  `status` is the human half of the fact/inference wall: a therapist can
+ *  confirm or refute, and that decision outranks the model's confidence. */
+export interface PsychosocialDomainOut {
+  domain: string;
+  label: string;
+  category: string;
+  category_label: string;
+  valence: "risk" | "protective" | "neutral";
+  intensity: number;
+  confidence: number;
+  status: "inferred" | "confirmed" | "refuted";
+  summary: string;
+  quote: string;
+  observed_at?: string | null;
+  observation_id: string;
+  weight: number;
+  contribution: number;
+  is_change: boolean;
+}
+
+export interface PsychosocialAcuteChangeOut {
+  domain: string;
+  label: string;
+  category: string;
+  category_label: string;
+  summary: string;
+  quote: string;
+  observed_at?: string | null;
+  observation_id: string;
+}
+
+export interface PsychosocialExplanationOut {
+  index?: number | null;
+  band: string;
+  band_label: string;
+  scale_note: string;
+  summary: string;
+  driver_summary?: string | null;
+  protective_summary?: string | null;
+  domains: PsychosocialDomainOut[];
+  acute_changes: PsychosocialAcuteChangeOut[];
+  has_acute_change: boolean;
+  acute_note?: string | null;
+  caveats: string[];
+  observation_count: number;
+  active_count: number;
+  confirmed_count: number;
+  refuted_count: number;
+}
+
+export interface PsychosocialObservationOut {
+  id: string;
+  domain: string;
+  domain_label: string;
+  category: string;
+  category_label: string;
+  valence: "risk" | "protective" | "neutral";
+  intensity: number;
+  confidence: number;
+  is_change: boolean;
+  status: "inferred" | "confirmed" | "refuted";
+  summary: string;
+  evidence_quote: string;
+  source_type: string;
+  source_label: string;
+  source_id?: string | null;
+  adjudication_note?: string | null;
+  adjudicated_at?: string | null;
+  observed_at?: string | null;
+}
+
+export interface PsychosocialPoint {
+  at: string;
+  date: string;
+  index: number;
+  band?: string | null;
+  has_acute_change: boolean;
+  active_count?: number | null;
+  assessment_id: string;
+}
+
+export interface PsychosocialEventPoint {
+  at: string;
+  date: string;
+  domain: string;
+  domain_label: string;
+  category: string;
+  category_label: string;
+  valence: "risk" | "protective" | "neutral";
+  intensity: number;
+  confidence: number;
+  is_change: boolean;
+  status: string;
+  summary: string;
+  quote: string;
+  source_label: string;
+  observation_id: string;
 }
 
 export interface EvidenceItemOut {
@@ -411,6 +517,11 @@ export interface PatientMetricsOut {
   /** One point per day (the last of that day). The raw `structural` series
    *  has one point per risk run, which is unreadable over weeks. */
   daily_structural: StructuralPoint[];
+  /** Psychosocial index over time. Computed only inside a risk evaluation,
+   *  so the assessment history is its history. */
+  psychosocial: PsychosocialPoint[];
+  daily_psychosocial: PsychosocialPoint[];
+  psychosocial_events: PsychosocialEventPoint[];
   linguistic: LinguisticPoint[];
   levels: LevelPoint[];
   daily_levels: { date: string; max_level: number }[];
@@ -444,6 +555,7 @@ export interface PatientDossierOut {
   current_risk?: RiskAssessmentOut | null;
   level_explanation: LevelExplanationOut;
   structural_explanation: StructuralExplanationOut;
+  psychosocial_explanation: PsychosocialExplanationOut;
   metrics: PatientMetricsOut;
   evidence: EvidenceItemOut[];
   timeline: TimelineOut;
@@ -576,7 +688,15 @@ export const DRIVER_FAMILY_SHORT: Record<string, string> = {
   senal_linguistica: "Texto del paciente",
   desviacion_estructural: "Check-ins",
   convergencia: "Varias señales",
+  contexto_psicosocial: "Contexto social",
   sin_criterios: "Sin criterios",
+};
+
+export const PSYCHOSOCIAL_BAND_LABELS: Record<string, string> = {
+  alta: "alta",
+  moderada: "moderada",
+  baja: "baja",
+  sin_datos: "sin datos",
 };
 
 export const LEVEL_SHORT_LABELS: Record<number, string> = {

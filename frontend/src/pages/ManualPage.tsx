@@ -16,6 +16,7 @@ type SectionId =
   | "fuentes"
   | "agentes"
   | "score"
+  | "psicosocial"
   | "motor"
   | "paradoja"
   | "alertas"
@@ -29,8 +30,9 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "resumen", label: "1. En una página" },
   { id: "roles", label: "2. Roles y permisos" },
   { id: "fuentes", label: "3. De dónde salen los datos" },
-  { id: "agentes", label: "4. Los tres agentes" },
+  { id: "agentes", label: "4. Los cuatro agentes" },
   { id: "score", label: "5. El score estructural" },
+  { id: "psicosocial", label: "5b. El índice psicosocial" },
   { id: "motor", label: "6. El motor de riesgo" },
   { id: "paradoja", label: "7. Score alto + alerta 4" },
   { id: "alertas", label: "8. Alertas" },
@@ -137,13 +139,23 @@ export default function ManualPage() {
                       <td>Te resume y responde preguntas sobre un paciente. Solo lectura.</td>
                       <td>LLM (Claude)</td>
                     </tr>
+                    <tr>
+                      <td>Agente 4</td>
+                      <td>Extrae determinantes sociales (vivienda, apoyo, dinero, pérdidas…) de lo que escribe.</td>
+                      <td>LLM (Claude)</td>
+                    </tr>
+                    <tr>
+                      <td>Índice psicosocial</td>
+                      <td>Pondera esos determinantes con pesos fijos.</td>
+                      <td>Aritmética local, sin IA</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
               <p className="manual-key">
-                Lo importante: <strong>ningún modelo de lenguaje decide el nivel de alarma</strong>. El Agente 2
-                aporta observaciones sobre el texto; el motor determinista decide. El Agente 3 no puede escribir
-                nada en el historial clínico.
+                Lo importante: <strong>ningún modelo de lenguaje decide el nivel de alarma</strong>. Los agentes
+                2 y 4 aportan observaciones sobre el texto; el motor determinista decide. El Agente 3 no puede
+                escribir nada en el historial clínico.
               </p>
             </>
           )}
@@ -245,7 +257,7 @@ export default function ManualPage() {
 
           {active === "agentes" && (
             <>
-              <h2>4. Los tres agentes</h2>
+              <h2>4. Los cuatro agentes</h2>
               <h3>Agente 1 — conversacional</h3>
               <p>
                 Habla con el paciente. Recibe el nivel ya calculado como contexto de solo lectura y nunca
@@ -339,6 +351,28 @@ export default function ManualPage() {
                 Si el modelo devuelve algo que no cumple el esquema, la salida se descarta entera y el motor
                 sigue sin señal lingüística para ese texto. Cada llamada queda registrada en «Detalle técnico».
               </p>
+              <h3>Agente 4 — extractor psicosocial</h3>
+              <p>
+                No habla con nadie, igual que el Agente 2, y lee las mismas dos fuentes. Devuelve observaciones
+                estructuradas con dominio, categoría, valencia, intensidad, confianza, si es un{" "}
+                <strong>cambio</strong> reciente, un resumen y —obligatorio— la <strong>frase literal</strong>{" "}
+                del paciente que la sostiene.
+              </p>
+              <p>Tres filtros antes de que una observación entre en la base de datos:</p>
+              <ol>
+                <li>
+                  <strong>Esquema estricto</strong>: si la salida no valida, se descarta entera.
+                </li>
+                <li>
+                  <strong>Coherencia dominio/categoría</strong>: una categoría de «economía» declarada bajo
+                  «vivienda» se descarta en lugar de adivinar.
+                </li>
+                <li>
+                  <strong>Cita comprobada</strong>: la frase debe aparecer <em>literalmente</em> en el texto del
+                  paciente. Una cita inventada no llega nunca a tu pantalla.
+                </li>
+              </ol>
+
               <h3>Agente 3 — copiloto clínico</h3>
               <p>
                 Habla <strong>contigo</strong>, nunca con el paciente. Recibe su expediente con fechas y fuentes
@@ -460,11 +494,146 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
             </>
           )}
 
+          {active === "psicosocial" && (
+            <>
+              <h2>5b. El índice psicosocial, en detalle</h2>
+              <h3>Por qué existe</h3>
+              <p>
+                El deterioro emocional suele ser lo <strong>último</strong> que cambia. Lo primero que cambia es
+                la situación: alguien se muda «una temporada» a casa de un colega, deja de quedar con la gente
+                del gimnasio, le retiran una ayuda, se muere una abuela, vuelve a un piso donde se consume. Cada
+                una de esas frases parece conversación intrascendente, y hasta esta versión el sistema las
+                tiraba.
+              </p>
+              <p className="manual-key">
+                Mide <strong>adversidad del contexto de vida</strong>. Al contrario que el score estructural,
+                aquí <strong>más alto es peor</strong>.
+              </p>
+
+              <h3>Cómo se calcula</h3>
+              <ol>
+                <li>
+                  De cada dominio cuenta <strong>solo la observación más reciente</strong>, y solo si tiene menos
+                  de <strong>90 días</strong>.
+                </li>
+                <li>
+                  Las observaciones <strong>refutadas</strong> por ti se excluyen por completo.
+                </li>
+                <li>
+                  Cada observación aporta <code>peso × confianza_efectiva × intensidad</code>, donde la confianza
+                  efectiva es <strong>1.0 si tú la confirmaste</strong> y la del modelo si sigue inferida.
+                </li>
+                <li>
+                  <code>índice = clamp(media_pond(adversos) − 0.35 × media_pond(protectores), 0, 1)</code>
+                </li>
+              </ol>
+              <p>
+                Los factores protectores <strong>restan hasta un 35 %</strong> de la adversidad, nunca la
+                cancelan: alguien con buen apoyo puede seguir perdiendo su vivienda.
+              </p>
+
+              <h3>Pesos por dominio</h3>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Dominio</th>
+                      <th>Peso</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["Vivienda", "1.00"],
+                        ["Apoyo social", "1.00"],
+                        ["Acceso a medios lesivos", "0.95"],
+                        ["Pérdidas y rupturas", "0.90"],
+                        ["Vínculos y rutina", "0.85"],
+                        ["Entorno de consumo", "0.85"],
+                        ["Acceso a tratamiento", "0.80"],
+                        ["Situación económica", "0.80"],
+                        ["Familia", "0.75"],
+                        ["Convivencia", "0.70"],
+                        ["Ocupación", "0.60"],
+                        ["Estigma", "0.55"],
+                        ["Situación legal", "0.50"],
+                      ] as const
+                    ).map(([domain, weight]) => (
+                      <tr key={domain}>
+                        <td>{domain}</td>
+                        <td>{weight}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="manual-key">
+                Estos pesos son un <strong>criterio de diseño explícito</strong>, no un instrumento psicométrico
+                validado. Están aquí para que puedas discutirlos, no para que los aceptes.
+              </p>
+
+              <h3>Bandas</h3>
+              <p>
+                <strong>alta</strong> ≥ 0.60 · <strong>moderada</strong> 0.35–0.60 · <strong>baja</strong> &lt;
+                0.35 · <strong>sin datos</strong> si no hay observaciones activas.
+              </p>
+
+              <h3>Cambios agudos: las señales «inocuas»</h3>
+              <p>Una observación cuenta como cambio agudo si cumple las cuatro cosas:</p>
+              <ul>
+                <li>
+                  el modelo la marcó como <code>is_change</code>;
+                </li>
+                <li>es adversa;</li>
+                <li>
+                  su categoría está en la lista de cambios agudos (mudanza, pérdida de vivienda, aislamiento
+                  creciente, ruptura, duelo, pérdida de empleo o de ayuda, deudas, abandono de tratamiento,
+                  vuelta a entorno de consumo, pérdida de rutina, acceso a medios…);
+                </li>
+                <li>
+                  tiene menos de <strong>14 días</strong> y confianza efectiva ≥ 0.5.
+                </li>
+              </ul>
+              <p>
+                Esto es lo que dispara la regla 8, y es el mecanismo por el que un «nada, que me he ido unos días
+                a casa de un colega» puede acabar en tu pantalla.
+              </p>
+
+              <h3>El límite de seguridad, explícito</h3>
+              <p className="manual-key">
+                <strong>El índice psicosocial por sí solo nunca genera una alerta profesional.</strong> Como
+                máximo llega a nivel 2. Para alcanzar nivel 3 tiene que converger con una señal independiente:
+                inestabilidad estructural, sueño empeorando o rumiación alta. Una extracción demasiado entusiasta
+                no puede sacarte de una sesión.
+              </p>
+
+              <h3>Tu papel: confirmar y refutar</h3>
+              <p>
+                Cada observación empieza como <em>inferida</em>. En la pestaña «Contexto psicosocial» puedes{" "}
+                <strong>confirmar</strong> (pasa a contar al 100 % de su intensidad, ignorando la confianza del
+                modelo), <strong>refutar</strong> (deja de contar por completo) o <strong>deshacer</strong>. Cada
+                acción queda auditada y <strong>reevalúa el motor al instante</strong>, así que refutar puede
+                bajar el nivel del paciente en el momento.
+              </p>
+
+              <h3>Qué NO es el índice</h3>
+              <ul>
+                <li>No es un diagnóstico ni una predicción.</li>
+                <li>No es un instrumento validado ni comparable entre pacientes.</li>
+                <li>
+                  Un índice bajo puede significar «buen contexto» <strong>o</strong> «no ha hablado de ello». El
+                  panel te dice cuántos dominios hay activos precisamente por eso.
+                </li>
+                <li>No sustituye a preguntar. Es un recordatorio de qué preguntar.</li>
+              </ul>
+            </>
+          )}
+
           {active === "motor" && (
             <>
               <h2>6. El motor de riesgo: cómo se genera cada nivel</h2>
               <p>
-                Es código determinista, sin IA. Se evalúan <strong>once reglas en orden fijo</strong> y gana{" "}
+                Es código determinista, sin IA. Se evalúan <strong>catorce reglas en orden fijo</strong> y gana{" "}
                 <strong>la primera que se cumple</strong>.
               </p>
               <div className="table-wrap">
@@ -487,10 +656,13 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                         ["5", "N3_senal_linguistica_crisis_consumo", 3, "Señal del Agente 2 con consumption_crisis = true (< 12 h)"],
                         ["6", "N3_unstable_persistente_con_convergencia", 3, "unstable y ≥ 3 días naturales distintos y (sueño empeorando o rumiación > 0.60)"],
                         ["7", "N3_unstable_persistente", 3, "unstable y ≥ 5 días naturales distintos"],
-                        ["8", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
-                        ["9", "N0_estable", 0, "Banda stable"],
-                        ["10", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
-                        ["11", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
+                        ["8", "N3_desestabilizacion_psicosocial_aguda", 3, "Cambio psicosocial adverso en 14 días y (sueño empeorando o rumiación > 0.60 o banda no estable)"],
+                        ["9", "N3_convergencia_psicosocial_estructural", 3, "Índice psicosocial ≥ 0.60 y banda unstable"],
+                        ["10", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
+                        ["11", "N2_vulnerabilidad_psicosocial", 2, "Índice psicosocial ≥ 0.50 sin nada más"],
+                        ["12", "N0_estable", 0, "Banda stable"],
+                        ["13", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
+                        ["14", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
                       ] as const
                     ).map(([n, code, level, condition]) => (
                       <tr key={code}>
@@ -521,6 +693,11 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                 <li>
                   <strong>Persistencia estructural: días naturales distintos.</strong> Cinco check-ins el mismo
                   martes cuentan como <em>un</em> día.
+                </li>
+                <li>
+                  <strong>Contexto psicosocial: 90 días activos, 14 días para «cambio agudo».</strong> Una
+                  situación de vida persiste mucho más que un marcador lingüístico, pero un <em>cambio</em> solo
+                  es agudo durante dos semanas.
                 </li>
               </ul>
 
@@ -677,6 +854,7 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                       [
                         ["Resumen", "Tarjeta de nivel con su explicación, score estructural desglosado, gráficas de nivel y score, línea de tiempo de alertas y hechos."],
                         ["Métricas", "Las cinco gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos y señales del Agente 2. Cada una con su nota de «cómo se lee»."],
+                        ["Contexto psicosocial", "Vivienda, convivencia, apoyo, familia, dinero, ocupación, pérdidas y vínculo con el tratamiento, con la frase literal de la que salen y botones para confirmar o refutar."],
                         ["Evidencia", "Una tarjeta por texto analizado: lo que escribió, lo que leyó el Agente 2, qué nivel salió y si generó alerta. Filtrable."],
                         ["Copiloto clínico", "Conversación con el Agente 3 sobre este paciente."],
                         ["Chat del paciente", "Transcripción completa de su conversación con el Agente 1."],
@@ -759,6 +937,9 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                         ["«La IA decidió el nivel 4»", "El nivel lo decidió una regla fija. La IA solo aportó la lectura de un texto."],
                         ["«Si no hay alerta, no hace falta mirar»", "El historial completo está disponible sin alerta y ése es su uso normal."],
                         ["«El copiloto ha visto algo que yo no»", "El copiloto ve exactamente lo mismo que tú, en las pestañas. Verifícalo."],
+                        ["«Índice psicosocial bajo = contexto bueno»", "Puede ser «no ha hablado del tema». Mira cuántos dominios hay activos."],
+                        ["«El índice psicosocial me generó la alerta»", "Nunca solo. Siempre converge con otra señal; por su cuenta solo llega a nivel 2."],
+                        ["«Si el Agente 4 lo extrajo, es verdad»", "Es una inferencia. La cita literal está ahí para que la compruebes, y puedes refutarla."],
                       ] as const
                     ).map(([wrong, right]) => (
                       <tr key={wrong}>

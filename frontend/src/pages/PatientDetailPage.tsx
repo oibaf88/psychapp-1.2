@@ -16,6 +16,7 @@ import {
   EventTimeline,
   LevelHistoryChart,
   LinguisticSignalChart,
+  PsychosocialIndexChart,
   StructuralScoreChart,
   ZScoreChart,
 } from "../components/ClinicalCharts";
@@ -25,10 +26,12 @@ import {
   StructuralExplanationCard,
 } from "../components/ClinicalExplain";
 import CopilotPanel from "../components/CopilotPanel";
+import PsychosocialPanel from "../components/PsychosocialPanel";
 
 type Tab =
   | "resumen"
   | "metricas"
+  | "psicosocial"
   | "evidencia"
   | "copiloto"
   | "chat"
@@ -188,6 +191,10 @@ export default function PatientDetailPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
     { id: "metricas", label: "Métricas" },
+    {
+      id: "psicosocial",
+      label: `Contexto psicosocial (${dossier.psychosocial_explanation.active_count})`,
+    },
     { id: "evidencia", label: `Evidencia (${dossier.evidence.length})` },
     { id: "copiloto", label: "Copiloto clínico" },
     { id: "chat", label: `Chat del paciente (${patientChat.length})` },
@@ -269,6 +276,7 @@ export default function PatientDetailPage() {
               <div className="chart-grid">
                 <LevelHistoryChart daily={metrics.daily_levels} levels={metrics.levels} />
                 <StructuralScoreChart points={metrics.daily_structural} />
+                <PsychosocialIndexChart points={metrics.daily_psychosocial} />
               </div>
             </section>
             <section className="card">
@@ -290,9 +298,28 @@ export default function PatientDetailPage() {
               <LevelHistoryChart daily={metrics.daily_levels} levels={metrics.levels} />
               <StructuralScoreChart points={metrics.daily_structural} />
               <ZScoreChart points={metrics.daily_structural} />
+              <PsychosocialIndexChart points={metrics.daily_psychosocial} />
               <CheckInChart points={metrics.checkins} />
               <LinguisticSignalChart points={metrics.linguistic} onSelect={openEvidence} />
             </div>
+          </section>
+        )}
+
+        {tab === "psicosocial" && (
+          <section className="card">
+            <h2>Contexto psicosocial</h2>
+            <p className="subtitle">
+              Vivienda, convivencia, apoyo, familia, dinero, ocupación, pérdidas, vínculo con el tratamiento y
+              entorno de consumo — extraído de lo que el paciente ha contado en el chat y el diario. Es la
+              parte de su situación que suele moverse <strong>antes</strong> que el ánimo. Cada tarjeta lleva
+              la frase literal de la que sale: confírmala o refútala.
+            </p>
+            <PsychosocialPanel
+              patientId={p.id}
+              explanation={dossier.psychosocial_explanation}
+              canAdjudicate={isTherapist}
+              onChanged={load}
+            />
           </section>
         )}
 

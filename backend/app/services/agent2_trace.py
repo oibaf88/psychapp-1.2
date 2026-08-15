@@ -1,4 +1,10 @@
-"""Persistence helpers for privacy-preserving Agent 2 lineage."""
+"""Persistence helpers for privacy-preserving structured-analysis lineage.
+
+Shared by every structured-extraction agent — Agent 2 (linguistic markers)
+and Agent 4 (psychosocial context) — discriminated by ``agent_role``. Each
+role pins its own prompt and schema version so a historic trace records the
+exact contract that produced it.
+"""
 
 from __future__ import annotations
 
@@ -16,9 +22,20 @@ from app.content.prompts import (
     AGENT2_SCHEMA_VERSION,
     AGENT2_SYSTEM_PROMPT,
     AGENT2_TOOL_SCHEMA,
+    AGENT4_PROMPT_VERSION,
+    AGENT4_SCHEMA_VERSION,
+    AGENT4_SYSTEM_PROMPT,
+    AGENT4_TOOL_SCHEMA,
 )
 from app.models import Agent2AnalysisTrace
 from app.services.llm import ProviderMetadata, StructuredAnalysisError
+
+# Each structured-extraction agent pins its own prompt and schema so a
+# historic trace records exactly which contract produced it.
+AGENT_CONTRACTS = {
+    "agent2_linguistic": (AGENT2_PROMPT_VERSION, AGENT2_SYSTEM_PROMPT, AGENT2_SCHEMA_VERSION, AGENT2_TOOL_SCHEMA),
+    "agent4_psychosocial": (AGENT4_PROMPT_VERSION, AGENT4_SYSTEM_PROMPT, AGENT4_SCHEMA_VERSION, AGENT4_TOOL_SCHEMA),
+}
 
 
 class TracePersistenceError(RuntimeError):
@@ -29,8 +46,8 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _schema_sha256() -> str:
-    canonical = json.dumps(AGENT2_TOOL_SCHEMA, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def _schema_sha256(tool_schema: dict = AGENT2_TOOL_SCHEMA) -> str:
+    canonical = json.dumps(tool_schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return _sha256_text(canonical)
 
 
@@ -41,6 +58,7 @@ def start(
     source_type: str,
     source_id: uuid.UUID,
     correlation_id: uuid.UUID | None = None,
+    agent_role: str = "agent2_linguistic",
 ) -> Agent2AnalysisTrace:
     """Commit ``started`` before contacting Anthropic.
 
@@ -50,13 +68,17 @@ def start(
     """
 
     if source_type not in {"chat_message", "diary_entry"}:
-        raise ValueError("Unsupported Agent 2 source type")
+        raise ValueError("Unsupported structured-analysis source type")
+    if agent_role not in AGENT_CONTRACTS:
+        raise ValueError(f"Unknown structured-analysis agent role: {agent_role}")
 
+    prompt_version, system_prompt, schema_version, tool_schema = AGENT_CONTRACTS[agent_role]
     settings = get_settings()
     now = datetime.now(timezone.utc)
     trace = Agent2AnalysisTrace(
         id=uuid.uuid4(),
         correlation_id=correlation_id or uuid.uuid4(),
+        agent_role=agent_role,
         user_id=user_id,
         source_type=source_type,
         chat_message_id=source_id if source_type == "chat_message" else None,
@@ -66,10 +88,10 @@ def start(
         requested_model=settings.anthropic_analysis_model,
         effort=settings.anthropic_analysis_effort,
         max_tokens=settings.anthropic_max_tokens,
-        prompt_version=AGENT2_PROMPT_VERSION,
-        prompt_sha256=_sha256_text(AGENT2_SYSTEM_PROMPT),
-        schema_version=AGENT2_SCHEMA_VERSION,
-        schema_sha256=_schema_sha256(),
+        prompt_version=prompt_version,
+        prompt_sha256=_sha256_text(system_prompt),
+        schema_version=schema_version,
+        schema_sha256=_schema_sha256(tool_schema),
         app_release=(os.getenv("RENDER_GIT_COMMIT") or os.getenv("APP_RELEASE") or "local")[:64],
         started_at=now,
         created_at=now,
@@ -80,7 +102,7 @@ def start(
         db.refresh(trace)
     except Exception:
         db.rollback()
-        raise TracePersistenceError("Agent 2 trace could not be started") from None
+        raise TracePersistenceError(f"{agent_role} trace could not be started") from None
     return trace
 
 

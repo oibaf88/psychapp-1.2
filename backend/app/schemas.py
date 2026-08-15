@@ -485,12 +485,91 @@ class EvidenceItemOut(BaseModel):
     alert_title: Optional[str] = None
 
 
+class PsychosocialDomainOut(BaseModel):
+    domain: str
+    label: str
+    category: str
+    category_label: str
+    valence: str
+    intensity: float
+    confidence: float
+    status: str
+    summary: str
+    quote: str
+    observed_at: Optional[str] = None
+    observation_id: str
+    weight: float
+    contribution: float
+    is_change: bool
+
+
+class PsychosocialAcuteChangeOut(BaseModel):
+    domain: str
+    label: str
+    category: str
+    category_label: str
+    summary: str
+    quote: str
+    observed_at: Optional[str] = None
+    observation_id: str
+
+
+class PsychosocialExplanationOut(BaseModel):
+    """The social-determinants view: index, per-domain breakdown, quotes."""
+
+    index: Optional[float] = None
+    band: str
+    band_label: str
+    scale_note: str
+    summary: str
+    driver_summary: Optional[str] = None
+    protective_summary: Optional[str] = None
+    domains: list[PsychosocialDomainOut] = []
+    acute_changes: list[PsychosocialAcuteChangeOut] = []
+    has_acute_change: bool = False
+    acute_note: Optional[str] = None
+    caveats: list[str] = []
+    observation_count: int = 0
+    active_count: int = 0
+    confirmed_count: int = 0
+    refuted_count: int = 0
+
+
+class PsychosocialObservationOut(BaseModel):
+    id: uuid.UUID
+    domain: str
+    domain_label: str
+    category: str
+    category_label: str
+    valence: str
+    intensity: float
+    confidence: float
+    is_change: bool
+    status: str
+    summary: str
+    evidence_quote: str
+    source_type: str
+    source_label: str
+    source_id: Optional[uuid.UUID] = None
+    adjudication_note: Optional[str] = None
+    adjudicated_at: Optional[str] = None
+    observed_at: Optional[str] = None
+
+
+class PsychosocialAdjudicationIn(BaseModel):
+    status: str = Field(pattern="^(confirmed|refuted|inferred)$")
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
 class PatientMetricsOut(BaseModel):
     window_days: int
     generated_at: Optional[str] = None
     checkins: list[dict[str, Any]] = []
     structural: list[dict[str, Any]] = []
     daily_structural: list[dict[str, Any]] = []
+    psychosocial: list[dict[str, Any]] = []
+    daily_psychosocial: list[dict[str, Any]] = []
+    psychosocial_events: list[dict[str, Any]] = []
     linguistic: list[dict[str, Any]] = []
     levels: list[dict[str, Any]] = []
     daily_levels: list[dict[str, Any]] = []
@@ -535,6 +614,7 @@ class PatientDossierOut(BaseModel):
     current_risk: Optional[RiskAssessmentOut] = None
     level_explanation: LevelExplanationOut
     structural_explanation: StructuralExplanationOut
+    psychosocial_explanation: PsychosocialExplanationOut
     metrics: PatientMetricsOut
     evidence: list[EvidenceItemOut] = []
     timeline: TimelineOut

@@ -50,6 +50,9 @@ class _Query:
     def first(self):
         return self._rows[0] if self._rows else None
 
+    def count(self):
+        return len(self._rows)
+
 
 class _Db:
     """Fake session that dispatches by model, like the real queries do."""

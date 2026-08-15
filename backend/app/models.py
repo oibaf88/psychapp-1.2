@@ -331,6 +331,77 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PsychosocialObservation(Base):
+    """One social determinant extracted from a patient's own text.
+
+    These are INFERENCES, on the same side of the fact/inference wall as
+    AlfaSignal: written only by the extraction service, never by a person
+    typing into a form. What a professional (or the patient) *can* do is
+    adjudicate one — ``status`` moves to ``confirmed`` or ``refuted`` — and
+    that adjudication is a human act which the model can never undo.
+
+    ``evidence_quote`` deliberately duplicates a bounded fragment of the
+    source text, unlike Agent2AnalysisTrace which only points at it. An
+    extraction claim is unauditable without the words it was drawn from, and
+    a chat message can be long enough that a pointer alone does not tell the
+    clinician which sentence was meant. The quote lives in the same hardened
+    schema, under the same RLS and the same RBAC, as the message it came from.
+    """
+
+    __tablename__ = "psychosocial_observations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent2_analysis_traces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)  # chat_message | diary_entry
+    chat_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    diary_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("diary_entries.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    domain: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(48), nullable=False)
+    valence: Mapped[str] = mapped_column(String(16), nullable=False)  # risk | protective | neutral
+    intensity: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    is_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_quote: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # Human adjudication. Only a professional or the patient may move this.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="inferred")
+    # inferred | confirmed | refuted
+    adjudicated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    adjudicated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    adjudication_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    observed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint("source_type IN ('chat_message','diary_entry')", name="ck_psychosocial_source_type"),
+        CheckConstraint(
+            "(source_type = 'chat_message' AND chat_message_id IS NOT NULL AND diary_entry_id IS NULL) OR "
+            "(source_type = 'diary_entry' AND diary_entry_id IS NOT NULL AND chat_message_id IS NULL)",
+            name="ck_psychosocial_exact_source",
+        ),
+        CheckConstraint("valence IN ('risk','protective','neutral')", name="ck_psychosocial_valence"),
+        CheckConstraint("status IN ('inferred','confirmed','refuted')", name="ck_psychosocial_status"),
+        CheckConstraint("intensity >= 0 AND intensity <= 1", name="ck_psychosocial_intensity"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_psychosocial_confidence"),
+        Index("ix_psychosocial_user_observed", "user_id", "observed_at"),
+        Index("ix_psychosocial_user_domain_observed", "user_id", "domain", "observed_at"),
+    )
+
+
 class TherapistCopilotMessage(Base):
     """One turn of the therapist <-> Agent 3 conversation about a patient.
 
@@ -385,17 +456,29 @@ class AuditLog(Base):
 
 
 class Agent2AnalysisTrace(Base):
-    """Auditable lineage for one Agent 2 structured-analysis request.
+    """Auditable lineage for one structured-analysis request.
 
     No raw input or output is duplicated here. ``chat_message_id`` or
     ``diary_entry_id`` points to the clinical source record and
     ``AlfaSignal.agent2_trace_id`` points back from the validated result.
+
+    Despite the name, this table now carries lineage for *every*
+    structured-extraction agent — Agent 2 (linguistic markers) and Agent 4
+    (psychosocial context) — discriminated by ``agent_role``. They share
+    identical needs (fail-closed start row, provider metadata, allow-listed
+    error categories, stale-run sweeping), and duplicating the table would
+    have duplicated that machinery along with its RLS hardening. The table
+    keeps its historic name so the production migration stays expand-only.
     """
 
     __tablename__ = "agent2_analysis_traces"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    agent_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="agent2_linguistic", index=True
+    )
+    # agent2_linguistic | agent4_psychosocial
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -451,6 +534,10 @@ class Agent2AnalysisTrace(Base):
         CheckConstraint("input_tokens IS NULL OR input_tokens >= 0", name="ck_agent2_trace_input_tokens"),
         CheckConstraint("output_tokens IS NULL OR output_tokens >= 0", name="ck_agent2_trace_output_tokens"),
         CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="ck_agent2_trace_latency"),
+        CheckConstraint(
+            "agent_role IN ('agent2_linguistic','agent4_psychosocial')", name="ck_agent2_trace_agent_role"
+        ),
         Index("ix_agent2_trace_user_started", "user_id", "started_at"),
         Index("ix_agent2_trace_status_started", "status", "started_at"),
+        Index("ix_agent2_trace_role_started", "agent_role", "started_at"),
     )

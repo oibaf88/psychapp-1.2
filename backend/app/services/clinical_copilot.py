@@ -49,7 +49,7 @@ from app.models import (
     TherapistCopilotMessage,
     User,
 )
-from app.services import clinical_view
+from app.services import clinical_view, psychosocial
 from app.services.llm import get_llm_provider
 
 logger = logging.getLogger("psychapp.copilot")
@@ -192,6 +192,46 @@ def build_dossier_text(db: Session, patient: User, window_days: int = DEFAULT_WI
         parts.append(f"## HECHOS CONFIRMADOS (HECHOS, no inferencias; el sistema no puede sobrescribirlos)\n{rows}")
     else:
         parts.append("## HECHOS CONFIRMADOS\nNinguno activo.")
+
+    # --- psychosocial context ---------------------------------------------
+    assessment_state = psychosocial.assess(db, patient.id)
+    counts["psychosocial_domains"] = assessment_state.active_count
+    if assessment_state.domains:
+        rows = []
+        for state in assessment_state.domains:
+            marks = []
+            if state.is_change:
+                marks.append("CAMBIO RECIENTE")
+            if state.status != "inferred":
+                marks.append(state.status.upper())
+            rows.append(
+                f"- {state.label} · {state.category_label} · {state.valence} "
+                f"(intensidad {state.intensity}, confianza {state.confidence})"
+                + (f" [{', '.join(marks)}]" if marks else "")
+                + f" — {_clip(state.summary, 240)}"
+                + (f" · cita literal: «{_clip(state.quote, 200)}»" if state.quote else "")
+                + f" · {_fmt(state.observed_at)}"
+            )
+        acute = ""
+        if assessment_state.acute_changes:
+            acute = "\nCAMBIOS ADVERSOS EN LOS ÚLTIMOS 14 DÍAS: " + ", ".join(
+                f"{state.category_label} ({_fmt(state.observed_at)})"
+                for state in assessment_state.acute_changes
+            )
+        parts.append(
+            "## CONTEXTO PSICOSOCIAL (INFERENCIAS del Agente 4 sobre lo que el paciente contó)\n"
+            f"Índice de vulnerabilidad: {assessment_state.index} ({assessment_state.band}). "
+            "Más alto es peor. No es un instrumento validado.\n"
+            + "\n".join(rows)
+            + acute
+        )
+    else:
+        parts.append(
+            "## CONTEXTO PSICOSOCIAL\n"
+            "Sin observaciones. El paciente no ha hablado de su vivienda, apoyo, familia, dinero ni "
+            "situación vital, o el extractor no encontró nada. Es un hueco relevante: puedes sugerir al "
+            "profesional que lo explore."
+        )
 
     # --- Agent 2 signals --------------------------------------------------
     signals = (

@@ -27,10 +27,12 @@ y cómo auditar cualquier decisión del sistema hasta la frase que la produjo.
 | **Motor de riesgo** | Decide el nivel 0–4 aplicando reglas fijas en orden. | **Código determinista, sin IA** |
 | **Alertas** | Se crean automáticamente en niveles 3 y 4. | Motor determinista |
 | **Agente 3 (copiloto)** | Te resume y responde preguntas sobre un paciente. Solo lectura. | LLM (Claude) |
+| **Agente 4** | Extrae determinantes sociales (vivienda, apoyo, dinero, pérdidas…) de lo que el paciente escribe. | LLM (Claude) |
+| **Índice psicosocial** | Pondera esos determinantes con pesos fijos. | Aritmética local, sin IA |
 
-Lo importante: **ningún modelo de lenguaje decide el nivel de alarma**. El
-Agente 2 aporta observaciones sobre el texto; el motor determinista decide.
-El Agente 3 no puede escribir nada en el historial clínico.
+Lo importante: **ningún modelo de lenguaje decide el nivel de alarma**. Los
+agentes 2 y 4 aportan observaciones sobre el texto; el motor determinista
+decide. El Agente 3 no puede escribir nada en el historial clínico.
 
 ---
 
@@ -82,9 +84,15 @@ Un hecho lo declara **una persona** (el paciente o tú), nunca el sistema. Es
 el nivel más alto de evidencia y **ningún modelo puede sobrescribirlo**
 («muro de hechos vs. inferencias»).
 
+### 3.5 Contexto psicosocial (inferencias del Agente 4)
+Determinantes sociales extraídos de lo que el paciente escribe: vivienda,
+convivencia, apoyo social, familia, economía, ocupación, situación legal,
+acceso al tratamiento, estigma, pérdidas, vínculos y rutina, entorno de
+consumo y acceso a medios lesivos. Ver sección 5b.
+
 ---
 
-## 4. Los tres agentes
+## 4. Los cuatro agentes
 
 ### Agente 1 — conversacional
 Habla con el paciente. Recibe el nivel de alarma ya calculado como contexto
@@ -113,6 +121,21 @@ Si el modelo devuelve algo que no cumple el esquema, la salida se descarta
 entera y el motor sigue sin señal lingüística para ese texto. Cada llamada
 queda registrada (modelo, versión de prompt, tokens, latencia, error) en la
 pestaña «Detalle técnico».
+
+### Agente 4 — extractor psicosocial
+No habla con nadie, igual que el Agente 2, y lee las mismas dos fuentes
+(chat y diario). Devuelve una lista de observaciones estructuradas, cada
+una con: dominio, categoría, si es adversa o protectora, intensidad,
+confianza, si describe un **cambio** reciente, un resumen y —obligatorio—
+la **frase literal** del paciente que la sostiene.
+
+Tres filtros antes de que una observación entre en la base de datos:
+
+1. **Esquema estricto**: si la salida no valida, se descarta entera.
+2. **Coherencia dominio/categoría**: una categoría de «economía» declarada
+   bajo «vivienda» se descarta en lugar de adivinar.
+3. **Cita comprobada**: la frase debe aparecer *literalmente* en el texto
+   del paciente. Una cita inventada no llega nunca a tu pantalla.
 
 ### Agente 3 — copiloto clínico
 Habla **contigo**, nunca con el paciente. Recibe el expediente del paciente
@@ -195,10 +218,120 @@ score solo: lee el desglose por variable.**
 
 ---
 
+## 5b. El índice psicosocial, en detalle
+
+### 5b.1 Por qué existe
+
+El deterioro emocional suele ser lo **último** que cambia. Lo primero que
+cambia es la situación: alguien se muda «una temporada» a casa de un colega,
+deja de quedar con la gente del gimnasio, le retiran una ayuda, se muere una
+abuela, vuelve a un piso donde se consume. Cada una de esas frases parece
+conversación intrascendente, y hasta esta versión el sistema las tiraba: el
+Agente 2 puntúa rumiación e ideación, y el score estructural solo lee cuatro
+números diarios. Nada podía ver que la vida de una persona se estaba
+estrechando.
+
+### 5b.2 Qué mide
+
+**Adversidad del contexto de vida.** Al contrario que el score estructural,
+aquí **más alto es peor**.
+
+### 5b.3 Cómo se calcula
+
+1. De cada dominio cuenta **solo la observación más reciente**, y solo si
+   tiene menos de **90 días**. Una situación que mejoró deja de puntuar por
+   su estado antiguo.
+2. Las observaciones **refutadas** por ti se excluyen por completo.
+3. Cada observación aporta `peso_del_dominio × confianza_efectiva ×
+   intensidad`, donde la confianza efectiva es **1.0 si tú la confirmaste** y
+   la confianza del modelo si sigue como inferida.
+4. `índice = clamp(media_ponderada(adversos) − 0.35 × media_ponderada(protectores), 0, 1)`
+
+Los factores protectores **restan hasta un 35 %** de la adversidad, nunca la
+cancelan: alguien con buen apoyo puede seguir perdiendo su vivienda.
+
+### 5b.4 Pesos por dominio
+
+| Dominio | Peso |
+|---|---|
+| Vivienda | 1.00 |
+| Apoyo social | 1.00 |
+| Acceso a medios lesivos | 0.95 |
+| Pérdidas y rupturas | 0.90 |
+| Vínculos y rutina | 0.85 |
+| Entorno de consumo | 0.85 |
+| Acceso a tratamiento | 0.80 |
+| Situación económica | 0.80 |
+| Familia | 0.75 |
+| Convivencia | 0.70 |
+| Ocupación | 0.60 |
+| Estigma | 0.55 |
+| Situación legal | 0.50 |
+
+Estos pesos son un **criterio de diseño explícito**, no un instrumento
+psicométrico validado. Están aquí para que puedas discutirlos, no para que
+los aceptes.
+
+### 5b.5 Bandas
+
+| Banda | Índice |
+|---|---|
+| alta | ≥ 0.60 |
+| moderada | 0.35 – 0.60 |
+| baja | < 0.35 |
+| sin datos | no hay observaciones activas |
+
+### 5b.6 Cambios agudos: las señales «inocuas»
+
+Una observación cuenta como **cambio agudo** si cumple las cuatro cosas:
+
+- el modelo la marcó como `is_change`,
+- es adversa,
+- su categoría está en la lista de cambios agudos (mudanza, pérdida de
+  vivienda, aislamiento creciente, ruptura, duelo, pérdida de empleo o de
+  ayuda, deudas, abandono de tratamiento, vuelta a entorno de consumo,
+  pérdida de rutina, acceso a medios…),
+- tiene menos de **14 días** y confianza efectiva ≥ 0.5.
+
+Esto es lo que dispara la regla 8, y es el mecanismo por el que un «nada,
+que me he ido unos días a casa de un colega» puede acabar en tu pantalla.
+
+### 5b.7 El límite de seguridad, explícito
+
+**El índice psicosocial por sí solo nunca genera una alerta profesional.**
+Como máximo llega a nivel 2 (regla 11). Para alcanzar nivel 3 tiene que
+converger con una señal independiente: inestabilidad estructural, sueño
+empeorando o rumiación alta. Esto es deliberado: una extracción demasiado
+entusiasta no puede sacarte de una sesión.
+
+### 5b.8 Tu papel: confirmar y refutar
+
+Cada observación empieza como `inferida`. En la pestaña «Contexto
+psicosocial» puedes:
+
+- **Confirmar**: pasa a contar al 100 % de su intensidad, ignorando la
+  confianza del modelo. Úsalo cuando lo hayas verificado en sesión.
+- **Refutar**: deja de contar por completo. Úsalo cuando el modelo haya
+  malinterpretado la frase.
+- **Deshacer**: vuelve a `inferida`.
+
+Cada acción queda auditada y **reevalúa el motor de riesgo al instante**, así
+que refutar puede bajar el nivel del paciente en el momento.
+
+### 5b.9 Qué NO es el índice
+
+- No es un diagnóstico ni una predicción.
+- No es un instrumento validado ni comparable entre pacientes.
+- Un índice bajo puede significar «buen contexto» **o** «no ha hablado de
+  ello». El panel te dice cuántos dominios hay activos precisamente por eso.
+- No sustituye a preguntar. Es un recordatorio de qué preguntar.
+
+---
+
 ## 6. El motor de riesgo: cómo se genera cada nivel
 
-Es código Python determinista. No hay IA en él. Se evalúan **once reglas en
-orden fijo** y gana **la primera que se cumple**.
+Es código Python determinista. No hay IA en él. Se evalúan **catorce reglas
+en orden fijo** y gana **la primera que se cumple**.
 
 | # | Regla | Nivel | Condición |
 |---|---|---|---|
@@ -209,10 +342,13 @@ orden fijo** y gana **la primera que se cumple**.
 | 5 | `N3_senal_linguistica_crisis_consumo` | 3 | Señal del Agente 2 con `consumption_crisis = true` (< 12 h) |
 | 6 | `N3_unstable_persistente_con_convergencia` | 3 | Banda `unstable` **y** ≥ 3 días naturales distintos inestables **y** (sueño empeorando **o** rumiación > 0.60) |
 | 7 | `N3_unstable_persistente` | 3 | Banda `unstable` **y** ≥ 5 días naturales distintos inestables |
-| 8 | `N2_desviacion_moderada` | 2 | Banda `transition`, o primer día en `unstable` |
-| 9 | `N0_estable` | 0 | Banda `stable` |
-| 10 | `N1_datos_insuficientes_o_sin_criterios` | 1 | Banda `insufficient_data` |
-| 11 | `N1_sin_criterios_superiores` | 1 | Regla de cierre |
+| 8 | `N3_desestabilizacion_psicosocial_aguda` | 3 | Cambio psicosocial adverso en **14 días** **y** (sueño empeorando **o** rumiación > 0.60 **o** banda no estable) |
+| 9 | `N3_convergencia_psicosocial_estructural` | 3 | Índice psicosocial ≥ **0.60** **y** banda `unstable` |
+| 10 | `N2_desviacion_moderada` | 2 | Banda `transition`, o primer día en `unstable` |
+| 11 | `N2_vulnerabilidad_psicosocial` | 2 | Índice psicosocial ≥ **0.50** sin nada más |
+| 12 | `N0_estable` | 0 | Banda `stable` |
+| 13 | `N1_datos_insuficientes_o_sin_criterios` | 1 | Banda `insufficient_data` |
+| 14 | `N1_sin_criterios_superiores` | 1 | Regla de cierre |
 
 ### 6.1 Ventanas temporales, y por qué importan
 
@@ -224,6 +360,9 @@ orden fijo** y gana **la primera que se cumple**.
 - **Persistencia estructural: días naturales distintos.** Cinco check-ins el
   mismo martes cuentan como **un** día, no como cinco. Esto evita que un
   paciente muy activo dispare la regla en una tarde.
+- **Contexto psicosocial: 90 días activos, 14 días para «cambio agudo».** Una
+  situación de vida persiste mucho más que un marcador lingüístico, pero un
+  *cambio* solo es agudo durante dos semanas.
 
 ### 6.2 Qué significa cada nivel
 
@@ -366,6 +505,9 @@ como no verificada.** Es un modelo de lenguaje: puede equivocarse al leer.
 | «La IA decidió el nivel 4» | El nivel lo decidió una regla fija. La IA solo aportó la lectura de un texto. |
 | «Si no hay alerta, no hace falta mirar» | El historial completo está disponible sin alerta y ése es su uso normal. |
 | «El copiloto ha visto algo que yo no» | El copiloto ve exactamente lo mismo que tú, en las pestañas. Verifícalo. |
+| «Índice psicosocial bajo = contexto bueno» | Puede ser «no ha hablado del tema». Mira cuántos dominios hay activos. |
+| «El índice psicosocial me ha generado la alerta» | Nunca solo. Siempre converge con otra señal; solo puede llegar a nivel 2 por su cuenta. |
+| «Si el Agente 4 lo extrajo, es verdad» | Es una inferencia. La cita literal está ahí para que la compruebes, y puedes refutarla. |
 
 ---
 

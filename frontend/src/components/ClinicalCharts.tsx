@@ -28,6 +28,7 @@ import {
   LevelPoint,
   LinguisticPoint,
   MetricEvent,
+  PsychosocialPoint,
   StructuralPoint,
   formatDay,
 } from "../api";
@@ -43,6 +44,7 @@ const COLORS = {
   valence: "#8d6a9f",
   urgency: "#e07a1f",
   ambivalence: "#5c6f7d",
+  psychosocial: "#b5651d",
   neutral: "#9aa5b1",
 };
 
@@ -342,6 +344,63 @@ export function LinguisticSignalChart({
             connectNulls
           />
           <Scatter dataKey="flagged" name="Bandera crítica" fill={COLORS.level} shape="diamond" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+/**
+ * Psychosocial vulnerability over time.
+ *
+ * Drawn separately from the structural score on purpose: the two run in
+ * opposite directions (high score = stable, high index = adverse) and
+ * sharing an axis would invite exactly the misreading this redesign exists
+ * to prevent.
+ */
+export function PsychosocialIndexChart({ points }: { points: PsychosocialPoint[] }) {
+  return (
+    <ChartCard
+      title="Vulnerabilidad psicosocial"
+      question="¿Se está estrechando el contexto de vida del paciente?"
+      howToRead="0.00 = sin adversidad social registrada; 1.00 = adversidad marcada en los dominios de más peso (vivienda, apoyo, pérdidas, economía, vínculo con el tratamiento). Aquí MÁS ALTO ES PEOR — al revés que el score estructural. Los rombos marcan días con un cambio adverso reciente. Sale de lo que el paciente cuenta, así que un tramo plano puede significar «sin cambios» o «no ha hablado del tema»."
+      empty={points.length === 0}
+      footer={
+        <p className="chart-footnote">
+          El índice por sí solo nunca genera alerta profesional: para llegar a nivel 3 tiene que converger con
+          inestabilidad estructural, sueño empeorando o rumiación alta.
+        </p>
+      }
+    >
+      <ResponsiveContainer width="100%" height={220}>
+        <ComposedChart
+          data={points.map((point) => ({ ...point, change: point.has_acute_change ? 1.05 : null }))}
+          margin={{ top: 8, right: 16, bottom: 4, left: -18 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" />
+          <ReferenceArea y1={0.6} y2={1.12} fill="#c1121f" fillOpacity={0.07} />
+          <ReferenceArea y1={0.35} y2={0.6} fill="#e0a800" fillOpacity={0.08} />
+          <ReferenceLine y={0.6} stroke="#c1121f" strokeDasharray="4 4" />
+          <ReferenceLine y={0.35} stroke="#e0a800" strokeDasharray="4 4" />
+          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
+          <YAxis domain={[0, 1.12]} ticks={[0, 0.25, 0.5, 0.75, 1]} tick={{ fontSize: 11 }} />
+          <Tooltip
+            labelFormatter={formatDay}
+            formatter={(value: unknown, name) =>
+              name === "Cambio reciente" ? ["sí", name] : [value as number, name]
+            }
+          />
+          <Legend />
+          <Line
+            type="monotone"
+            dataKey="index"
+            name="Índice psicosocial"
+            stroke={COLORS.psychosocial}
+            strokeWidth={2}
+            connectNulls
+            dot={{ r: 2 }}
+          />
+          <Scatter dataKey="change" name="Cambio reciente" fill={COLORS.level} shape="diamond" />
         </ComposedChart>
       </ResponsiveContainer>
     </ChartCard>
