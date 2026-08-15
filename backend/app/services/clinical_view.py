@@ -46,9 +46,11 @@ from app.models import (
     ConfirmedFact,
     DiaryEntry,
     ProfessionalAlert,
+    PsychosocialObservation,
     RiskAssessment,
 )
 from app.services import baseline as baseline_service
+from app.services import psychosocial as psychosocial_service
 
 EXCERPT_CHARS = 320
 
@@ -59,6 +61,7 @@ FAMILY_CONFIRMED_FACT = "hecho_confirmado"
 FAMILY_LINGUISTIC = "senal_linguistica"
 FAMILY_STRUCTURAL = "desviacion_estructural"
 FAMILY_CONVERGENCE = "convergencia"
+FAMILY_PSYCHOSOCIAL = "contexto_psicosocial"
 FAMILY_NONE = "sin_criterios"
 
 FAMILY_LABELS = {
@@ -66,6 +69,7 @@ FAMILY_LABELS = {
     FAMILY_LINGUISTIC: "Señal lingüística (Agente 2)",
     FAMILY_STRUCTURAL: "Desviación estructural (check-ins)",
     FAMILY_CONVERGENCE: "Convergencia de varias señales",
+    FAMILY_PSYCHOSOCIAL: "Contexto psicosocial (Agente 4)",
     FAMILY_NONE: "Ningún criterio de nivel superior",
 }
 
@@ -74,6 +78,10 @@ FAMILY_EVIDENCE_KIND = {
     FAMILY_LINGUISTIC: "Inferencia de un modelo de lenguaje sobre un texto concreto del paciente. Requiere lectura del texto original.",
     FAMILY_STRUCTURAL: "Estadística sobre los check-ins diarios comparados con la línea base del propio paciente.",
     FAMILY_CONVERGENCE: "Varias señales independientes apuntando en la misma dirección a la vez.",
+    FAMILY_PSYCHOSOCIAL: (
+        "Determinantes sociales extraídos por un modelo de lenguaje de lo que el paciente contó, "
+        "ponderados después por una fórmula fija. Cada observación conserva la frase literal que la sostiene."
+    ),
     FAMILY_NONE: "No se ha cumplido ningún criterio de nivel 2 o superior.",
 }
 
@@ -168,6 +176,49 @@ RULE_CATALOG: dict[str, dict[str, Any]] = {
         "what_now": (
             "Revisa qué variable concreta se ha desviado (ánimo, craving, sueño o autoeficacia) "
             "en la gráfica de z-scores de esta ficha."
+        ),
+    },
+    "N3_desestabilizacion_psicosocial_aguda": {
+        "family": FAMILY_PSYCHOSOCIAL,
+        "level": 3,
+        "title": "Cambio psicosocial reciente coincidiendo con deterioro",
+        "plain": (
+            "En los últimos 14 días el paciente contó un cambio adverso en su contexto —vivienda, "
+            "convivencia, apoyo, dinero, una pérdida, o desvinculación del tratamiento— Y además hay otra "
+            "señal de deterioro (sueño empeorando, rumiación > 0.60, o banda estructural no estable). "
+            "Ninguna de las dos cosas por separado habría llegado a nivel 3."
+        ),
+        "what_now": (
+            "Este es el patrón que suele preceder a una crisis o a una recaída antes de que el estado de "
+            "ánimo cambie. Mira la pestaña «Contexto psicosocial»: verás la frase literal del cambio y su "
+            "fecha. Contacta y explora ese cambio concreto, no el estado general."
+        ),
+    },
+    "N3_convergencia_psicosocial_estructural": {
+        "family": FAMILY_PSYCHOSOCIAL,
+        "level": 3,
+        "title": "Vulnerabilidad psicosocial alta con inestabilidad estructural",
+        "plain": (
+            "El índice de vulnerabilidad psicosocial está en 0.60 o más Y la banda estructural es "
+            "«unstable». Son dos medidas independientes —una de su situación de vida, otra de sus "
+            "check-ins— señalando a la vez."
+        ),
+        "what_now": (
+            "Revisa qué dominios pesan más en el índice (vivienda, apoyo, economía…) y contrasta con los "
+            "z-scores. Suele indicar que el deterioro tiene una causa situacional identificable."
+        ),
+    },
+    "N2_vulnerabilidad_psicosocial": {
+        "family": FAMILY_PSYCHOSOCIAL,
+        "level": 2,
+        "title": "Vulnerabilidad psicosocial moderada",
+        "plain": (
+            "El índice psicosocial alcanza 0.50 sin que ninguna otra señal converja. Nivel de prevención: "
+            "el índice por sí solo NUNCA genera alerta profesional, por diseño."
+        ),
+        "what_now": (
+            "Información de seguimiento. Buen momento para trabajar el contexto (recursos, vivienda, red de "
+            "apoyo) antes de que converja con otra señal."
         ),
     },
     "N2_desviacion_moderada": {
@@ -299,6 +350,11 @@ def rule_info(code: str | None) -> dict[str, Any]:
     }
 
 
+def trace_inputs(assessment: RiskAssessment) -> dict:
+    """The `inputs` block of the persisted calculation trace, if any."""
+    return _as_dict(_as_dict(assessment.calculation_trace).get("inputs"))
+
+
 def selected_rule_code(assessment: RiskAssessment) -> str | None:
     rules = assessment.triggering_rules
     if isinstance(rules, list) and rules:
@@ -352,6 +408,8 @@ def level_explanation(
         headline = f"Nivel {level} por la evolución de sus CHECK-INS frente a su línea base."
     elif family == FAMILY_CONVERGENCE:
         headline = f"Nivel {level} porque varias señales independientes coincidieron."
+    elif family == FAMILY_PSYCHOSOCIAL:
+        headline = f"Nivel {level} por el CONTEXTO SOCIAL que el paciente ha contado, no por su estado de ánimo."
     else:
         headline = f"Nivel {level}: no se cumplió ningún criterio de nivel superior."
 
@@ -366,6 +424,15 @@ def level_explanation(
             f"{'un hecho declarado' if family == FAMILY_CONFIRMED_FACT else 'un texto concreto del paciente'}. "
             f"Una persona puede seguir durmiendo y puntuando como siempre y aun así escribir, o declarar, "
             f"algo que exige atención hoy."
+        )
+    elif score is not None and family == FAMILY_PSYCHOSOCIAL:
+        psycho = _as_dict(signals.get("psychosocial"))
+        index = _number(psycho.get("index"))
+        reconciliation = (
+            f"El score estructural es {score:.2f} ({BAND_LABELS.get(band, band)}) y el índice psicosocial "
+            f"{index if index is not None else '—'}. Son dos cosas distintas: el score mide sus check-ins "
+            f"diarios; el índice mide su situación de vida (vivienda, apoyo, dinero, pérdidas, vínculo con el "
+            f"tratamiento). Este nivel lo ha disparado el contexto, que suele moverse antes que el ánimo."
         )
     elif score is not None and family in (FAMILY_STRUCTURAL, FAMILY_CONVERGENCE):
         reconciliation = (
@@ -567,6 +634,162 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------- psychosocial view -----
+PSYCHOSOCIAL_BAND_LABELS = {
+    "alta": "alta",
+    "moderada": "moderada",
+    "baja": "baja",
+    "sin_datos": "sin datos",
+}
+
+PSYCHOSOCIAL_SCALE_NOTE = (
+    "El índice psicosocial va de 0.00 a 1.00 y resume la ADVERSIDAD del contexto de vida del paciente: "
+    "vivienda, convivencia, apoyo social, familia, dinero, ocupación, pérdidas, vínculo con el tratamiento "
+    "y entorno de consumo. 0.00 = sin adversidad registrada; 1.00 = adversidad marcada en los dominios de "
+    "más peso. A diferencia del score estructural, aquí MÁS ALTO ES PEOR. No es un instrumento validado: es "
+    "una media ponderada de lo que el paciente ha contado, con pesos fijos que puedes consultar en el manual."
+)
+
+
+def psychosocial_explanation(
+    assessment_snapshot: dict | None,
+    live: Any | None = None,
+) -> dict[str, Any]:
+    """Narrate the psychosocial index for the therapist.
+
+    Prefers the live assessment (which carries the per-domain detail and the
+    supporting quotes) and falls back to the snapshot persisted with the risk
+    assessment, so a historic decision can still be explained.
+    """
+    snapshot = _as_dict(assessment_snapshot)
+
+    if live is None:
+        index = _number(snapshot.get("index"))
+        band = snapshot.get("band") or "sin_datos"
+        domains: list[dict[str, Any]] = []
+        acute: list[dict[str, Any]] = []
+        counts = {
+            "observation_count": snapshot.get("observation_count") or 0,
+            "active_count": snapshot.get("active_count") or 0,
+            "confirmed_count": snapshot.get("confirmed_count") or 0,
+            "refuted_count": snapshot.get("refuted_count") or 0,
+        }
+    else:
+        index = live.index
+        band = live.band
+        domains = [
+            {
+                "domain": state.domain,
+                "label": state.label,
+                "category": state.category,
+                "category_label": state.category_label,
+                "valence": state.valence,
+                "intensity": state.intensity,
+                "confidence": state.confidence,
+                "status": state.status,
+                "summary": state.summary,
+                "quote": state.quote,
+                "observed_at": _utc_iso(state.observed_at),
+                "observation_id": str(state.observation_id),
+                "weight": state.weight,
+                "contribution": state.contribution,
+                "is_change": state.is_change,
+            }
+            for state in live.domains
+        ]
+        acute = [
+            {
+                "domain": state.domain,
+                "label": state.label,
+                "category": state.category,
+                "category_label": state.category_label,
+                "summary": state.summary,
+                "quote": state.quote,
+                "observed_at": _utc_iso(state.observed_at),
+                "observation_id": str(state.observation_id),
+            }
+            for state in live.acute_changes
+        ]
+        counts = {
+            "observation_count": live.observation_count,
+            "active_count": live.active_count,
+            "confirmed_count": live.confirmed_count,
+            "refuted_count": live.refuted_count,
+        }
+
+    if index is None:
+        summary = (
+            "Todavía no hay contexto psicosocial registrado. El Agente 4 solo extrae lo que el paciente "
+            "cuenta espontáneamente en el chat o en el diario; si aún no ha hablado de su situación, no hay "
+            "nada que ponderar."
+        )
+    elif band == "alta":
+        summary = f"{index:.2f} · vulnerabilidad alta. Su situación de vida está añadiendo adversidad relevante."
+    elif band == "moderada":
+        summary = f"{index:.2f} · vulnerabilidad moderada. Hay adversidad contextual identificable."
+    else:
+        summary = f"{index:.2f} · vulnerabilidad baja según lo que ha contado hasta ahora."
+
+    risk_states = [d for d in domains if d["valence"] == "risk"]
+    protective_states = [d for d in domains if d["valence"] == "protective"]
+    if risk_states:
+        top = risk_states[0]
+        driver_summary = (
+            f"Lo que más pesa ahora mismo: «{top['label']} — {top['category_label']}» "
+            f"(aporta {top['contribution']:.2f} al índice)."
+        )
+    else:
+        driver_summary = "No hay dominios adversos activos registrados."
+
+    if protective_states:
+        protective_summary = (
+            "Factores protectores registrados: "
+            + ", ".join(f"{d['label']} ({d['category_label']})" for d in protective_states[:4])
+            + ". Restan hasta un 35 % de la adversidad, nunca la cancelan del todo."
+        )
+    else:
+        protective_summary = (
+            "No hay ningún factor protector registrado. Ojo: puede significar que no los tiene, o "
+            "simplemente que no ha hablado de ellos."
+        )
+
+    caveats = [
+        "Todo esto son INFERENCIAS de un modelo de lenguaje sobre lo que el paciente escribió. Cada "
+        "observación lleva la frase literal que la sostiene: léela antes de actuar.",
+        "Puedes confirmar o refutar cada observación. Confirmada cuenta al 100 % de su intensidad; "
+        "refutada deja de contar por completo.",
+        "Solo cuenta la observación más reciente de cada dominio, y solo si tiene menos de 90 días.",
+        "El índice por sí solo nunca genera alerta profesional: para llegar a nivel 3 tiene que converger "
+        "con inestabilidad estructural, sueño empeorando o rumiación alta.",
+        "Los pesos por dominio son un criterio de diseño explícito, no un instrumento psicométrico validado.",
+    ]
+    if index is not None and counts["active_count"] < 3:
+        caveats.append(
+            f"Solo {counts['active_count']} dominio(s) activo(s): el índice es muy sensible a cada nueva "
+            f"observación y puede moverse mucho con una sola frase."
+        )
+
+    return {
+        "index": index,
+        "band": band,
+        "band_label": PSYCHOSOCIAL_BAND_LABELS.get(band, band),
+        "scale_note": PSYCHOSOCIAL_SCALE_NOTE,
+        "summary": summary,
+        "driver_summary": driver_summary,
+        "protective_summary": protective_summary,
+        "domains": domains,
+        "acute_changes": acute,
+        "has_acute_change": bool(acute),
+        "acute_note": (
+            "Cambios adversos en los últimos 14 días. Son las señales «aparentemente inocuas» que suelen "
+            "adelantarse a una crisis o a una recaída: una mudanza, una ruptura, una ayuda que se pierde, "
+            "un grupo que se deja, una cita a la que se falta."
+        ),
+        "caveats": caveats,
+        **counts,
+    }
+
+
 # ------------------------------------------------------------- evidence ----
 def _source_for_trace(
     trace: Agent2AnalysisTrace,
@@ -595,7 +818,12 @@ def build_evidence_feed(db: Session, patient_id, limit: int = 60) -> list[dict[s
     """
     traces = (
         db.query(Agent2AnalysisTrace)
-        .filter(Agent2AnalysisTrace.user_id == patient_id)
+        .filter(
+            Agent2AnalysisTrace.user_id == patient_id,
+            # Agent 4 shares this lineage table but produces psychosocial
+            # observations, not linguistic signals; it has its own view.
+            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+        )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .limit(min(limit, 200))
         .all()
@@ -770,6 +998,68 @@ def evidence_for_assessment(db: Session, assessment: RiskAssessment | None) -> d
                 "declared_by": row.declared_by,
             }
 
+    if family == FAMILY_PSYCHOSOCIAL:
+        # Prefer the acute change that actually triggered the rule; fall back
+        # to the heaviest adverse domain for the convergence rule.
+        psycho_trace = _as_dict(_as_dict(trace_inputs(assessment)).get("psychosocial"))
+        domain_rows = [row for row in _as_list(psycho_trace.get("domains")) if isinstance(row, dict)]
+        contribution_by_id = {
+            row.get("observation_id"): _number(row.get("contribution")) or 0.0 for row in domain_rows
+        }
+        candidates = _as_list(psycho_trace.get("acute_changes")) or [
+            row for row in domain_rows if row.get("valence") == "risk"
+        ]
+        # Lead with the heaviest contributor, not with whichever the model
+        # happened to list first: one message frequently produces several
+        # observations sharing the same timestamp.
+        observation_ids = [
+            row.get("observation_id")
+            for row in sorted(
+                (row for row in candidates if isinstance(row, dict)),
+                key=lambda row: contribution_by_id.get(row.get("observation_id"), 0.0),
+                reverse=True,
+            )
+        ]
+        by_id = {
+            row.id: row
+            for row in (
+                db.query(PsychosocialObservation)
+                .filter(
+                    PsychosocialObservation.user_id == assessment.user_id,
+                    PsychosocialObservation.id.in_(observation_ids),
+                )
+                .all()
+                if observation_ids
+                else []
+            )
+        }
+        rows = [by_id[uuid.UUID(str(oid))] for oid in observation_ids if uuid.UUID(str(oid)) in by_id]
+        if rows:
+            row = rows[0]
+            return {
+                "kind": "psicosocial",
+                "source_type": row.source_type,
+                "source_label": "Chat" if row.source_type == "chat_message" else "Diario",
+                "source_id": str(row.chat_message_id or row.diary_entry_id),
+                "text": row.evidence_quote,
+                "excerpt": _excerpt(row.evidence_quote),
+                "created_at": _utc_iso(row.observed_at),
+                "category": psychosocial_service.CATEGORY_LABELS.get(row.category, row.category),
+                "domain_label": psychosocial_service.DOMAIN_LABELS.get(row.domain, row.domain),
+                "summary": row.summary,
+                "status": row.status,
+                "observation_id": str(row.id),
+            }
+        return {
+            "kind": "psicosocial",
+            "source_type": "psychosocial",
+            "source_label": "Contexto psicosocial",
+            "source_id": None,
+            "text": "",
+            "excerpt": "",
+            "created_at": _utc_iso(assessment.calculated_at),
+        }
+
     if family in (FAMILY_STRUCTURAL, FAMILY_CONVERGENCE):
         return {
             "kind": "estructural",
@@ -932,6 +1222,61 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
             }
         )
 
+    # Psychosocial index over time. It is only ever computed inside a risk
+    # evaluation, so the assessment history *is* its history — no separate
+    # series to keep in sync.
+    psychosocial_series = []
+    for row in assessments:
+        snapshot = _as_dict(_as_dict(row.input_signals).get("psychosocial"))
+        index = _number(snapshot.get("index"))
+        if index is None:
+            continue
+        psychosocial_series.append(
+            {
+                "at": _utc_iso(row.calculated_at),
+                "date": row.calculated_at.strftime("%Y-%m-%d"),
+                "index": index,
+                "band": snapshot.get("band"),
+                "has_acute_change": bool(snapshot.get("has_acute_change")),
+                "active_count": snapshot.get("active_count"),
+                "assessment_id": str(row.id),
+            }
+        )
+    daily_psychosocial: dict[str, dict[str, Any]] = {}
+    for point in psychosocial_series:
+        daily_psychosocial[point["date"]] = point
+    daily_psychosocial_series = [daily_psychosocial[day] for day in sorted(daily_psychosocial)]
+
+    observations = (
+        db.query(PsychosocialObservation)
+        .filter(
+            PsychosocialObservation.user_id == patient_id,
+            PsychosocialObservation.observed_at >= since,
+        )
+        .order_by(PsychosocialObservation.observed_at.asc())
+        .all()
+    )
+    psychosocial_events = [
+        {
+            "at": _utc_iso(row.observed_at),
+            "date": row.observed_at.strftime("%Y-%m-%d"),
+            "domain": row.domain,
+            "domain_label": psychosocial_service.DOMAIN_LABELS.get(row.domain, row.domain),
+            "category": row.category,
+            "category_label": psychosocial_service.CATEGORY_LABELS.get(row.category, row.category),
+            "valence": row.valence,
+            "intensity": float(row.intensity),
+            "confidence": float(row.confidence),
+            "is_change": bool(row.is_change),
+            "status": row.status,
+            "summary": row.summary,
+            "quote": row.evidence_quote,
+            "source_label": "Chat" if row.source_type == "chat_message" else "Diario",
+            "observation_id": str(row.id),
+        }
+        for row in observations
+    ]
+
     level_series = [
         {
             "at": _utc_iso(row.calculated_at),
@@ -985,6 +1330,9 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
         "checkins": checkin_series,
         "structural": structural_series,
         "daily_structural": daily_structural_series,
+        "psychosocial": psychosocial_series,
+        "daily_psychosocial": daily_psychosocial_series,
+        "psychosocial_events": psychosocial_events,
         "linguistic": linguistic_series,
         "levels": level_series,
         "daily_levels": daily_level_series,
@@ -993,6 +1341,8 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
             "checkins": len(checkin_series),
             "structural_points": len(structural_series),
             "linguistic_points": len(linguistic_series),
+            "psychosocial_points": len(psychosocial_series),
+            "psychosocial_observations": len(psychosocial_events),
             "assessments": len(level_series),
             "alerts": len(alerts),
             "facts": len(facts),

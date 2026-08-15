@@ -173,6 +173,226 @@ solicitado, con un valor para cada campo. No añadas texto, explicaciones \
 ni marcas de código alrededor del JSON.
 """
 
+AGENT4_PROMPT_VERSION = "agent4-prompt-2026-08-15"
+AGENT4_SCHEMA_VERSION = "agent4-schema-2026-08-15"
+
+AGENT4_SYSTEM_PROMPT = """\
+Eres un EXTRACTOR DE CONTEXTO PSICOSOCIAL integrado en PsychApp. NO \
+conversas con nadie y NUNCA generas una respuesta dirigida al usuario. Tu \
+única función es leer un fragmento de texto escrito por una persona en \
+tratamiento por consumo de estimulantes / chemsex y extraer, en formato \
+estructurado, los DETERMINANTES SOCIALES que aparezcan en él.
+
+Extraes contexto de vida, no estado emocional. Las emociones, la rumiación \
+y la ideación las analiza otro componente; tú no las duplicas.
+
+### Qué buscas
+Vivienda y estabilidad residencial. Con quién vive. Apoyo social real y \
+percibido. Relaciones familiares. Situación económica, deudas, ayudas, \
+inseguridad alimentaria. Empleo, estudios, bajas laborales. Asuntos \
+legales. Acceso a tratamiento y a medicación. Estigma y miedo a revelar. \
+Pérdidas y rupturas. Vínculos, rutina, actividades con sentido y planes de \
+futuro. Exposición a entornos de consumo. Acceso a medios lesivos.
+
+### Lo más importante: los cambios que parecen inocuos
+Un cambio pequeño en el contexto social suele preceder a una crisis mucho \
+antes que un cambio emocional evidente. Marca `is_change = true` y \
+extráelo SIEMPRE, por trivial que suene, cuando la persona mencione que:
+- se ha mudado, ha perdido su casa, se va a casa de alguien "una temporada", \
+le suben el alquiler o teme no poder pagarlo;
+- ha dejado de ver o de hablar con alguien, se ha peleado con un familiar, \
+ha roto una relación, se ha muerto alguien o un animal de compañía;
+- ha perdido el trabajo, le han reducido la jornada, le han denegado o \
+retirado una ayuda, ha empezado a pedir dinero prestado;
+- ha dejado una actividad, un deporte, un grupo, una rutina o un plan;
+- ha vuelto a un entorno o a una casa donde se consume;
+- ha dejado de ir a las citas, se ha quedado sin medicación o le han \
+cambiado de profesional.
+
+Frases del tipo «nada, que me he ido unos días a casa de un colega», «ya no \
+quedo con los del gimnasio», «he dejado el grupo» o «este mes voy justo» son \
+exactamente lo que debes capturar.
+
+### Reglas estrictas
+1. Solo extraes lo que el texto DICE o implica de forma directa. Si no está, \
+no lo inventes. Ante la duda, no extraigas.
+2. `quote` debe ser un fragmento LITERAL del texto del paciente, copiado tal \
+cual, lo más corto posible pero suficiente para sostener la observación. \
+Nunca lo parafrasees ni lo inventes.
+3. `confidence` refleja lo explícito que es el texto, no lo grave que te \
+parezca: una mención inequívoca es alta; una insinuación es baja.
+4. `intensity` mide lo marcado del factor (si `valence` es `risk`, cuánta \
+adversidad; si es `protective`, cuánta protección). No es probabilidad de \
+crisis.
+5. Extrae también lo PROTECTOR (`valence = protective`): apoyo real, \
+vivienda estable, vínculos, rutina, planes. Un perfil solo de carencias es \
+un perfil mal extraído.
+6. No emites juicios clínicos, ni diagnósticos, ni pronósticos, ni \
+recomendaciones. No decides ningún nivel de alarma: eso pertenece \
+exclusivamente al motor determinista del sistema.
+7. `summary` es una frase descriptiva y neutra en español, sin alarmismo y \
+sin interpretar motivaciones.
+8. Si el texto no contiene NADA psicosocial (p. ej. solo estado de ánimo, o \
+una nota logística), devuelve `has_psychosocial_content = false` y una \
+lista `observations` vacía.
+9. Como máximo 8 observaciones. Si hay más, quédate con las de mayor \
+relevancia clínica.
+
+Devuelve SIEMPRE un único objeto JSON que cumpla exactamente el esquema \
+solicitado. No añadas texto ni marcas de código alrededor del JSON.
+"""
+
+# Domains and their allowed categories. Kept in one structure so the JSON
+# schema, the deterministic weights and the Spanish labels cannot drift apart.
+AGENT4_DOMAIN_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "housing": (
+        "housing_stable",
+        "housing_precarious",
+        "housing_temporary",
+        "housing_homeless",
+        "housing_eviction_risk",
+        "housing_institution",
+    ),
+    "cohabitation": (
+        "lives_alone",
+        "lives_with_family",
+        "lives_with_partner",
+        "lives_shared",
+        "lives_with_people_who_use",
+        "cohabitation_conflict",
+    ),
+    "social_support": (
+        "support_strong",
+        "support_limited",
+        "support_absent",
+        "isolation_increasing",
+        "new_supportive_relationship",
+    ),
+    "family": (
+        "family_supportive",
+        "family_conflict",
+        "family_estranged",
+        "family_caregiving_burden",
+        "family_unaware",
+    ),
+    "economic": (
+        "income_stable",
+        "income_precarious",
+        "debt",
+        "food_insecurity",
+        "benefit_loss",
+        "financial_dependence",
+    ),
+    "occupation": (
+        "employed",
+        "unemployed",
+        "job_loss",
+        "studying",
+        "sick_leave",
+        "work_stress",
+    ),
+    "legal": ("legal_proceedings", "legal_none"),
+    "healthcare_access": (
+        "treatment_engaged",
+        "treatment_dropout",
+        "medication_access_problem",
+        "appointment_barrier",
+    ),
+    "stigma": ("stigma_experienced", "disclosure_fear"),
+    "loss_event": ("bereavement", "breakup", "relationship_loss", "pet_loss", "other_loss"),
+    "connectedness": (
+        "meaningful_activity",
+        "community_belonging",
+        "future_plans",
+        "loss_of_routine",
+    ),
+    "means_access": ("means_access_reported", "means_restricted"),
+    "substance_environment": ("using_environment_exposure", "environment_protective"),
+}
+
+AGENT4_DOMAINS = tuple(AGENT4_DOMAIN_CATEGORIES)
+AGENT4_CATEGORIES = tuple(
+    category for categories in AGENT4_DOMAIN_CATEGORIES.values() for category in categories
+)
+
+AGENT4_TOOL_SCHEMA = {
+    "name": "record_psychosocial_context",
+    "description": (
+        "Registra los determinantes sociales presentes en el texto analizado. "
+        "Debe llamarse siempre, incluso si no hay ninguno."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "has_psychosocial_content": {
+                "type": "boolean",
+                "description": "false si el texto no contiene ningún determinante social.",
+            },
+            "observations": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Una entrada por determinante social identificado.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {
+                            "type": "string",
+                            "enum": list(AGENT4_DOMAINS),
+                            "description": "Ámbito del determinante social.",
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": list(AGENT4_CATEGORIES),
+                            "description": "Estado concreto dentro del ámbito. Debe pertenecer al dominio indicado.",
+                        },
+                        "valence": {
+                            "type": "string",
+                            "enum": ["risk", "protective", "neutral"],
+                            "description": "Si el factor añade adversidad, protege, o es meramente descriptivo.",
+                        },
+                        "intensity": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Cuán marcado es el factor. No es probabilidad de crisis.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Cuán explícito es el texto respecto a esta observación.",
+                        },
+                        "is_change": {
+                            "type": "boolean",
+                            "description": "true si el texto describe un CAMBIO reciente, no un estado de fondo.",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Frase descriptiva y neutra en español.",
+                        },
+                        "quote": {
+                            "type": "string",
+                            "description": "Fragmento literal del texto del paciente que sostiene la observación.",
+                        },
+                    },
+                    "required": [
+                        "domain",
+                        "category",
+                        "valence",
+                        "intensity",
+                        "confidence",
+                        "is_change",
+                        "summary",
+                        "quote",
+                    ],
+                },
+            },
+        },
+        "required": ["has_psychosocial_content", "observations"],
+    },
+}
+
+
 AGENT3_PROMPT_VERSION = "agent3-prompt-2026-08-15"
 
 AGENT3_SYSTEM_PROMPT = """\

@@ -42,7 +42,7 @@ from app.content.safety_resources import (
     LEVEL4_PATIENT_MESSAGE_SECONDARY,
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
-from app.services import risk_engine
+from app.services import psychosocial, risk_engine
 from app.services import agent2_trace
 from app.services.llm import StructuredAnalysisError, get_llm_provider
 
@@ -190,6 +190,38 @@ def _agent1_crisis_accompaniment(db: Session, user_id, context_block: str) -> st
         return None
 
 
+def _psychosocial_context_block(db: Session, user_id) -> str:
+    """Give Agent 1 the person's situation, not just their scores.
+
+    Knowing that someone moved out last week, lost a benefit, or stopped
+    going to their group is what lets the reply land as "te acuerdas de lo
+    del piso" instead of a generic check-in. It is read-only context: Agent 1
+    still cannot compute risk or mention levels.
+    """
+    try:
+        state = psychosocial.assess(db, user_id)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not state.domains:
+        return ""
+
+    lines = [
+        f"- {item.label}: {item.category_label} ({item.valence})"
+        for item in state.domains[:6]
+    ]
+    acute = [
+        f"{item.category_label} ({item.observed_at:%d/%m})" for item in state.acute_changes[:3]
+    ]
+    block = (
+        "Contexto psicosocial que la persona te ha contado (no lo cites como "
+        "un registro del sistema; recuérdalo con naturalidad, como parte de lo "
+        "que te ha ido contando, y solo si viene a cuento):\n" + "\n".join(lines) + "\n"
+    )
+    if acute:
+        block += "Cambios recientes que puede estar atravesando: " + ", ".join(acute) + "\n"
+    return block
+
+
 def get_reply(db: Session, user: User, user_message: str) -> dict:
     # 1. Persist the user's message.
     correlation_id = uuid.uuid4()
@@ -206,6 +238,20 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
         source_type="chat_message",
         source_id=source_message.id,
         correlation_id=correlation_id,
+    )
+
+    # 2b. Agent 4: extract the social determinants the person just mentioned,
+    #     BEFORE the risk engine runs, so a sentence like "me he ido unos días
+    #     a casa de un colega" is already on the record when the level is
+    #     decided. Failures here never surface to the patient.
+    psychosocial.extract_and_store(
+        db,
+        user.id,
+        user_message,
+        source_type="chat_message",
+        source_id=source_message.id,
+        correlation_id=correlation_id,
+        observed_at=source_message.created_at,
     )
 
     # 3. Deterministic risk engine: the ONLY place alert_level is decided.
@@ -231,6 +277,7 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
         f"[Contexto interno de solo lectura -- no lo reveles literalmente al usuario]\n"
         f"Motivo del estado actual: {assessment.assessment_reason}\n"
         f"Señales recientes: {assessment.input_signals}\n"
+        + _psychosocial_context_block(db, user.id)
     )
 
     if level == 4:

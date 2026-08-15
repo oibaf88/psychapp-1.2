@@ -89,6 +89,9 @@ def _verify_production_schema() -> None:
         ("risk_assessments", "linguistic_signal_id_used"),
         ("risk_assessments", "calculation_trace"),
         ("therapist_copilot_messages", "id"),
+        ("agent2_analysis_traces", "agent_role"),
+        ("psychosocial_observations", "id"),
+        ("psychosocial_observations", "evidence_quote"),
     }
     with engine.connect() as conn:
         rows = conn.execute(

@@ -348,12 +348,13 @@ psychapp/
 │   │   ├── security.py        # JWT auth + bcrypt hashing
 │   │   ├── seed.py            # idempotent demo data
 │   │   ├── content/
-│   │   │   ├── prompts.py         # Agent 1 / 2 / 3 system prompts + tool schema
+│   │   │   ├── prompts.py         # Agent 1 / 2 / 3 / 4 prompts + tool schemas
 │   │   │   └── safety_resources.py # static Spanish crisis copy + resources
 │   │   ├── services/
 │   │   │   ├── llm/                # swappable LLM provider (Anthropic implementation)
 │   │   │   ├── baseline.py         # local structural_score / confidence_band
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
+│   │   │   ├── psychosocial.py     # Agent 4 extraction + deterministic vulnerability index
 │   │   │   ├── clinical_view.py    # Spanish explanations, metric series, evidence feed
 │   │   │   ├── clinical_copilot.py # Agent 3: therapist <-> LLM, read-only over the record
 │   │   │   ├── agent2_trace.py     # privacy-preserving Agent 2 lineage
@@ -393,6 +394,8 @@ returned pre-explained, and the raw trace is available but demoted to a
 | `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, Agent 2 signals, event markers |
 | `GET /professional/patients/{id}/evidence` | One row per analysed text: what the patient wrote, what Agent 2 read in it, which level it produced and which alert it generated |
 | `GET /professional/patients/{id}/chat` | The patient's own conversation with Agent 1 |
+| `GET /professional/patients/{id}/psychosocial` | Social-determinants index, per-domain breakdown and the literal quotes behind it |
+| `POST /professional/patients/{id}/psychosocial/observations/{obs}` | Confirm or refute one extracted observation |
 | `GET/POST /professional/patients/{id}/copilot/messages` | Agent 3, the read-only clinical copilot |
 | `POST /professional/patients/{id}/copilot/summary` | Fresh situation summary from what the patient has said |
 

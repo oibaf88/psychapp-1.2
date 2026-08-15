@@ -58,9 +58,18 @@ else in that release — the explanations, the metric series, the evidence feed
 and the patient chat transcript — is computed from existing tables and needs no
 schema change.
 
+For the psychosocial-context release, also apply
+[`20260815180000_add_psychosocial_observations.sql`](./supabase/migrations/20260815180000_add_psychosocial_observations.sql).
+It adds `agent2_analysis_traces.agent_role` (backfilled to
+`agent2_linguistic`, which is what existing rows are) and the
+`psychosocial_observations` table, hardened the same way. That table stores a
+bounded verbatim fragment of the patient's own text in `evidence_quote`, so it
+is at least as sensitive as `chat_messages` and is protected identically.
+
 The API validates the required columns, owner, FORCE RLS and backend policy at
-startup and fails closed if either migration is missing (the startup check now
-includes `therapist_copilot_messages`). Local/dev environments may still use
+startup and fails closed if any migration is missing (the startup check covers
+`therapist_copilot_messages`, `agent2_analysis_traces.agent_role` and
+`psychosocial_observations`). Local/dev environments may still use
 `create_all()` for disposable databases.
 
 > **Order matters.** Apply the migration *before* the Render deploy. The new

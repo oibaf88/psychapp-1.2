@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
+from app.models import PsychosocialObservation
 from app.schemas import RiskAssessmentOut
 from app.services import baseline, conversation, risk_engine
 from app.services.conversation import AnalysisOutcome, LinguisticAnalysis
@@ -42,12 +43,26 @@ class _FakeQuery:
     def all(self):
         return self.rows
 
+    def count(self):
+        return len(self.rows)
+
 
 class _FakeDb:
-    def __init__(self, checkins=None):
-        self.checkins = checkins or []
+    """Fake session that dispatches by model.
 
-    def query(self, _model):
+    It used to return the check-in list for every model, which silently
+    worked while the engine only read check-ins here. Now that the engine
+    also folds in psychosocial observations, a catch-all would feed
+    check-ins into that path, so the mapping is explicit.
+    """
+
+    def __init__(self, checkins=None, psychosocial=None):
+        self.checkins = checkins or []
+        self.psychosocial = psychosocial or []
+
+    def query(self, model):
+        if model is PsychosocialObservation:
+            return _FakeQuery(self.psychosocial)
         return _FakeQuery(self.checkins)
 
 
@@ -185,7 +200,9 @@ class LinguisticBoundaryTests(unittest.TestCase):
         self.assertTrue(output["calculated_at"].endswith("+00:00"))
 
 
-class DeterministicExplanationTests(unittest.TestCase):
+class _CalculationHarness:
+    """Shared fixture for driving calculate_risk_level with fakes."""
+
     def _calculate(
         self,
         *,
@@ -195,6 +212,7 @@ class DeterministicExplanationTests(unittest.TestCase):
         n3=None,
         persistence=(0, 0, 0),
         preferred_signal_id=None,
+        psychosocial=None,
     ):
         # The production query returns newest-first and the engine reverses it
         # before calculating the slope.  The fake query does not implement SQL
@@ -210,7 +228,7 @@ class DeterministicExplanationTests(unittest.TestCase):
             risk_engine.STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE: _persistence(p5, 5),
         }
 
-        fake_db = _FakeDb(checkins)
+        fake_db = _FakeDb(checkins, psychosocial=psychosocial or [])
         with (
             patch.object(baseline, "compute_structural_score", return_value=structural or _structural()),
             patch.object(
@@ -238,13 +256,15 @@ class DeterministicExplanationTests(unittest.TestCase):
         linguistic_lookup.assert_called_once_with(fake_db, patient_id, signal_id=preferred_signal_id)
         return decision
 
+
+class DeterministicExplanationTests(_CalculationHarness, unittest.TestCase):
     def test_snapshot_has_all_rules_formulas_and_selected_rule(self):
         decision = self._calculate()
 
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 11)
+        self.assertEqual(len(trace["rules"]), 14)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])
@@ -332,3 +352,150 @@ class MigrationContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _psychosocial_row(
+    *,
+    domain="housing",
+    category="housing_temporary",
+    valence="risk",
+    intensity=1.0,
+    confidence=1.0,
+    is_change=False,
+    status="inferred",
+    days_ago=1,
+):
+    from datetime import timedelta
+
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        domain=domain,
+        category=category,
+        valence=valence,
+        intensity=intensity,
+        confidence=confidence,
+        is_change=is_change,
+        status=status,
+        summary="resumen",
+        evidence_quote="cita",
+        observed_at=datetime.utcnow() - timedelta(days=days_ago),
+    )
+
+
+class PsychosocialRuleTests(_CalculationHarness, unittest.TestCase):
+    """The social-context rules added in v2.
+
+    The safety property under test throughout: psychosocial data can DEEPEN
+    an assessment, but on its own it can never reach level 3 and therefore
+    can never page a clinician.
+    """
+
+    def test_psychosocial_index_alone_never_exceeds_level_two(self):
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            psychosocial=[
+                _psychosocial_row(domain="housing", category="housing_homeless"),
+                _psychosocial_row(domain="social_support", category="support_absent"),
+                _psychosocial_row(domain="economic", category="food_insecurity"),
+            ],
+        )
+        self.assertEqual(decision.level, 2)
+        self.assertEqual(decision.triggering_rules, ["N2_vulnerabilidad_psicosocial"])
+
+    def test_acute_change_plus_worsening_sleep_reaches_level_three(self):
+        """The whole point of v2: a small social sentence plus one other
+        signal is what precedes a crisis."""
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            psychosocial=[
+                _psychosocial_row(category="housing_temporary", is_change=True, days_ago=1),
+            ],
+        )
+        # The fake check-ins encode a worsening sleep slope.
+        self.assertEqual(decision.calculation_trace["inputs"]["sleep_trend"]["classification"], "empeorando")
+        self.assertEqual(decision.level, 3)
+        self.assertEqual(decision.triggering_rules, ["N3_desestabilizacion_psicosocial_aguda"])
+
+    def test_acute_change_without_any_corroboration_stays_below_level_three(self):
+        stable_sleep = [
+            SimpleNamespace(id=uuid.uuid4(), sleep_hours=7.0, created_at=datetime.utcnow())
+            for _ in range(3)
+        ]
+        fake_db = _FakeDb(
+            stable_sleep,
+            psychosocial=[_psychosocial_row(category="housing_temporary", is_change=True, days_ago=1)],
+        )
+        persistence_values = {
+            1: _persistence(0, 1),
+            risk_engine.STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT: _persistence(0, 3),
+            risk_engine.STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE: _persistence(0, 5),
+        }
+        with (
+            patch.object(baseline, "compute_structural_score", return_value=_structural(score=0.9, band="stable")),
+            patch.object(risk_engine, "_linguistic_flags", return_value=_linguistic(rumination=0.1)),
+            patch.object(risk_engine, "_facts_in_categories", side_effect=[[], []]),
+            patch.object(
+                risk_engine,
+                "_persistence_detail",
+                side_effect=lambda _db, _uid, _band, days: persistence_values[days],
+            ),
+        ):
+            decision = risk_engine.calculate_risk_level(fake_db, uuid.uuid4())
+
+        self.assertLess(decision.level, 3)
+        self.assertNotIn("N3_desestabilizacion_psicosocial_aguda", decision.triggering_rules)
+
+    def test_high_index_with_unstable_band_reaches_level_three(self):
+        decision = self._calculate(
+            structural=_structural(score=0.3, band="unstable"),
+            linguistic=_linguistic(rumination=0.1),
+            psychosocial=[
+                _psychosocial_row(domain="housing", category="housing_homeless"),
+                _psychosocial_row(domain="social_support", category="support_absent"),
+            ],
+        )
+        self.assertEqual(decision.level, 3)
+        self.assertIn(
+            decision.triggering_rules[0],
+            ("N3_desestabilizacion_psicosocial_aguda", "N3_convergencia_psicosocial_estructural"),
+        )
+
+    def test_refuted_observations_cannot_raise_the_level(self):
+        """A therapist refuting an extraction must actually de-escalate."""
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            psychosocial=[
+                _psychosocial_row(category="housing_temporary", is_change=True, status="refuted"),
+                _psychosocial_row(
+                    domain="social_support", category="support_absent", status="refuted"
+                ),
+            ],
+        )
+        self.assertEqual(decision.level, 0)
+        self.assertIsNone(decision.calculation_trace["derivations"]["psychosocial_index"])
+
+    def test_existing_higher_priority_rules_still_win(self):
+        fact = {"id": str(uuid.uuid4()), "category": "planning", "created_at": datetime.utcnow().isoformat()}
+        decision = self._calculate(
+            n4=[fact],
+            psychosocial=[_psychosocial_row(category="housing_homeless")],
+        )
+        self.assertEqual(decision.level, 4)
+        self.assertEqual(decision.triggering_rules, ["N4_declaracion_ideacion_o_plan"])
+
+    def test_trace_records_the_index_and_its_domain_breakdown(self):
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            psychosocial=[_psychosocial_row(domain="economic", category="benefit_loss")],
+        )
+        block = decision.calculation_trace["inputs"]["psychosocial"]
+        self.assertIsNotNone(block["index"])
+        self.assertEqual(len(block["domains"]), 1)
+        self.assertEqual(block["domains"][0]["domain"], "economic")
+        self.assertIn("clamp", block["formula"])
+        self.assertIn("psychosocial", decision.input_signals)
+
+    def test_no_psychosocial_data_leaves_previous_behaviour_untouched(self):
+        decision = self._calculate(structural=_structural(score=0.9, band="stable"))
+        self.assertEqual(decision.level, 0)
+        self.assertEqual(decision.triggering_rules, ["N0_estable"])

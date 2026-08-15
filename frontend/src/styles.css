@@ -1835,3 +1835,194 @@ tr.row-highlight {
     max-width: 100%;
   }
 }
+
+/* ===================================================================== */
+/* Psychosocial context (Agent 4). High index = adverse, the opposite of  */
+/* the structural score, so the palette deliberately does not reuse the   */
+/* green/red of the score gauge in the same direction.                    */
+/* ===================================================================== */
+
+.psy-gauge {
+  margin: 10px 0 14px;
+}
+
+.psy-gauge-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.psy-band-alta .psy-gauge-value {
+  color: var(--danger);
+}
+.psy-band-moderada .psy-gauge-value {
+  color: #b7791f;
+}
+.psy-band-baja .psy-gauge-value {
+  color: #1f6f2b;
+}
+.psy-band-sin_datos .psy-gauge-value {
+  color: #6a7480;
+}
+
+.psy-gauge-track {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e8f5e9 0%, #fdf3d8 45%, #fdecea 100%);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 6px 0 4px;
+}
+
+.psy-gauge-fill {
+  height: 100%;
+  background: #b5651d;
+  opacity: 0.75;
+}
+
+.psy-gauge-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: #6a7480;
+}
+
+.psy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.psy-card {
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  background: var(--card-bg);
+}
+
+.psy-card.psy-risk {
+  border-left-color: #e07a1f;
+}
+.psy-card.psy-protective {
+  border-left-color: #2e7d32;
+}
+.psy-card.psy-neutral {
+  border-left-color: #9aa5b1;
+}
+
+.psy-card.psy-status-refuted {
+  opacity: 0.6;
+}
+.psy-card.psy-status-refuted .psy-summary {
+  text-decoration: line-through;
+}
+.psy-card.psy-status-confirmed {
+  box-shadow: inset 3px 0 0 #22557f;
+}
+
+.psy-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.psy-category {
+  color: #59626e;
+  font-size: 0.9rem;
+}
+
+.psy-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.psy-pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.psy-pill-risk {
+  background: #fdecea;
+  color: #a12a1c;
+}
+.psy-pill-protective {
+  background: #e8f5e9;
+  color: #1f6f2b;
+}
+.psy-pill-neutral {
+  background: #eef0f3;
+  color: #59626e;
+}
+.psy-pill-change {
+  background: #fff3cd;
+  color: #8a6d3b;
+}
+.psy-pill-confirmed {
+  background: #e8f1fb;
+  color: #22557f;
+}
+.psy-pill-refuted {
+  background: #eef0f3;
+  color: #59626e;
+}
+
+.psy-summary {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.psy-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px 14px;
+  margin: 10px 0;
+}
+
+.psy-numbers dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6a7480;
+}
+
+.psy-numbers dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.psy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.psy-acute {
+  border: 1px solid #f0c987;
+  background: #fffaf0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.psy-acute h3 {
+  margin-top: 0;
+}
+
+.psy-acute li {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 600px) {
+  .psy-grid {
+    grid-template-columns: 1fr;
+  }
+}

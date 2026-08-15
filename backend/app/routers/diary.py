@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models import DiaryEntry, User
 from app.schemas import DiaryIn, DiaryOut
 from app.security import require_patient
-from app.services import audit, conversation, risk_engine
+from app.services import audit, conversation, psychosocial, risk_engine
 
 router = APIRouter(prefix="/api/v1/diary", tags=["diary"])
 
@@ -35,6 +35,17 @@ def create_entry(payload: DiaryIn, db: Session = Depends(get_db), user: User = D
         source_type="diary_entry",
         source_id=entry.id,
         correlation_id=correlation_id,
+    )
+    # The diary is as much a source of social context as the chat is, so
+    # Agent 4 runs here too, before the deterministic evaluation.
+    psychosocial.extract_and_store(
+        db,
+        user.id,
+        payload.content,
+        source_type="diary_entry",
+        source_id=entry.id,
+        correlation_id=correlation_id,
+        observed_at=entry.created_at,
     )
     assessment = risk_engine.run_and_persist(
         db,
