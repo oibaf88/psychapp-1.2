@@ -20,6 +20,8 @@ import FactsPage from "./pages/FactsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import AuditPage from "./pages/AuditPage";
 import SettingsPage from "./pages/SettingsPage";
+import CopilotPage from "./pages/CopilotPage";
+import ManualPage from "./pages/ManualPage";
 
 function Shell({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -157,6 +159,22 @@ export default function App() {
               element={
                 <ProtectedRoute roles={["supervisor", "admin_clinical"]}>
                   <AuditPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/professional/copilot"
+              element={
+                <ProtectedRoute roles={["therapist", "supervisor"]}>
+                  <CopilotPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/professional/manual"
+              element={
+                <ProtectedRoute professionalOnly>
+                  <ManualPage />
                 </ProtectedRoute>
               }
             />

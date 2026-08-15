@@ -331,6 +331,46 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TherapistCopilotMessage(Base):
+    """One turn of the therapist <-> Agent 3 conversation about a patient.
+
+    Kept strictly separate from ``chat_messages`` (the patient's own
+    conversation with Agent 1): different participants, different retention
+    expectations and different RBAC. The patient never sees these rows, and
+    Agent 3 never writes anything the patient reads.
+
+    These turns are deliberately NOT fed to the risk engine. Agent 3 is a
+    reading aid for the professional; it cannot create facts, signals,
+    assessments or alerts.
+    """
+
+    __tablename__ = "therapist_copilot_messages"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    professional_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False, default="question")
+    # question | answer | summary
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    requested_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    context_window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    context_counts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user','assistant')", name="ck_copilot_role"),
+        CheckConstraint("kind IN ('question','answer','summary')", name="ck_copilot_kind"),
+        Index("ix_copilot_pair_created", "professional_id", "patient_id", "created_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

@@ -1,0 +1,836 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+
+/**
+ * In-app therapist manual.
+ *
+ * Mirrors docs/MANUAL_TERAPEUTA.md. It lives in the product rather than in
+ * a wiki because the questions it answers ("what is this number?", "why is
+ * this patient at level 4 with a good score?") come up while looking at a
+ * patient, not before.
+ */
+
+type SectionId =
+  | "resumen"
+  | "roles"
+  | "fuentes"
+  | "agentes"
+  | "score"
+  | "motor"
+  | "paradoja"
+  | "alertas"
+  | "ficha"
+  | "copiloto"
+  | "errores"
+  | "privacidad"
+  | "glosario";
+
+const SECTIONS: { id: SectionId; label: string }[] = [
+  { id: "resumen", label: "1. En una página" },
+  { id: "roles", label: "2. Roles y permisos" },
+  { id: "fuentes", label: "3. De dónde salen los datos" },
+  { id: "agentes", label: "4. Los tres agentes" },
+  { id: "score", label: "5. El score estructural" },
+  { id: "motor", label: "6. El motor de riesgo" },
+  { id: "paradoja", label: "7. Score alto + alerta 4" },
+  { id: "alertas", label: "8. Alertas" },
+  { id: "ficha", label: "9. La ficha, pestaña a pestaña" },
+  { id: "copiloto", label: "10. El copiloto clínico" },
+  { id: "errores", label: "11. Errores de interpretación" },
+  { id: "privacidad", label: "12. Privacidad y auditoría" },
+  { id: "glosario", label: "13. Glosario" },
+];
+
+export default function ManualPage() {
+  const [active, setActive] = useState<SectionId>("resumen");
+
+  return (
+    <div className="page manual-page">
+      <p>
+        <Link to="/professional">← Volver a pacientes</Link>
+      </p>
+      <h1>Manual del terapeuta</h1>
+      <p className="subtitle">
+        Cómo funciona la app, cómo se genera cada alerta, qué es exactamente el score estructural y qué hace
+        —y qué no hace— cada agente de IA.
+      </p>
+
+      <div className="manual-callout">
+        <strong>PsychApp no es un dispositivo médico ni un sistema de triaje autónomo.</strong> No diagnostica,
+        no predice conductas y no sustituye ningún juicio clínico. Recoge lo que el paciente registra, calcula
+        desviaciones respecto a su propia normalidad y avisa cuando se cumplen criterios explícitos. La decisión
+        siempre es tuya.
+      </div>
+
+      <div className="manual-layout">
+        <nav className="manual-nav" aria-label="Índice del manual">
+          {SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              className={active === section.id ? "manual-nav-item active" : "manual-nav-item"}
+              onClick={() => setActive(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
+
+        <article className="manual-content card">
+          {active === "resumen" && (
+            <>
+              <h2>1. En una página</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Pieza</th>
+                      <th>Qué hace</th>
+                      <th>Quién decide</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Check-ins</td>
+                      <td>El paciente puntúa a diario ánimo, craving, sueño y autoeficacia.</td>
+                      <td>Paciente</td>
+                    </tr>
+                    <tr>
+                      <td>Diario</td>
+                      <td>Texto libre del paciente.</td>
+                      <td>Paciente</td>
+                    </tr>
+                    <tr>
+                      <td>Chat</td>
+                      <td>Conversación del paciente con el Agente 1.</td>
+                      <td>Paciente</td>
+                    </tr>
+                    <tr>
+                      <td>Agente 1</td>
+                      <td>Responde al paciente. Nunca calcula riesgo.</td>
+                      <td>LLM (Claude)</td>
+                    </tr>
+                    <tr>
+                      <td>Agente 2</td>
+                      <td>Lee cada texto (diario y chat) y devuelve señales estructuradas.</td>
+                      <td>LLM (Claude)</td>
+                    </tr>
+                    <tr>
+                      <td>Score estructural</td>
+                      <td>Compara los últimos 7 días de check-ins con la línea base de 21 días.</td>
+                      <td>Estadística local, sin IA</td>
+                    </tr>
+                    <tr className="row-highlight">
+                      <td>Motor de riesgo</td>
+                      <td>Decide el nivel 0–4 aplicando reglas fijas en orden.</td>
+                      <td>
+                        <strong>Código determinista, sin IA</strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Alertas</td>
+                      <td>Se crean automáticamente en niveles 3 y 4.</td>
+                      <td>Motor determinista</td>
+                    </tr>
+                    <tr>
+                      <td>Agente 3 (copiloto)</td>
+                      <td>Te resume y responde preguntas sobre un paciente. Solo lectura.</td>
+                      <td>LLM (Claude)</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="manual-key">
+                Lo importante: <strong>ningún modelo de lenguaje decide el nivel de alarma</strong>. El Agente 2
+                aporta observaciones sobre el texto; el motor determinista decide. El Agente 3 no puede escribir
+                nada en el historial clínico.
+              </p>
+            </>
+          )}
+
+          {active === "roles" && (
+            <>
+              <h2>2. Roles y permisos (RBAC)</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Rol</th>
+                      <th>Ve pacientes</th>
+                      <th>Historial clínico</th>
+                      <th>Hechos</th>
+                      <th>Alertas</th>
+                      <th>Copiloto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Terapeuta</td>
+                      <td>Solo los suyos (asignación activa o pausada)</td>
+                      <td>Sí</td>
+                      <td>Ve y registra</td>
+                      <td>Sí</td>
+                      <td>Sí</td>
+                    </tr>
+                    <tr>
+                      <td>Supervisor</td>
+                      <td>Todos</td>
+                      <td>Sí</td>
+                      <td>No</td>
+                      <td>Sí</td>
+                      <td>Sí</td>
+                    </tr>
+                    <tr>
+                      <td>Admin clínico</td>
+                      <td>Roster (nombre y email)</td>
+                      <td>No</td>
+                      <td>No</td>
+                      <td>No</td>
+                      <td>No</td>
+                    </tr>
+                    <tr>
+                      <td>Paciente</td>
+                      <td>—</td>
+                      <td>Solo lo suyo</td>
+                      <td>Registra los suyos</td>
+                      <td>—</td>
+                      <td>—</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <ul>
+                <li>
+                  La asignación la solicitas por email y <strong>la tiene que aceptar el paciente</strong>{" "}
+                  (consentimiento <code>professional_sharing</code>).
+                </li>
+                <li>
+                  Una asignación <code>pending</code> no da acceso al historial.
+                </li>
+                <li>
+                  Todo acceso al historial, a la evidencia, al chat del paciente y al copiloto queda registrado
+                  en auditoría con tu identidad, el paciente y la hora.
+                </li>
+              </ul>
+            </>
+          )}
+
+          {active === "fuentes" && (
+            <>
+              <h2>3. De dónde salen los datos</h2>
+              <h3>Check-ins (dato declarado)</h3>
+              <p>
+                Cuatro valores diarios: <strong>ánimo</strong> (0–10, más alto mejor),{" "}
+                <strong>craving</strong> (0–10, más alto peor), <strong>horas de sueño</strong> y{" "}
+                <strong>autoeficacia</strong> (0–10, más alto mejor). Son la <em>única</em> fuente del score
+                estructural.
+              </p>
+              <h3>Diario (texto libre)</h3>
+              <p>Se guarda íntegro y se envía al Agente 2 para su análisis.</p>
+              <h3>Chat (texto libre)</h3>
+              <p>
+                <strong>Cada mensaje del paciente pasa por el Agente 2 exactamente igual que una entrada de
+                diario.</strong> Una alerta de nivel 4 puede originarse en un único mensaje de chat, y por eso el
+                chat completo es visible en la pestaña «Chat del paciente» de su ficha.
+              </p>
+              <h3>Hechos confirmados (declaraciones)</h3>
+              <p>
+                Categorías: <code>medication_taken</code>, <code>relapse</code>, <code>consumption_crisis</code>,{" "}
+                <code>ideation_active</code>, <code>planning</code>, <code>correction</code>, <code>other</code>.
+                Un hecho lo declara <strong>una persona</strong>, nunca el sistema, y ningún modelo puede
+                sobrescribirlo («muro de hechos vs. inferencias»).
+              </p>
+            </>
+          )}
+
+          {active === "agentes" && (
+            <>
+              <h2>4. Los tres agentes</h2>
+              <h3>Agente 1 — conversacional</h3>
+              <p>
+                Habla con el paciente. Recibe el nivel ya calculado como contexto de solo lectura y nunca
+                menciona niveles ni puntuaciones al paciente. En niveles 3 y 4 el servidor{" "}
+                <strong>añade siempre</strong> un bloque fijo con 024 y 112 después de su respuesta: ese bloque
+                no depende del modelo y se envía aunque la llamada falle o sea rechazada.
+              </p>
+              <h3>Agente 2 — analista lingüístico</h3>
+              <p>No habla con nadie. Lee un texto y devuelve un objeto estructurado y validado:</p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Campo</th>
+                      <th>Tipo</th>
+                      <th>¿Entra en una regla de riesgo?</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <code>rumination_score</code>
+                      </td>
+                      <td>0–1</td>
+                      <td>Sí, como señal convergente (&gt; 0.60) y en la regla extrema (&gt; 0.85)</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>negative_valence</code>
+                      </td>
+                      <td>0–1</td>
+                      <td>No</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>urgency_level</code>
+                      </td>
+                      <td>0–1</td>
+                      <td>No</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>ambivalence</code>
+                      </td>
+                      <td>0–1</td>
+                      <td>No</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>emotional_complexity</code>
+                      </td>
+                      <td>low/medium/high</td>
+                      <td>No</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>ideation_indirect</code>
+                      </td>
+                      <td>booleano</td>
+                      <td>No — informativo para ti</td>
+                    </tr>
+                    <tr className="row-highlight">
+                      <td>
+                        <code>ideation_direct</code>
+                      </td>
+                      <td>booleano</td>
+                      <td>
+                        <strong>Sí → nivel 4</strong>
+                      </td>
+                    </tr>
+                    <tr className="row-highlight">
+                      <td>
+                        <code>consumption_crisis</code>
+                      </td>
+                      <td>booleano</td>
+                      <td>
+                        <strong>Sí → nivel 3</strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>short_rationale</code>
+                      </td>
+                      <td>texto</td>
+                      <td>No</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p>
+                Si el modelo devuelve algo que no cumple el esquema, la salida se descarta entera y el motor
+                sigue sin señal lingüística para ese texto. Cada llamada queda registrada en «Detalle técnico».
+              </p>
+              <h3>Agente 3 — copiloto clínico</h3>
+              <p>
+                Habla <strong>contigo</strong>, nunca con el paciente. Recibe su expediente con fechas y fuentes
+                y está obligado a citarlas. Es <strong>estrictamente de solo lectura</strong>: no puede crear
+                hechos, señales, evaluaciones ni alertas, ni cambiar el nivel de riesgo.
+              </p>
+            </>
+          )}
+
+          {active === "score" && (
+            <>
+              <h2>5. El score estructural, en detalle</h2>
+              <p className="manual-key">
+                Mide <strong>similitud con su propia normalidad reciente</strong>. No gravedad, no riesgo, no
+                bienestar.
+              </p>
+              <h3>Cómo se calcula</h3>
+              <ol>
+                <li>
+                  <strong>Línea base</strong>: todos los check-ins de los últimos <strong>21 días</strong>. Con
+                  menos de <strong>5</strong>, no hay línea base y la banda es <code>insufficient_data</code>.
+                </li>
+                <li>
+                  Media y desviación típica poblacional por variable. El craving se invierte antes (
+                  <code>craving_inv = 10 − craving</code>) para que en las cuatro «más alto sea mejor».
+                </li>
+                <li>
+                  <strong>Ventana reciente</strong>: media de los últimos <strong>7 días</strong>.
+                </li>
+                <li>
+                  <strong>z por variable</strong>:{" "}
+                  <code>z = (media_reciente − media_base) / desviación_base</code> (si la desviación es 0,{" "}
+                  <code>z = 0</code>).
+                </li>
+                <li>
+                  <strong>z compuesto</strong>: media de los <strong>valores absolutos</strong> de los cuatro z.
+                </li>
+                <li>
+                  <strong>Score</strong>: <code>score = máx(0, mín(1, 1 − z_compuesto / 3))</code>
+                </li>
+              </ol>
+
+              <h3>Bandas</h3>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Banda</th>
+                      <th>Score</th>
+                      <th>Lectura</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <code>stable</code>
+                      </td>
+                      <td>≥ 0.60</td>
+                      <td>Los últimos 7 días se parecen a su línea base.</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>transition</code>
+                      </td>
+                      <td>0.35 – 0.60</td>
+                      <td>Desviación moderada.</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>unstable</code>
+                      </td>
+                      <td>&lt; 0.35</td>
+                      <td>Se alejan claramente de su línea base.</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code>insufficient_data</code>
+                      </td>
+                      <td>—</td>
+                      <td>Menos de 5 check-ins en 21 días, o ninguno en los últimos 7.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3>Ejemplo numérico</h3>
+              <p className="meta">
+                Base: ánimo 6.0 (σ 1.0) · craving_inv 5.0 (σ 1.5) · sueño 7.0 (σ 1.0) · autoeficacia 6.0 (σ 1.0).
+                Últimos 7 días: 4.0 / 3.5 / 5.5 / 5.0.
+              </p>
+              <pre className="protocol-box">{`z_ánimo        = (4.0 − 6.0) / 1.0 = −2.00
+z_craving_inv  = (3.5 − 5.0) / 1.5 = −1.00
+z_sueño        = (5.5 − 7.0) / 1.0 = −1.50
+z_autoeficacia = (5.0 − 6.0) / 1.0 = −1.00
+
+z_compuesto = (2.00 + 1.00 + 1.50 + 1.00) / 4 = 1.375
+score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
+              <p>Los cuatro z son negativos: la desviación es adversa.</p>
+
+              <h3>La trampa importante: el score es ciego a la dirección</h3>
+              <p>
+                El compuesto usa <strong>valores absolutos</strong>. Un paciente que mejora mucho y de golpe
+                también baja su score y puede aparecer como <code>unstable</code>. Por eso el panel muestra
+                siempre la <strong>desviación adversa media</strong> y la{" "}
+                <strong>desviación favorable media</strong>, y lo dice explícitamente si domina la favorable.{" "}
+                <strong>Nunca leas el score solo: lee el desglose por variable.</strong>
+              </p>
+
+              <h3>Qué NO es el score</h3>
+              <ul>
+                <li>No compara al paciente con otros ni con ninguna norma poblacional. Solo consigo mismo.</li>
+                <li>No incluye nada del diario ni del chat.</li>
+                <li>No incluye hechos confirmados.</li>
+                <li>
+                  Un score alto significa «sin cambios respecto a su normalidad», <strong>nunca</strong> «sin
+                  riesgo». Un paciente con ideación estable y crónica puede tener 0.95.
+                </li>
+              </ul>
+            </>
+          )}
+
+          {active === "motor" && (
+            <>
+              <h2>6. El motor de riesgo: cómo se genera cada nivel</h2>
+              <p>
+                Es código determinista, sin IA. Se evalúan <strong>once reglas en orden fijo</strong> y gana{" "}
+                <strong>la primera que se cumple</strong>.
+              </p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Regla</th>
+                      <th>Nivel</th>
+                      <th>Condición</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["1", "N4_declaracion_ideacion_o_plan", 4, "Hecho confirmado ideation_active o planning en las últimas 48 h"],
+                        ["2", "N4_senal_linguistica_ideacion_directa", 4, "Señal del Agente 2 con ideation_direct = true y menos de 12 h"],
+                        ["3", "N4_convergencia_critica_extrema", 4, "score < 0.20 y rumiación > 0.85 y sueño empeorando"],
+                        ["4", "N3_declaracion_crisis_consumo", 3, "Hecho confirmado consumption_crisis en 48 h"],
+                        ["5", "N3_senal_linguistica_crisis_consumo", 3, "Señal del Agente 2 con consumption_crisis = true (< 12 h)"],
+                        ["6", "N3_unstable_persistente_con_convergencia", 3, "unstable y ≥ 3 días naturales distintos y (sueño empeorando o rumiación > 0.60)"],
+                        ["7", "N3_unstable_persistente", 3, "unstable y ≥ 5 días naturales distintos"],
+                        ["8", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
+                        ["9", "N0_estable", 0, "Banda stable"],
+                        ["10", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
+                        ["11", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
+                      ] as const
+                    ).map(([n, code, level, condition]) => (
+                      <tr key={code}>
+                        <td>{n}</td>
+                        <td>
+                          <code>{code}</code>
+                        </td>
+                        <td>
+                          <span className={`level-pill level-${level}`}>N{level}</span>
+                        </td>
+                        <td>{condition}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <h3>Ventanas temporales, y por qué importan</h3>
+              <ul>
+                <li>
+                  <strong>Hechos críticos: 48 h.</strong> Una declaración de ideación mantiene el nivel 4 dos
+                  días y luego deja de contar por sí sola. Si sigue vigente, regístrala de nuevo.
+                </li>
+                <li>
+                  <strong>Señales del Agente 2: 12 h.</strong> Un texto de anteayer no puede mantener al paciente
+                  en nivel 4 indefinidamente.
+                </li>
+                <li>
+                  <strong>Persistencia estructural: días naturales distintos.</strong> Cinco check-ins el mismo
+                  martes cuentan como <em>un</em> día.
+                </li>
+              </ul>
+
+              <h3>Qué significa cada nivel</h3>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Nivel</th>
+                      <th>Nombre</th>
+                      <th>Qué pasa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>0</td>
+                      <td>Autogestión</td>
+                      <td>Nada. Seguimiento habitual.</td>
+                    </tr>
+                    <tr>
+                      <td>1</td>
+                      <td>Autogestión / sin datos</td>
+                      <td>
+                        <strong>No es «bajo riesgo»</strong>: puede ser «no lo sé».
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>2</td>
+                      <td>Prevención</td>
+                      <td>
+                        La app refuerza autorregulación. <strong>No crea alerta.</strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>3</td>
+                      <td>Alarma profesional</td>
+                      <td>Crea alerta + notificación. Revisión humana en cuanto sea posible.</td>
+                    </tr>
+                    <tr>
+                      <td>4</td>
+                      <td>Emergencia</td>
+                      <td>Crea alerta + notificación. El paciente ve el bloque fijo con 024 y 112.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p>
+                <strong>Cuándo se calcula:</strong> en cada mensaje de chat, en cada entrada de diario, al
+                registrar un hecho y cuando pulsas «Reevaluar riesgo». Cada cálculo guarda una evaluación
+                inmutable, de modo que una evaluación antigua siempre se explica con los datos con los que se
+                decidió.
+              </p>
+            </>
+          )}
+
+          {active === "paradoja" && (
+            <>
+              <h2>7. Por qué «score 0.91 estable» + «alerta nivel 4» NO es un error</h2>
+              <p>Es el caso que más confunde, y es coherente por diseño:</p>
+              <ul>
+                <li>
+                  El <strong>score estructural</strong> solo mira <strong>check-ins</strong>.
+                </li>
+                <li>
+                  Las reglas 1, 2, 4 y 5 —las que más disparan— <strong>no miran el score en absoluto</strong>:
+                  miran hechos declarados y textos.
+                </li>
+              </ul>
+              <p>
+                Una persona puede seguir durmiendo, puntuando y funcionando exactamente como siempre (score
+                alto, banda estable) <strong>y a la vez</strong> escribir un mensaje con ideación directa, o
+                declarar un plan. El score dice «no ha cambiado su patrón diario»; la alerta dice «ha dicho algo
+                que exige atención hoy». Ambas cosas son verdad simultáneamente.
+              </p>
+              <p>
+                Por eso la ficha muestra siempre, en la tarjeta de cabecera,{" "}
+                <strong>qué tipo de evidencia disparó el nivel</strong>:
+              </p>
+              <ul>
+                <li>
+                  <strong>Hecho declarado</strong> — alguien lo declaró. Es un hecho.
+                </li>
+                <li>
+                  <strong>Texto del paciente</strong> — el Agente 2 lo infirió de una frase concreta.{" "}
+                  <strong>Lee la frase</strong>, está justo debajo de la tarjeta.
+                </li>
+                <li>
+                  <strong>Check-ins</strong> — ahí sí manda el score.
+                </li>
+                <li>
+                  <strong>Varias señales</strong> — convergencia.
+                </li>
+              </ul>
+              <p>
+                Y añade una frase explícita de reconciliación cuando el score y el nivel parecen contradecirse.
+              </p>
+            </>
+          )}
+
+          {active === "alertas" && (
+            <>
+              <h2>8. Alertas: ciclo de vida</h2>
+              <ol>
+                <li>
+                  <strong>Creación.</strong> Solo niveles ≥ 3. Se crea si no hay ya una alerta abierta del mismo
+                  nivel en las últimas <strong>24 h</strong> y si el nivel supera al de cualquier alerta abierta.
+                </li>
+                <li>
+                  <strong>Refresco.</strong> Si ya existe una abierta del mismo nivel, se actualiza en lugar de
+                  duplicarse.
+                </li>
+                <li>
+                  <strong>Notificación.</strong> In-app y, si hay SMTP configurado, por email.
+                </li>
+                <li>
+                  <strong>Gestión.</strong> <em>Reconocer</em> (la has visto, sigue abierta), <em>resolver</em>{" "}
+                  (requiere nota) o <em>descartar</em> (requiere motivo; en <strong>nivel 4 es obligatorio</strong>
+                  ).
+                </li>
+                <li>Todo queda en auditoría con tu identidad.</li>
+              </ol>
+              <h3>Falsos positivos del Agente 2</h3>
+              <p>
+                Si la alerta viene de «Texto del paciente» y al leer la frase ves que es ironía, una cita o una
+                letra de canción:
+              </p>
+              <ol>
+                <li>Descarta la alerta indicando el motivo.</li>
+                <li>
+                  Registra un hecho de categoría <code>correction</code> describiendo el error.
+                </li>
+              </ol>
+              <p className="manual-key">
+                Un hecho <code>correction</code> documenta el falso positivo pero <strong>no cancela</strong> la
+                señal: si el paciente vuelve a escribir algo similar en las 12 h siguientes, la regla puede
+                volver a disparar.
+              </p>
+            </>
+          )}
+
+          {active === "ficha" && (
+            <>
+              <h2>9. La ficha del paciente, pestaña a pestaña</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Pestaña</th>
+                      <th>Para qué</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["Resumen", "Tarjeta de nivel con su explicación, score estructural desglosado, gráficas de nivel y score, línea de tiempo de alertas y hechos."],
+                        ["Métricas", "Las cinco gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos y señales del Agente 2. Cada una con su nota de «cómo se lee»."],
+                        ["Evidencia", "Una tarjeta por texto analizado: lo que escribió, lo que leyó el Agente 2, qué nivel salió y si generó alerta. Filtrable."],
+                        ["Copiloto clínico", "Conversación con el Agente 3 sobre este paciente."],
+                        ["Chat del paciente", "Transcripción completa de su conversación con el Agente 1."],
+                        ["Diario", "Entradas íntegras."],
+                        ["Check-ins", "Gráfica y tabla de valores crudos."],
+                        ["Hechos", "Hechos activos y formulario para registrar uno nuevo."],
+                        ["Alertas", "Alertas con su regla, su explicación y la evidencia detrás."],
+                        ["Motor de riesgo", "Desglose regla a regla de cada evaluación, con valores observados y umbrales."],
+                        ["Plan de seguridad", "El plan que escribió el paciente."],
+                        ["Detalle técnico", "Trazas de las llamadas al Agente 2 y plantillas de protocolo. Para auditoría, no para el día a día."],
+                      ] as const
+                    ).map(([tab, purpose]) => (
+                      <tr key={tab}>
+                        <td>
+                          <strong>{tab}</strong>
+                        </td>
+                        <td>{purpose}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="manual-key">
+                En la gráfica de señales del Agente 2 puedes <strong>pinchar un punto</strong> para saltar
+                directamente al texto que lo produjo en la pestaña Evidencia.
+              </p>
+            </>
+          )}
+
+          {active === "copiloto" && (
+            <>
+              <h2>10. El copiloto clínico (Agente 3)</h2>
+              <h3>Qué puede hacer</h3>
+              <ul>
+                <li>Resumir la situación del paciente a partir de lo que ha contado y escrito.</li>
+                <li>Responder preguntas de seguimiento.</li>
+                <li>Señalar cambios, patrones y contradicciones entre fuentes.</li>
+              </ul>
+              <h3>Cómo usarlo</h3>
+              <p>
+                Desde el menú <Link to="/professional/copilot">Copiloto</Link> eliges paciente, o desde la
+                pestaña «Copiloto clínico» de su ficha. La conversación es tuya y de ese paciente: otro
+                profesional asignado tiene su propio hilo. Puedes ajustar la{" "}
+                <strong>ventana de expediente</strong> (14–180 días).
+              </p>
+              <h3>Qué NO puede hacer</h3>
+              <ul>
+                <li>Diagnosticar, proponer medicación o predecir conductas.</li>
+                <li>Calcular o cambiar el nivel de alarma.</li>
+                <li>Crear hechos, señales, evaluaciones o alertas.</li>
+                <li>Escribir nada que el paciente lea.</li>
+              </ul>
+              <h3>Cómo verificarlo</h3>
+              <p className="manual-key">
+                Está obligado a citar fuente y fecha en cada afirmación —«(diario, 12/08)», «(chat, 14/08)»—
+                precisamente para que puedas contrastarlo. <strong>Si una afirmación no viene con fuente,
+                trátala como no verificada.</strong> Es un modelo de lenguaje: puede equivocarse al leer.
+              </p>
+            </>
+          )}
+
+          {active === "errores" && (
+            <>
+              <h2>11. Errores de interpretación más frecuentes</h2>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Lectura errónea</th>
+                      <th>Lectura correcta</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["«Score 0.9 = paciente bien»", "Score 0.9 = paciente igual que siempre. Su «siempre» puede ser malo."],
+                        ["«Score bajo = está peor»", "Score bajo = ha cambiado. Mira los z-scores: puede haber mejorado mucho."],
+                        ["«Nivel 1 = riesgo bajo»", "Nivel 1 puede ser falta de datos. Si la banda es insufficient_data, el sistema no sabe."],
+                        ["«El nivel 2 me lo notifican»", "No. El nivel 2 no crea alerta. Aparece en la ficha y en la lista de pacientes."],
+                        ["«La IA decidió el nivel 4»", "El nivel lo decidió una regla fija. La IA solo aportó la lectura de un texto."],
+                        ["«Si no hay alerta, no hace falta mirar»", "El historial completo está disponible sin alerta y ése es su uso normal."],
+                        ["«El copiloto ha visto algo que yo no»", "El copiloto ve exactamente lo mismo que tú, en las pestañas. Verifícalo."],
+                      ] as const
+                    ).map(([wrong, right]) => (
+                      <tr key={wrong}>
+                        <td className="manual-wrong">{wrong}</td>
+                        <td>{right}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {active === "privacidad" && (
+            <>
+              <h2>12. Privacidad y auditoría</h2>
+              <ul>
+                <li>
+                  Los datos viven en tu propia infraestructura (Supabase/Postgres). El esquema no está expuesto
+                  vía PostgREST y las tablas sensibles tienen <code>FORCE ROW LEVEL SECURITY</code> con acceso
+                  solo para el rol del backend.
+                </li>
+                <li>
+                  Lo único que sale a un tercero es el <strong>texto enviado a la API de Anthropic</strong> para
+                  los agentes 1, 2 y 3. No hay modelos Claude descargables.
+                </li>
+                <li>Las trazas del Agente 2 no duplican el texto: apuntan al mensaje o entrada original.</li>
+                <li>
+                  Los mensajes de error del proveedor nunca se guardan en crudo: solo una categoría de una lista
+                  cerrada, para que un error no filtre contenido.
+                </li>
+                <li>
+                  Cada acceso tuyo a un historial, a la evidencia, al chat del paciente o al copiloto queda
+                  auditado.
+                </li>
+              </ul>
+            </>
+          )}
+
+          {active === "glosario" && (
+            <>
+              <h2>13. Glosario</h2>
+              <dl className="plan-dl">
+                {(
+                  [
+                    ["Línea base", "Media y desviación típica de las cuatro variables en los últimos 21 días del propio paciente."],
+                    ["z-score", "Cuántas desviaciones típicas se separa la media reciente de la media base. Negativo = por debajo."],
+                    ["z compuesto", "Media de los cuatro |z|."],
+                    ["Banda de confianza", "stable / transition / unstable / insufficient_data."],
+                    ["Señal (inference)", "Algo calculado por el sistema o inferido por un modelo. Puede ser superada por un hecho."],
+                    ["Hecho (fact)", "Declaración de una persona. No la sobrescribe ningún modelo."],
+                    ["Correlation id", "Identificador que enlaza un mensaje, su análisis, la señal resultante y la evaluación de riesgo del mismo ciclo."],
+                    ["Traza de Agente 2", "Registro de una llamada al analista lingüístico: modelo, versión de prompt y esquema, tokens, latencia y resultado."],
+                  ] as const
+                ).map(([term, definition]) => (
+                  <div key={term}>
+                    <dt>{term}</dt>
+                    <dd>{definition}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="manual-key">
+                El sistema está deliberadamente construido para que <strong>la parte que decide no sea la parte
+                inteligente</strong>. El motor que fija el nivel es un conjunto de reglas que puedes leer entero
+                en la sección 6. Los modelos aportan lectura de texto y ayuda a la comprensión, y su fallo
+                degrada el sistema a «sin señal», nunca a «nivel equivocado». Tu criterio va por encima de todo
+                lo anterior.
+              </p>
+            </>
+          )}
+        </article>
+      </div>
+    </div>
+  );
+}

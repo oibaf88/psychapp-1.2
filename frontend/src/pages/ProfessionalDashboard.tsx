@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   api,
   ASSIGNMENT_STATUS_LABELS,
+  BAND_LABELS,
   PatientSummaryOut,
   ROLE_LABELS,
   UserRole,
@@ -91,7 +92,11 @@ export default function ProfessionalDashboard() {
               <th>Email</th>
               <th>Asignación</th>
               {canSeeClinicalColumns && <th>Nivel riesgo actual</th>}
-              {canSeeClinicalColumns && <th>Banda / score</th>}
+              {canSeeClinicalColumns && (
+                <th title="Similitud de sus check-ins de 7 días con su línea base de 21 días. 1.00 = sin cambios. NO es una escala de riesgo.">
+                  Estabilidad de check-ins ⓘ
+                </th>
+              )}
               {canSeeClinicalColumns && <th>Check-ins</th>}
               {canSeeClinicalColumns && <th>Alertas abiertas</th>}
               <th></th>
@@ -114,7 +119,7 @@ export default function ProfessionalDashboard() {
                 )}
                 {canSeeClinicalColumns && (
                   <td className="meta">
-                    {p.latest_confidence_band || "—"}
+                    {BAND_LABELS[p.latest_confidence_band || ""] || p.latest_confidence_band || "—"}
                     {p.latest_structural_score != null
                       ? ` · ${Number(p.latest_structural_score).toFixed(2)}`
                       : ""}

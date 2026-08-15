@@ -48,9 +48,24 @@ table is owned by `psychdeep_backend`, FORCE RLS is enabled, and `public`,
 temporary role membership needed to alter the backend-owned tables is verified,
 scoped to the transaction and removed before commit.
 
+For the therapist-panel redesign release, also apply
+[`20260815160000_add_therapist_copilot_messages.sql`](./supabase/migrations/20260815160000_add_therapist_copilot_messages.sql).
+It adds the single new table behind the clinical copilot
+(`therapist_copilot_messages`) with the same hardening: owned by
+`psychdeep_backend`, FORCE RLS on, a `backend_full_access` policy, and no
+privileges for `public`, `anon`, `authenticated` or `service_role`. Everything
+else in that release — the explanations, the metric series, the evidence feed
+and the patient chat transcript — is computed from existing tables and needs no
+schema change.
+
 The API validates the required columns, owner, FORCE RLS and backend policy at
-startup and fails closed if this migration is missing. Local/dev environments
-may still use `create_all()` for disposable databases.
+startup and fails closed if either migration is missing (the startup check now
+includes `therapist_copilot_messages`). Local/dev environments may still use
+`create_all()` for disposable databases.
+
+> **Order matters.** Apply the migration *before* the Render deploy. The new
+> release fails its startup schema check without it, and Render will keep
+> serving the previous instance rather than a half-migrated one.
 
 Already applied for you — migration
 `lock_public_schema_from_postgrest_roles`: revokes the default privileges

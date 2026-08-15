@@ -42,10 +42,17 @@ from app.schemas import (
     AlertOut,
     AlertResolveIn,
     CheckInOut,
+    CopilotAskIn,
+    CopilotMessageOut,
+    CopilotSummaryIn,
     DiaryOut,
+    EvidenceItemOut,
     FactIn,
     FactOut,
+    LevelExplanationOut,
+    PatientChatMessageOut,
     PatientDossierOut,
+    PatientMetricsOut,
     DeepStatisticalAnalysisOut,
     BiometricDataOut,
     AppUsageDataOut,
@@ -53,10 +60,11 @@ from app.schemas import (
     RiskAssessmentOut,
     SafetyPlanOut,
     SignalOut,
+    StructuralExplanationOut,
     TimelineOut,
 )
 from app.security import require_professional
-from app.services import audit, risk_engine
+from app.services import audit, clinical_copilot, clinical_view, risk_engine
 from app.services.timeline import build_timeline
 
 router = APIRouter(prefix="/api/v1/professional", tags=["professional"])
@@ -252,8 +260,46 @@ def _require_fact_access(professional: User, db: Session, patient_id):
         raise HTTPException(status_code=403, detail="Se requiere asignación activa para hechos")
 
 
-def _alert_out(db: Session, alert: ProfessionalAlert) -> AlertOut:
+def _alert_out(db: Session, alert: ProfessionalAlert, *, with_evidence: bool = True) -> AlertOut:
+    """Serialize an alert together with *why* it fired and *what text* caused it.
+
+    An alert that only carries a title and a rule code cannot be triaged: the
+    therapist has to be able to read the sentence or the declaration behind
+    it without leaving the row.
+    """
     patient = db.get(User, alert.user_id)
+
+    rule_code = None
+    rule_title = None
+    family = None
+    family_label = None
+    plain = None
+    what_now = None
+    evidence = None
+    if with_evidence:
+        assessment = (
+            db.get(RiskAssessment, alert.related_assessment_id) if alert.related_assessment_id else None
+        )
+        if assessment is None or assessment.user_id != alert.user_id:
+            assessment = (
+                db.query(RiskAssessment)
+                .filter(
+                    RiskAssessment.user_id == alert.user_id,
+                    RiskAssessment.generated_alert_id == alert.id,
+                )
+                .order_by(RiskAssessment.calculated_at.desc())
+                .first()
+            )
+        if assessment is not None:
+            rule_code = clinical_view.selected_rule_code(assessment)
+            info = clinical_view.rule_info(rule_code)
+            rule_title = info["title"]
+            family = info["family"]
+            family_label = clinical_view.FAMILY_LABELS.get(family, family)
+            plain = info["plain"]
+            what_now = info["what_now"]
+            evidence = clinical_view.evidence_for_assessment(db, assessment)
+
     return AlertOut(
         id=alert.id,
         user_id=alert.user_id,
@@ -269,6 +315,14 @@ def _alert_out(db: Session, alert: ProfessionalAlert) -> AlertOut:
         dismiss_reason=getattr(alert, "dismiss_reason", None),
         patient_display_name=patient.display_name if patient else None,
         patient_email=patient.email if patient else None,
+        related_assessment_id=alert.related_assessment_id,
+        rule_code=rule_code,
+        rule_title=rule_title,
+        driver_family=family,
+        driver_family_label=family_label,
+        plain_explanation=plain,
+        what_now=what_now,
+        evidence=evidence,
     )
 
 
@@ -633,6 +687,15 @@ def patient_dossier(
         insights=["Patrón de sueño irregular detectado en los últimos 3 días", "Uso excesivo de redes sociales a altas horas de la noche"]
     ) if (biometrics or app_usage) else None
 
+    chat_messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.user_id == patient_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(120)
+        .all()
+    )
+    chat_messages.reverse()
+
     plan = db.query(SafetyPlan).filter(SafetyPlan.user_id == patient_id).first()
 
     patient_label = patient.display_name
@@ -649,9 +712,19 @@ def patient_dossier(
     result = PatientDossierOut(
         patient=_patient_summary(db, patient, status_label),
         current_risk=RiskAssessmentOut.model_validate(assessment) if assessment else None,
+        level_explanation=LevelExplanationOut(
+            **clinical_view.level_explanation(
+                assessment,
+                driver_evidence=clinical_view.evidence_for_assessment(db, assessment),
+            )
+        ),
+        structural_explanation=StructuralExplanationOut(**clinical_view.structural_explanation(assessment)),
+        metrics=PatientMetricsOut(**clinical_view.build_metrics(db, patient_id, max(window_days, 90))),
+        evidence=[EvidenceItemOut(**item) for item in clinical_view.build_evidence_feed(db, patient_id)],
         timeline=TimelineOut(**timeline),
         checkins=checkins,
         diary=diary,
+        chat_messages=[PatientChatMessageOut.model_validate(row) for row in chat_messages],
         facts=facts,
         assessments=assessments,
         alerts=[_alert_out(db, a) for a in alerts],
@@ -671,10 +744,185 @@ def patient_dossier(
         extra={
             "assessment_count": len(assessments),
             "agent2_trace_count": len(agent2_traces),
+            "chat_message_count": len(chat_messages),
             "window_days": window_days,
         },
     )
     return result
+
+
+@router.get("/patients/{patient_id}/chat", response_model=list[PatientChatMessageOut])
+def patient_chat(
+    patient_id: uuid.UUID,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """The patient's own conversation with Agent 1, oldest first.
+
+    Chat is a first-class clinical source: Agent 2 analyses it exactly like
+    the diary, and a level-4 alert can be raised from a single chat turn.
+    Reading it is therefore part of auditing an alert, not an extra.
+    """
+    _require_clinical_read(db, professional, patient_id)
+    rows = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.user_id == patient_id)
+        .order_by(ChatMessage.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    rows.reverse()
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="patient_chat_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"row_count": len(rows), "offset": offset, "limit": limit},
+    )
+    return rows
+
+
+@router.get("/patients/{patient_id}/metrics", response_model=PatientMetricsOut)
+def patient_metrics(
+    patient_id: uuid.UUID,
+    window_days: int = Query(90, ge=7, le=365),
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Chart-ready series: check-ins, structural score, z-scores, Agent 2
+    signals, alert-level history and event markers."""
+    _require_clinical_read(db, professional, patient_id)
+    return clinical_view.build_metrics(db, patient_id, window_days)
+
+
+@router.get("/patients/{patient_id}/evidence", response_model=list[EvidenceItemOut])
+def patient_evidence(
+    patient_id: uuid.UUID,
+    limit: int = Query(60, ge=1, le=200),
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Every analysed text with what the model read in it and what the
+    deterministic engine did next."""
+    _require_clinical_read(db, professional, patient_id)
+    rows = clinical_view.build_evidence_feed(db, patient_id, limit)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="patient_evidence_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"row_count": len(rows)},
+    )
+    return rows
+
+
+@router.get("/patients/{patient_id}/explanation", response_model=LevelExplanationOut)
+def patient_level_explanation(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Plain-Spanish answer to 'why is this patient at this level right now'."""
+    _require_clinical_read(db, professional, patient_id)
+    assessment = _latest_assessment(db, patient_id)
+    return LevelExplanationOut(
+        **clinical_view.level_explanation(
+            assessment,
+            driver_evidence=clinical_view.evidence_for_assessment(db, assessment),
+        )
+    )
+
+
+# --------------------------------------------------- Agent 3 · copilot -----
+def _require_copilot_access(db: Session, professional: User, patient_id: uuid.UUID) -> User:
+    """Same clinical-read rule as the dossier, plus the patient must exist.
+
+    admin_clinical is rejected by ``_require_clinical_read`` and therefore can
+    never open a conversation about a patient's clinical content.
+    """
+    _require_clinical_read(db, professional, patient_id)
+    patient = db.get(User, patient_id)
+    if not patient or patient.role != "patient":
+        raise HTTPException(status_code=404, detail="Paciente no encontrado")
+    return patient
+
+
+@router.get("/patients/{patient_id}/copilot/messages", response_model=list[CopilotMessageOut])
+def copilot_messages(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """This professional's own copilot thread about this patient."""
+    _require_copilot_access(db, professional, patient_id)
+    return clinical_copilot.history(db, professional.id, patient_id)
+
+
+@router.post("/patients/{patient_id}/copilot/messages", response_model=CopilotMessageOut, status_code=201)
+def copilot_ask(
+    patient_id: uuid.UUID,
+    payload: CopilotAskIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Ask Agent 3 about this patient.
+
+    Agent 3 is read-only over the clinical record: it cannot create facts,
+    signals, assessments or alerts, so nothing it says can change the
+    patient's alert level or what the patient sees.
+    """
+    patient = _require_copilot_access(db, professional, patient_id)
+    answer = clinical_copilot.ask(
+        db,
+        professional=professional,
+        patient=patient,
+        question=payload.message,
+        window_days=payload.window_days,
+    )
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="copilot_question_asked",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"window_days": payload.window_days, "error_kind": answer.error_kind},
+    )
+    return answer
+
+
+@router.post("/patients/{patient_id}/copilot/summary", response_model=CopilotMessageOut, status_code=201)
+def copilot_summary(
+    patient_id: uuid.UUID,
+    payload: CopilotSummaryIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Generate a fresh situation summary from what the patient has said."""
+    patient = _require_copilot_access(db, professional, patient_id)
+    answer = clinical_copilot.summarize(
+        db,
+        professional=professional,
+        patient=patient,
+        window_days=payload.window_days,
+    )
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="copilot_summary_generated",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"window_days": payload.window_days, "error_kind": answer.error_kind},
+    )
+    return answer
 
 
 @router.post("/patients/{patient_id}/reevaluate", response_model=RiskAssessmentOut)

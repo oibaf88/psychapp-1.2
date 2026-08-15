@@ -44,7 +44,9 @@ export default function NavBar() {
           <>
             <Link to="/professional">Pacientes</Link>
             <Link to="/professional/alerts">Alertas</Link>
+            <Link to="/professional/copilot">Copiloto</Link>
             <Link to="/professional/assignments">Asignaciones</Link>
+            <Link to="/professional/manual">Manual</Link>
             <Link to="/notifications">Avisos</Link>
           </>
         )}
@@ -52,8 +54,10 @@ export default function NavBar() {
           <>
             <Link to="/professional">Pacientes</Link>
             <Link to="/professional/alerts">Alertas</Link>
+            <Link to="/professional/copilot">Copiloto</Link>
             <Link to="/professional/assignments">Asignaciones</Link>
             <Link to="/professional/audit">Auditoría</Link>
+            <Link to="/professional/manual">Manual</Link>
             <Link to="/notifications">Avisos</Link>
           </>
         )}
@@ -62,6 +66,7 @@ export default function NavBar() {
             <Link to="/professional">Roster</Link>
             <Link to="/professional/assignments">Asignaciones</Link>
             <Link to="/professional/audit">Auditoría</Link>
+            <Link to="/professional/manual">Manual</Link>
             <Link to="/notifications">Avisos</Link>
           </>
         )}

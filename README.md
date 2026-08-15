@@ -348,12 +348,14 @@ psychapp/
 │   │   ├── security.py        # JWT auth + bcrypt hashing
 │   │   ├── seed.py            # idempotent demo data
 │   │   ├── content/
-│   │   │   ├── prompts.py         # Agent 1 / Agent 2 system prompts + tool schema
+│   │   │   ├── prompts.py         # Agent 1 / 2 / 3 system prompts + tool schema
 │   │   │   └── safety_resources.py # static Spanish crisis copy + resources
 │   │   ├── services/
 │   │   │   ├── llm/                # swappable LLM provider (Anthropic implementation)
 │   │   │   ├── baseline.py         # local structural_score / confidence_band
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
+│   │   │   ├── clinical_view.py    # Spanish explanations, metric series, evidence feed
+│   │   │   ├── clinical_copilot.py # Agent 3: therapist <-> LLM, read-only over the record
 │   │   │   ├── agent2_trace.py     # privacy-preserving Agent 2 lineage
 │   │   │   ├── conversation.py     # Agent2 -> risk_engine -> Agent1 orchestration
 │   │   │   ├── notifications.py
@@ -363,16 +365,57 @@ psychapp/
 │   │                            #   safety, consents, facts, assignments, professional,
 │   │                            #   notifications, audit
 │   └── requirements.txt
+├── docs/MANUAL_TERAPEUTA.md    # full therapist manual (also in-app at /professional/manual)
 ├── supabase/migrations/        # explicit production schema changes
 └── frontend/
     └── src/
         ├── api.ts
         ├── auth/AuthContext.tsx
-        ├── components/         # includes ClinicalTraceability graphical audit UI
+        ├── components/         # ClinicalCharts (recharts), ClinicalExplain (narrative +
+        │                        #  evidence feed), CopilotPanel, ClinicalTraceability
+        │                        #  (raw technical audit UI, now behind a "detail" tab)
         └── pages/               # Login/Register, PatientDashboard, DiaryPage, ChatPage,
                                   #  WavePage, SafetyPlanPage, ProfessionalDashboard,
-                                  #  AlertsPage, PatientDetailPage
+                                  #  AlertsPage, PatientDetailPage, CopilotPage, ManualPage
 ```
+
+## 8b. The professional panel
+
+The therapist panel is built around one rule: **a clinician should never have
+to read JSON to understand a decision.** Everything the server decided is
+returned pre-explained, and the raw trace is available but demoted to a
+"Detalle técnico" tab.
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /professional/patients/{id}/dossier` | Everything below, in one call |
+| `GET /professional/patients/{id}/explanation` | Why this patient is at this level, in Spanish, naming the evidence family that drove it |
+| `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, Agent 2 signals, event markers |
+| `GET /professional/patients/{id}/evidence` | One row per analysed text: what the patient wrote, what Agent 2 read in it, which level it produced and which alert it generated |
+| `GET /professional/patients/{id}/chat` | The patient's own conversation with Agent 1 |
+| `GET/POST /professional/patients/{id}/copilot/messages` | Agent 3, the read-only clinical copilot |
+| `POST /professional/patients/{id}/copilot/summary` | Fresh situation summary from what the patient has said |
+
+Three design points worth knowing:
+
+- **`structural_score` is similarity, not risk.** It compares the last 7 days
+  of check-ins to the patient's own 21-day baseline. `0.91 / stable` next to a
+  level-4 alert is correct and expected — the level came from a confirmed fact
+  or a chat/diary text, neither of which is in the score. Every explanation
+  carries an explicit reconciliation sentence for exactly that case.
+- **The composite is a mean of absolute z-scores**, so a large improvement also
+  lowers the score. The API therefore also returns an adverse/favourable split
+  and a per-variable direction, and the UI leads with those.
+- **Chat and diary are both sources.** Agent 2 analyses both, so both are
+  readable by the assigned professional and both appear in the evidence feed.
+
+Agent 3 is strictly read-only: it can create no facts, signals, assessments or
+alerts, so nothing it says can change a patient's alert level or what the
+patient sees. Its system prompt requires a source and a date on every clinical
+statement.
+
+Full documentation for clinicians: [`docs/MANUAL_TERAPEUTA.md`](./docs/MANUAL_TERAPEUTA.md),
+also served in-app at `/professional/manual`.
 
 ## 9. A note on the population this serves
 
