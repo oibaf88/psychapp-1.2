@@ -262,6 +262,16 @@ class AlertOut(BaseModel):
     dismiss_reason: Optional[str] = None
     patient_display_name: Optional[str] = None
     patient_email: Optional[str] = None
+    # Why this alert exists, in the therapist's terms, plus the text or
+    # declaration behind it. Without these an alert is unauditable.
+    related_assessment_id: Optional[uuid.UUID] = None
+    rule_code: Optional[str] = None
+    rule_title: Optional[str] = None
+    driver_family: Optional[str] = None
+    driver_family_label: Optional[str] = None
+    plain_explanation: Optional[str] = None
+    what_now: Optional[str] = None
+    evidence: Optional[dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -372,14 +382,165 @@ class Agent2AnalysisTraceOut(BaseModel):
         return _utc_iso(value)
 
 
+# ------------------------------------------------- clinical explanations ---
+class PatientChatMessageOut(BaseModel):
+    """A turn of the patient's own conversation with Agent 1.
+
+    Exposed to the assigned professional because chat, like the diary, is a
+    source the risk pipeline reads: a therapist cannot audit an alert raised
+    from a chat message without being able to read that message.
+    """
+
+    id: uuid.UUID
+    role: str
+    content: str
+    ui_mode: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return _utc_iso(value) or ""
+
+
+class LevelExplanationOut(BaseModel):
+    level: Optional[int] = None
+    level_label: str
+    level_meaning: str
+    headline: str
+    rule_code: Optional[str] = None
+    rule_title: Optional[str] = None
+    rule_explanation: Optional[str] = None
+    driver_family: str
+    driver_family_label: str
+    driver_evidence_kind: Optional[str] = None
+    what_now: Optional[str] = None
+    structural_reconciliation: Optional[str] = None
+    driver_evidence: Optional[dict[str, Any]] = None
+    calculated_at: Optional[str] = None
+    assessment_id: Optional[str] = None
+    generated_alert_id: Optional[str] = None
+
+
+class StructuralVariableOut(BaseModel):
+    key: str
+    label: str
+    note: Optional[str] = None
+    baseline_mean: Optional[float] = None
+    baseline_std: Optional[float] = None
+    recent_mean: Optional[float] = None
+    difference: Optional[float] = None
+    z_score: Optional[float] = None
+    abs_z: Optional[float] = None
+    direction: str
+    reading: str
+
+
+class StructuralExplanationOut(BaseModel):
+    score: Optional[float] = None
+    band: Optional[str] = None
+    band_label: Optional[str] = None
+    band_meaning: Optional[str] = None
+    scale_note: str
+    summary: str
+    direction_summary: Optional[str] = None
+    variables: list[StructuralVariableOut] = []
+    composite_z: Optional[float] = None
+    adverse_composite_z: Optional[float] = None
+    favourable_composite_z: Optional[float] = None
+    baseline_sample_count: Optional[int] = None
+    recent_sample_count: Optional[int] = None
+    sleep_trend: Optional[str] = None
+    sleep_trend_slope: Optional[float] = None
+    caveats: list[str] = []
+
+
+class EvidenceItemOut(BaseModel):
+    """One analysed text and everything the system concluded from it."""
+
+    trace_id: str
+    correlation_id: str
+    source_type: str
+    source_label: str
+    source_id: Optional[str] = None
+    source_text: str
+    source_excerpt: str
+    source_created_at: Optional[str] = None
+    analysed_at: Optional[str] = None
+    status: str
+    analysis: Optional[dict[str, Any]] = None
+    flags: list[str] = []
+    reading: str
+    short_rationale: Optional[str] = None
+    signal_id: Optional[str] = None
+    assessment_id: Optional[str] = None
+    resulting_level: Optional[int] = None
+    resulting_rule: Optional[str] = None
+    used_by_risk_engine: bool = False
+    alert_id: Optional[str] = None
+    alert_level: Optional[int] = None
+    alert_status: Optional[str] = None
+    alert_title: Optional[str] = None
+
+
+class PatientMetricsOut(BaseModel):
+    window_days: int
+    generated_at: Optional[str] = None
+    checkins: list[dict[str, Any]] = []
+    structural: list[dict[str, Any]] = []
+    daily_structural: list[dict[str, Any]] = []
+    linguistic: list[dict[str, Any]] = []
+    levels: list[dict[str, Any]] = []
+    daily_levels: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+
+
+# ------------------------------------------------------ therapist copilot ---
+class CopilotAskIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    window_days: int = Field(default=60, ge=7, le=365)
+
+
+class CopilotSummaryIn(BaseModel):
+    window_days: int = Field(default=60, ge=7, le=365)
+
+
+class CopilotMessageOut(BaseModel):
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    role: str
+    content: str
+    kind: str
+    requested_model: Optional[str] = None
+    context_window_days: Optional[int] = None
+    context_counts: Optional[dict[str, Any]] = None
+    error_kind: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return _utc_iso(value) or ""
+
+
 class PatientDossierOut(BaseModel):
     """Full clinical history for assigned therapist/supervisor — independent of alerts."""
 
     patient: PatientSummaryOut
     current_risk: Optional[RiskAssessmentOut] = None
+    level_explanation: LevelExplanationOut
+    structural_explanation: StructuralExplanationOut
+    metrics: PatientMetricsOut
+    evidence: list[EvidenceItemOut] = []
     timeline: TimelineOut
     checkins: list[CheckInOut]
     diary: list[DiaryOut]
+    chat_messages: list[PatientChatMessageOut] = []
     facts: list[FactOut]
     assessments: list[RiskAssessmentOut]
     alerts: list[AlertOut]

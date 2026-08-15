@@ -236,9 +236,216 @@ export interface Agent2TraceOut {
   created_at?: string | null;
 }
 
+// ------------------------------------------- therapist-facing explanations ---
+/** Which KIND of evidence raised the level. This is the first thing a
+ *  therapist needs, and the reason a high structural score can sit next to
+ *  a level-4 alert without either being wrong. */
+export type DriverFamily =
+  | "hecho_confirmado"
+  | "senal_linguistica"
+  | "desviacion_estructural"
+  | "convergencia"
+  | "sin_criterios";
+
+export interface EvidenceRef {
+  kind?: string;
+  source_type?: string | null;
+  source_label?: string | null;
+  source_id?: string | null;
+  text?: string | null;
+  excerpt?: string | null;
+  created_at?: string | null;
+  category?: string | null;
+  declared_by?: string | null;
+  analysis?: Record<string, unknown> | null;
+  trace_id?: string | null;
+  signal_id?: string | null;
+}
+
+export interface LevelExplanationOut {
+  level?: number | null;
+  level_label: string;
+  level_meaning: string;
+  headline: string;
+  rule_code?: string | null;
+  rule_title?: string | null;
+  rule_explanation?: string | null;
+  driver_family: DriverFamily;
+  driver_family_label: string;
+  driver_evidence_kind?: string | null;
+  what_now?: string | null;
+  structural_reconciliation?: string | null;
+  driver_evidence?: EvidenceRef | null;
+  calculated_at?: string | null;
+  assessment_id?: string | null;
+  generated_alert_id?: string | null;
+}
+
+export interface StructuralVariableOut {
+  key: string;
+  label: string;
+  note?: string | null;
+  baseline_mean?: number | null;
+  baseline_std?: number | null;
+  recent_mean?: number | null;
+  difference?: number | null;
+  z_score?: number | null;
+  abs_z?: number | null;
+  direction: "peor" | "mejor" | "igual" | "sin_datos";
+  reading: string;
+}
+
+export interface StructuralExplanationOut {
+  score?: number | null;
+  band?: string | null;
+  band_label?: string | null;
+  band_meaning?: string | null;
+  scale_note: string;
+  summary: string;
+  direction_summary?: string | null;
+  variables: StructuralVariableOut[];
+  composite_z?: number | null;
+  adverse_composite_z?: number | null;
+  favourable_composite_z?: number | null;
+  baseline_sample_count?: number | null;
+  recent_sample_count?: number | null;
+  sleep_trend?: string | null;
+  sleep_trend_slope?: number | null;
+  caveats: string[];
+}
+
+export interface EvidenceItemOut {
+  trace_id: string;
+  correlation_id: string;
+  source_type: string;
+  source_label: string;
+  source_id?: string | null;
+  source_text: string;
+  source_excerpt: string;
+  source_created_at?: string | null;
+  analysed_at?: string | null;
+  status: string;
+  analysis?: Record<string, unknown> | null;
+  flags: string[];
+  reading: string;
+  short_rationale?: string | null;
+  signal_id?: string | null;
+  assessment_id?: string | null;
+  resulting_level?: number | null;
+  resulting_rule?: string | null;
+  used_by_risk_engine: boolean;
+  alert_id?: string | null;
+  alert_level?: number | null;
+  alert_status?: string | null;
+  alert_title?: string | null;
+}
+
+export interface CheckInPoint {
+  at: string;
+  date: string;
+  mood: number;
+  craving: number;
+  sleep_hours: number;
+  self_efficacy: number;
+  notes?: string | null;
+}
+
+export interface StructuralPoint {
+  at: string;
+  date: string;
+  score?: number | null;
+  band?: string | null;
+  composite_z?: number | null;
+  z_mood?: number | null;
+  z_craving_inv?: number | null;
+  z_sleep_hours?: number | null;
+  z_self_efficacy?: number | null;
+}
+
+export interface LinguisticPoint {
+  at: string;
+  date: string;
+  signal_id: string;
+  rumination_score?: number | null;
+  negative_valence?: number | null;
+  urgency_level?: number | null;
+  ambivalence?: number | null;
+  ideation_direct: boolean;
+  ideation_indirect: boolean;
+  consumption_crisis: boolean;
+  emotional_complexity?: string | null;
+  short_rationale?: string | null;
+  source_type?: string | null;
+  source_label?: string | null;
+  source_id?: string | null;
+  source_excerpt?: string | null;
+  trace_id?: string | null;
+}
+
+export interface LevelPoint {
+  at: string;
+  date: string;
+  level: number;
+  assessment_id: string;
+  rule?: string | null;
+  rule_family?: DriverFamily | null;
+  reason?: string | null;
+  generated_alert_id?: string | null;
+}
+
+export interface MetricEvent {
+  at: string;
+  date: string;
+  kind: "alert" | "fact";
+  level?: number | null;
+  label: string;
+  status: string;
+  id: string;
+}
+
+export interface PatientMetricsOut {
+  window_days: number;
+  generated_at?: string | null;
+  checkins: CheckInPoint[];
+  structural: StructuralPoint[];
+  /** One point per day (the last of that day). The raw `structural` series
+   *  has one point per risk run, which is unreadable over weeks. */
+  daily_structural: StructuralPoint[];
+  linguistic: LinguisticPoint[];
+  levels: LevelPoint[];
+  daily_levels: { date: string; max_level: number }[];
+  events: MetricEvent[];
+  counts: Record<string, number>;
+}
+
+export interface PatientChatMessageOut {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  ui_mode?: string | null;
+  created_at: string;
+}
+
+export interface CopilotMessageOut {
+  id: string;
+  patient_id: string;
+  role: "user" | "assistant";
+  content: string;
+  kind: "question" | "answer" | "summary";
+  requested_model?: string | null;
+  context_window_days?: number | null;
+  context_counts?: Record<string, unknown> | null;
+  error_kind?: string | null;
+  created_at: string;
+}
+
 export interface PatientDossierOut {
   patient: PatientSummaryOut;
   current_risk?: RiskAssessmentOut | null;
+  level_explanation: LevelExplanationOut;
+  structural_explanation: StructuralExplanationOut;
+  metrics: PatientMetricsOut;
+  evidence: EvidenceItemOut[];
   timeline: TimelineOut;
   checkins: Array<{
     id: string;
@@ -250,6 +457,7 @@ export interface PatientDossierOut {
     created_at: string;
   }>;
   diary: Array<{ id: string; content: string; created_at: string }>;
+  chat_messages: PatientChatMessageOut[];
   facts: FactOut[];
   assessments: RiskAssessmentOut[];
   alerts: AlertOut[];
@@ -273,6 +481,14 @@ export interface AlertOut {
   dismiss_reason?: string | null;
   patient_display_name?: string | null;
   patient_email?: string | null;
+  related_assessment_id?: string | null;
+  rule_code?: string | null;
+  rule_title?: string | null;
+  driver_family?: DriverFamily | null;
+  driver_family_label?: string | null;
+  plain_explanation?: string | null;
+  what_now?: string | null;
+  evidence?: EvidenceRef | null;
 }
 
 export interface AssignmentOut {
@@ -347,6 +563,41 @@ export const CONSENT_LABELS: Record<string, string> = {
   crisis_sms: "SMS de crisis (opcional)",
   research: "Uso en investigación",
 };
+
+export const BAND_LABELS: Record<string, string> = {
+  stable: "estable",
+  transition: "transición",
+  unstable: "inestable",
+  insufficient_data: "datos insuficientes",
+};
+
+export const DRIVER_FAMILY_SHORT: Record<string, string> = {
+  hecho_confirmado: "Hecho declarado",
+  senal_linguistica: "Texto del paciente",
+  desviacion_estructural: "Check-ins",
+  convergencia: "Varias señales",
+  sin_criterios: "Sin criterios",
+};
+
+export const LEVEL_SHORT_LABELS: Record<number, string> = {
+  0: "Autogestión",
+  1: "Autogestión / sin datos",
+  2: "Prevención",
+  3: "Alarma profesional",
+  4: "Emergencia",
+};
+
+export function formatDateTime(value?: string | null): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
+}
+
+export function formatDay(value?: string | null): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
+}
 
 export const FACT_CATEGORIES = [
   { value: "medication_taken", label: "Medicación tomada" },

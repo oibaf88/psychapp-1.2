@@ -1,20 +1,44 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
-import { Agent2TraceOut, api, FACT_CATEGORIES, PatientDossierOut, RiskAssessmentOut } from "../api";
+import {
+  Agent2TraceOut,
+  api,
+  FACT_CATEGORIES,
+  LinguisticPoint,
+  PatientDossierOut,
+  RiskAssessmentOut,
+  formatDateTime,
+} from "../api";
 import { useAuth } from "../auth/AuthContext";
 import { Agent2TraceList, RiskAssessmentTraceList } from "../components/ClinicalTraceability";
+import {
+  CheckInChart,
+  EventTimeline,
+  LevelHistoryChart,
+  LinguisticSignalChart,
+  StructuralScoreChart,
+  ZScoreChart,
+} from "../components/ClinicalCharts";
+import {
+  EvidenceFeed,
+  LevelExplanationCard,
+  StructuralExplanationCard,
+} from "../components/ClinicalExplain";
+import CopilotPanel from "../components/CopilotPanel";
 
 type Tab =
   | "resumen"
-  | "checkins"
+  | "metricas"
+  | "evidencia"
+  | "copiloto"
+  | "chat"
   | "diario"
+  | "checkins"
   | "hechos"
-  | "evaluaciones"
-  | "agent2"
   | "alertas"
+  | "motor"
   | "plan"
-  | "protocolo";
+  | "tecnico";
 
 export default function PatientDetailPage() {
   const { patientId } = useParams();
@@ -29,6 +53,7 @@ export default function PatientDetailPage() {
   const [historyBusy, setHistoryBusy] = useState<"assessments" | "agent2" | null>(null);
   const [assessmentHasMore, setAssessmentHasMore] = useState(false);
   const [agent2HasMore, setAgent2HasMore] = useState(false);
+  const [highlightedEvidence, setHighlightedEvidence] = useState<string | null>(null);
 
   const isTherapist = user?.role === "therapist";
 
@@ -133,6 +158,16 @@ export default function PatientDetailPage() {
     }
   }
 
+  /** Jump from a spike in the Agent 2 chart to the sentence behind it. */
+  function openEvidence(point: LinguisticPoint) {
+    if (!point.trace_id) return;
+    setHighlightedEvidence(point.trace_id);
+    setTab("evidencia");
+    requestAnimationFrame(() =>
+      document.getElementById(`evidence-${point.trace_id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
+    );
+  }
+
   if (error && !dossier) {
     return (
       <div className="page">
@@ -147,25 +182,29 @@ export default function PatientDetailPage() {
   if (!dossier) return <div className="loading">Cargando historial clínico…</div>;
 
   const p = dossier.patient;
-  const risk = dossier.current_risk;
-  const level = risk?.alert_level;
+  const metrics = dossier.metrics;
+  const patientChat = dossier.chat_messages ?? [];
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
-    { id: "checkins", label: `Check-ins (${dossier.checkins.length})` },
+    { id: "metricas", label: "Métricas" },
+    { id: "evidencia", label: `Evidencia (${dossier.evidence.length})` },
+    { id: "copiloto", label: "Copiloto clínico" },
+    { id: "chat", label: `Chat del paciente (${patientChat.length})` },
     { id: "diario", label: `Diario (${dossier.diary.length})` },
+    { id: "checkins", label: `Check-ins (${dossier.checkins.length})` },
     { id: "hechos", label: `Hechos (${dossier.facts.length})` },
-    { id: "evaluaciones", label: `Motor de riesgo (${dossier.assessments.length})` },
-    { id: "agent2", label: `Agent 2 (${dossier.agent2_traces?.length ?? 0})` },
     { id: "alertas", label: `Alertas (${dossier.alerts.length})` },
-    { id: "plan", label: "Plan seguridad" },
-    { id: "protocolo", label: "Protocolo" },
+    { id: "motor", label: "Motor de riesgo" },
+    { id: "plan", label: "Plan de seguridad" },
+    { id: "tecnico", label: "Detalle técnico" },
   ];
 
   return (
     <div className="page">
       <p>
-        <Link to="/professional">← Volver a pacientes</Link>
+        <Link to="/professional">← Volver a pacientes</Link> ·{" "}
+        <Link to="/professional/manual">Manual del terapeuta</Link>
       </p>
       <h1>
         {p.display_name}{" "}
@@ -175,40 +214,20 @@ export default function PatientDetailPage() {
       </h1>
       <p className="subtitle">
         Historial clínico completo — <strong>no requiere alerta</strong> para consultar. Asignación:{" "}
-        {p.assignment_status}. Check-ins: {p.checkin_count ?? dossier.checkins.length}.
+        {p.assignment_status}. Check-ins: {p.checkin_count ?? dossier.checkins.length}. Alertas abiertas:{" "}
+        {p.open_alerts}.
       </p>
 
-      <section className={`card risk-banner level-${level ?? "na"}`}>
-        <div className="risk-banner-grid">
-          <div>
-            <div className="meta">Nivel actual (motor determinista)</div>
-            <div className="risk-level">
-              {level == null ? "Sin evaluación" : `Nivel ${level}`}
-            </div>
-            <div className="meta">{risk?.assessment_reason || "Aún no hay evaluación de riesgo."}</div>
-          </div>
-          <div>
-            <div className="meta">Score estructural / banda</div>
-            <div>
-              {p.latest_structural_score != null ? Number(p.latest_structural_score).toFixed(2) : "—"} ·{" "}
-              {p.latest_confidence_band || "—"}
-            </div>
-            <div className="meta">Alertas abiertas (rule_engine): {p.open_alerts}</div>
-          </div>
-          <div className="alert-actions">
-            <button type="button" disabled={busy} onClick={reevaluate}>
-              Reevaluar riesgo
-            </button>
-          </div>
-        </div>
-        {risk?.triggering_rules && (
-          <p className="meta">
-            Reglas: {Array.isArray(risk.triggering_rules) ? risk.triggering_rules.join(", ") : JSON.stringify(risk.triggering_rules)}
-          </p>
-        )}
-        {message && <p className="info">{message}</p>}
-        {error && <p className="error">{error}</p>}
-      </section>
+      <LevelExplanationCard
+        explanation={dossier.level_explanation}
+        actions={
+          <button type="button" disabled={busy} onClick={reevaluate}>
+            Reevaluar riesgo
+          </button>
+        }
+      />
+      {message && <p className="info">{message}</p>}
+      {error && <p className="error">{error}</p>}
 
       <div className="tabs" role="tablist" aria-label="Secciones del historial clínico">
         {tabs.map((t, index) => (
@@ -242,258 +261,307 @@ export default function PatientDetailPage() {
       </div>
 
       <div id={`tabpanel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-      {tab === "resumen" && (
-        <section className="card">
-          <h2>Tendencia 30 días</h2>
-          {dossier.timeline.points.length > 0 ? (
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={dossier.timeline.points}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="left" domain={[0, 10]} />
-                <YAxis yAxisId="right" orientation="right" domain={[0, 1]} />
-                <Tooltip />
-                <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke="#4f8ef7" connectNulls />
-                <Line yAxisId="left" type="monotone" dataKey="craving" name="Craving" stroke="#f76c4f" connectNulls />
-                <Line yAxisId="left" type="monotone" dataKey="sleep_hours" name="Sueño" stroke="#9b59b6" connectNulls />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="structural_score"
-                  name="Score estructural"
-                  stroke="#2e7d32"
-                  connectNulls
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p>Sin puntos de timeline aún (el paciente debe registrar check-ins).</p>
-          )}
-          {!dossier.timeline.baseline_available && (
-            <p className="info">Línea base personal aún no disponible (&lt;5 check-ins).</p>
-          )}
-        </section>
-      )}
+        {tab === "resumen" && (
+          <>
+            <StructuralExplanationCard explanation={dossier.structural_explanation} />
+            <section className="card">
+              <h2>Evolución</h2>
+              <div className="chart-grid">
+                <LevelHistoryChart daily={metrics.daily_levels} levels={metrics.levels} />
+                <StructuralScoreChart points={metrics.daily_structural} />
+              </div>
+            </section>
+            <section className="card">
+              <h2>Alertas y hechos registrados</h2>
+              <EventTimeline events={metrics.events} />
+            </section>
+          </>
+        )}
 
-      {tab === "checkins" && (
-        <section className="card">
-          <h2>Histórico de check-ins</h2>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th>Ánimo</th>
-                  <th>Craving</th>
-                  <th>Sueño</th>
-                  <th>Autoeficacia</th>
-                  <th>Notas</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dossier.checkins.map((c) => (
-                  <tr key={c.id}>
-                    <td className="meta">{new Date(c.created_at).toLocaleString()}</td>
-                    <td>{c.mood}</td>
-                    <td>{c.craving}</td>
-                    <td>{c.sleep_hours}</td>
-                    <td>{c.self_efficacy}</td>
-                    <td>{c.notes || "—"}</td>
-                  </tr>
-                ))}
-                {dossier.checkins.length === 0 && (
-                  <tr>
-                    <td colSpan={6}>Sin check-ins.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {tab === "diario" && (
-        <section className="card">
-          <h2>Entradas de diario</h2>
-          {dossier.diary.length === 0 && <p className="meta">Sin entradas.</p>}
-          {dossier.diary.map((d) => (
-            <article key={d.id} className="diary-entry">
-              <div className="meta">{new Date(d.created_at).toLocaleString()}</div>
-              <p style={{ whiteSpace: "pre-wrap" }}>{d.content}</p>
-            </article>
-          ))}
-        </section>
-      )}
-
-      {tab === "hechos" && (
-        <section className="card">
-          <h2>Hechos confirmados (no sobrescribibles por el LLM)</h2>
-          {!isTherapist && (
-            <p className="info">Solo el terapeuta asignado ve y registra hechos (RBAC).</p>
-          )}
-          {isTherapist && (
-            <form onSubmit={declareFact} className="stack-form" style={{ marginBottom: 16 }}>
-              <label>
-                Categoría
-                <select value={factCategory} onChange={(e) => setFactCategory(e.target.value)}>
-                  {FACT_CATEGORIES.map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Contenido
-                <textarea
-                  required
-                  rows={2}
-                  value={factContent}
-                  onChange={(e) => setFactContent(e.target.value)}
-                  placeholder="Hecho clínico confirmado…"
-                />
-              </label>
-              <p className="meta">
-                Nota: <code>ideation_active</code> / <code>planning</code> → nivel 4;{" "}
-                <code>consumption_crisis</code> → nivel 3; el resto no eleva alerta automática.
-              </p>
-              <button type="submit" disabled={busy}>
-                Registrar hecho y reevaluar
-              </button>
-            </form>
-          )}
-          <ul className="plain-list">
-            {dossier.facts.map((f) => (
-              <li key={f.id}>
-                <strong>{f.category}</strong> ({f.declared_by}) · {new Date(f.created_at).toLocaleString()}
-                <br />
-                {f.content}
-              </li>
-            ))}
-            {dossier.facts.length === 0 && <li>Sin hechos activos.</li>}
-          </ul>
-        </section>
-      )}
-
-      {tab === "evaluaciones" && (
-        <section className="card">
-          <h2>Desglose del motor de riesgo determinista</h2>
-          <p className="subtitle">
-            Cada evaluación muestra la conclusión, los datos empleados y la ruta de reglas registrada por el
-            servidor. Agent 2 aporta inferencias lingüísticas, pero no decide el nivel.
-          </p>
-          <p className="trace-integrity-note">
-            <strong>Lectura clínica:</strong> esta pantalla explica el cálculo persistido; no vuelve a calcularlo
-            en el navegador. Abre una evaluación para inspeccionar umbrales, valores observados y evidencia completa.
-          </p>
-          <RiskAssessmentTraceList assessments={dossier.assessments} />
-          {assessmentHasMore && (
-            <button type="button" disabled={historyBusy !== null} onClick={loadOlderAssessments}>
-              {historyBusy === "assessments" ? "Cargando…" : "Cargar evaluaciones anteriores"}
-            </button>
-          )}
-          <p className="meta">Mostrando {dossier.assessments.length} evaluaciones, de más reciente a más antigua.</p>
-        </section>
-      )}
-
-      {tab === "agent2" && (
-        <section className="card">
-          <h2>Tracking de Agent 2 · analizador de conversación</h2>
-          <p className="subtitle">
-            Entrada textual, respuesta estructurada y metadatos de cada ejecución. Las respuestas son inferencias
-            del modelo y deben revisarse junto con los hechos confirmados y el cálculo determinista.
-          </p>
-          <p className="trace-integrity-note">
-            <strong>Cadena de evidencia:</strong> usa el identificador de correlación para vincular una llamada con
-            su señal lingüística y la evaluación de riesgo que realmente la consumió.
-          </p>
-          <Agent2TraceList
-            traces={dossier.agent2_traces ?? []}
-            assessments={dossier.assessments}
-            legacySignalCount={dossier.signals.filter(
-              (signal) => signal.signal_type === "linguistic_analysis" && !signal.agent2_trace_id
-            ).length}
-          />
-          {agent2HasMore && (
-            <button type="button" disabled={historyBusy !== null} onClick={loadOlderAgent2Traces}>
-              {historyBusy === "agent2" ? "Cargando…" : "Cargar trazas anteriores"}
-            </button>
-          )}
-          <p className="meta">Mostrando {dossier.agent2_traces?.length ?? 0} trazas, de más reciente a más antigua.</p>
-        </section>
-      )}
-
-      {tab === "alertas" && (
-        <section className="card">
-          <h2>Alertas profesionales generadas por el motor</h2>
-          <p className="meta">Solo niveles ≥3 crean alerta. Puedes gestionarlas en Alertas.</p>
-          {dossier.alerts.length === 0 && <p>No hay alertas (el seguimiento no depende de ellas).</p>}
-          {dossier.alerts.map((a) => (
-            <div key={a.id} className={`alert-snippet alert-level-${a.alert_level}`}>
-              <strong>
-                L{a.alert_level} · {a.status}
-              </strong>{" "}
-              — {a.title}
-              <div className="meta">{new Date(a.created_at).toLocaleString()}</div>
-              <p style={{ whiteSpace: "pre-wrap" }}>{a.description}</p>
+        {tab === "metricas" && (
+          <section className="card">
+            <h2>Métricas del paciente</h2>
+            <p className="subtitle">
+              Ventana de {metrics.window_days} días. {metrics.counts.checkins ?? 0} check-ins ·{" "}
+              {metrics.counts.linguistic_points ?? 0} textos analizados · {metrics.counts.assessments ?? 0}{" "}
+              evaluaciones · {metrics.counts.alerts ?? 0} alertas. Generado {formatDateTime(metrics.generated_at)}.
+            </p>
+            <div className="chart-grid">
+              <LevelHistoryChart daily={metrics.daily_levels} levels={metrics.levels} />
+              <StructuralScoreChart points={metrics.daily_structural} />
+              <ZScoreChart points={metrics.daily_structural} />
+              <CheckInChart points={metrics.checkins} />
+              <LinguisticSignalChart points={metrics.linguistic} onSelect={openEvidence} />
             </div>
-          ))}
-          <p>
-            <Link to="/professional/alerts">Ir a gestión de alertas →</Link>
-          </p>
-        </section>
-      )}
+          </section>
+        )}
 
-      {tab === "plan" && (
-        <section className="card">
-          <h2>Plan de seguridad del paciente</h2>
-          {!dossier.safety_plan && <p className="meta">Sin plan guardado.</p>}
-          {dossier.safety_plan && (
-            <dl className="plan-dl">
-              {(
-                [
-                  ["Señales de alarma", dossier.safety_plan.warning_signs],
-                  ["Estrategias de afrontamiento", dossier.safety_plan.coping_strategies],
-                  ["Apoyos sociales", dossier.safety_plan.social_supports],
-                  ["Contactos profesionales", dossier.safety_plan.professional_contacts],
-                  ["Entorno seguro", dossier.safety_plan.safe_environment],
-                  ["Razones para vivir", dossier.safety_plan.reasons_to_live],
-                ] as const
-              ).map(([label, val]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{val || "—"}</dd>
+        {tab === "evidencia" && (
+          <section className="card">
+            <h2>Evidencia: qué escribió, qué se leyó y qué pasó</h2>
+            <p className="subtitle">
+              Cada tarjeta es <strong>un texto real del paciente</strong> (chat o diario), la lectura que hizo
+              el Agente 2 y lo que el motor determinista concluyó a partir de ella. Si una alerta te parece
+              injustificada, aquí está la frase que la produjo.
+            </p>
+            <EvidenceFeed items={dossier.evidence} highlightId={highlightedEvidence} />
+          </section>
+        )}
+
+        {tab === "copiloto" && (
+          <section className="card">
+            <h2>Copiloto clínico (Agente 3)</h2>
+            <CopilotPanel patientId={p.id} patientName={p.display_name} />
+          </section>
+        )}
+
+        {tab === "chat" && (
+          <section className="card">
+            <h2>Conversación del paciente con el asistente</h2>
+            <p className="subtitle">
+              El chat es una <strong>fuente clínica de pleno derecho</strong>: el Agente 2 lo analiza igual que
+              el diario, y una alerta de nivel 4 puede salir de un solo mensaje. Los mensajes marcados como
+              «crisis» o «apoyo» son turnos en los que el sistema añadió su bloque fijo de seguridad.
+            </p>
+            {patientChat.length === 0 && <p className="meta">Este paciente no ha usado el chat todavía.</p>}
+            <div className="transcript">
+              {patientChat.map((m) => (
+                <div key={m.id} className={`transcript-turn transcript-${m.role}`}>
+                  <div className="meta">
+                    {m.role === "user" ? p.display_name : "Asistente (Agente 1)"} ·{" "}
+                    {formatDateTime(m.created_at)}
+                    {m.ui_mode && m.ui_mode !== "normal" ? ` · modo ${m.ui_mode}` : ""}
+                  </div>
+                  <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>
                 </div>
               ))}
-            </dl>
-          )}
-        </section>
-      )}
+            </div>
+          </section>
+        )}
 
-      {tab === "protocolo" && (
-        <section className="card">
-          <h2>Documentación de protocolo (servidor, no LLM)</h2>
-          <p className="info">{dossier.professional_protocol.notes}</p>
-          <h3>Plantilla notificación Nivel 3</h3>
-          <pre className="protocol-box">{dossier.professional_protocol.level3}</pre>
-          <h3>Plantilla notificación Nivel 4</h3>
-          <pre className="protocol-box">{dossier.professional_protocol.level4}</pre>
-          <h3>Señales recientes (inferencias)</h3>
-          <ul className="plain-list">
-            {dossier.signals.slice(0, 15).map((s) => (
-              <li key={s.id}>
-                <strong>{s.signal_type}</strong> {s.confidence_band || ""} ·{" "}
-                {new Date(s.timestamp).toLocaleString()}
-                <br />
-                <code className="meta">{JSON.stringify(s.value)}</code>
-              </li>
+        {tab === "diario" && (
+          <section className="card">
+            <h2>Entradas de diario</h2>
+            <p className="subtitle">
+              Texto literal del paciente. Igual que el chat, es fuente de análisis del Agente 2.
+            </p>
+            {dossier.diary.length === 0 && <p className="meta">Sin entradas.</p>}
+            {dossier.diary.map((d) => (
+              <article key={d.id} className="diary-entry">
+                <div className="meta">{formatDateTime(d.created_at)}</div>
+                <p style={{ whiteSpace: "pre-wrap" }}>{d.content}</p>
+              </article>
             ))}
-            {dossier.signals.length === 0 && <li>Sin señales registradas.</li>}
-          </ul>
-        </section>
-      )}
+          </section>
+        )}
+
+        {tab === "checkins" && (
+          <section className="card">
+            <h2>Histórico de check-ins</h2>
+            <CheckInChart points={metrics.checkins} />
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Ánimo</th>
+                    <th>Craving</th>
+                    <th>Sueño</th>
+                    <th>Autoeficacia</th>
+                    <th>Notas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dossier.checkins.map((c) => (
+                    <tr key={c.id}>
+                      <td className="meta">{formatDateTime(c.created_at)}</td>
+                      <td>{c.mood}</td>
+                      <td>{c.craving}</td>
+                      <td>{c.sleep_hours}</td>
+                      <td>{c.self_efficacy}</td>
+                      <td>{c.notes || "—"}</td>
+                    </tr>
+                  ))}
+                  {dossier.checkins.length === 0 && (
+                    <tr>
+                      <td colSpan={6}>Sin check-ins.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {tab === "hechos" && (
+          <section className="card">
+            <h2>Hechos confirmados (no sobrescribibles por el LLM)</h2>
+            <p className="subtitle">
+              Un hecho es una declaración, no una inferencia. <code>ideation_active</code> y{" "}
+              <code>planning</code> elevan a nivel 4 durante 48 h; <code>consumption_crisis</code> a nivel 3.
+              Usa <code>correction</code> para dejar constancia de un falso positivo del Agente 2.
+            </p>
+            {!isTherapist && <p className="info">Solo el terapeuta asignado ve y registra hechos (RBAC).</p>}
+            {isTherapist && (
+              <form onSubmit={declareFact} className="stack-form" style={{ marginBottom: 16 }}>
+                <label>
+                  Categoría
+                  <select value={factCategory} onChange={(e) => setFactCategory(e.target.value)}>
+                    {FACT_CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Contenido
+                  <textarea
+                    required
+                    rows={2}
+                    value={factContent}
+                    onChange={(e) => setFactContent(e.target.value)}
+                    placeholder="Hecho clínico confirmado…"
+                  />
+                </label>
+                <button type="submit" disabled={busy}>
+                  Registrar hecho y reevaluar
+                </button>
+              </form>
+            )}
+            <ul className="plain-list">
+              {dossier.facts.map((f) => (
+                <li key={f.id}>
+                  <strong>{f.category}</strong> ({f.declared_by}) · {formatDateTime(f.created_at)}
+                  <br />
+                  {f.content}
+                </li>
+              ))}
+              {dossier.facts.length === 0 && <li>Sin hechos activos.</li>}
+            </ul>
+          </section>
+        )}
+
+        {tab === "alertas" && (
+          <section className="card">
+            <h2>Alertas profesionales</h2>
+            <p className="subtitle">
+              Solo los niveles ≥ 3 crean alerta. Cada una muestra la regla que la disparó y la evidencia
+              concreta detrás.
+            </p>
+            {dossier.alerts.length === 0 && <p>No hay alertas (el seguimiento no depende de ellas).</p>}
+            {dossier.alerts.map((a) => (
+              <div key={a.id} className={`alert-snippet alert-level-${a.alert_level}`}>
+                <strong>
+                  L{a.alert_level} · {a.status}
+                </strong>{" "}
+                — {a.title}
+                <div className="meta">
+                  {formatDateTime(a.created_at)}
+                  {a.driver_family_label ? ` · disparada por: ${a.driver_family_label}` : ""}
+                </div>
+                {a.plain_explanation && <p>{a.plain_explanation}</p>}
+                {a.what_now && (
+                  <p>
+                    <strong>Qué hacer:</strong> {a.what_now}
+                  </p>
+                )}
+                {a.evidence?.text && (
+                  <blockquote className="evidence-quote">
+                    <span className="meta">
+                      {a.evidence.source_label} · {formatDateTime(a.evidence.created_at)}
+                    </span>
+                    <br />
+                    {a.evidence.text}
+                  </blockquote>
+                )}
+                {a.resolution_notes && (
+                  <p className="meta">Resolución: {a.resolution_notes}</p>
+                )}
+                {a.dismiss_reason && <p className="meta">Descartada: {a.dismiss_reason}</p>}
+              </div>
+            ))}
+            <p>
+              <Link to="/professional/alerts">Ir a gestión de alertas →</Link>
+            </p>
+          </section>
+        )}
+
+        {tab === "motor" && (
+          <section className="card">
+            <h2>Cómo decidió el motor cada nivel</h2>
+            <p className="subtitle">
+              Las reglas se evalúan en orden y gana la primera que se cumple. Esta pantalla muestra el cálculo
+              tal y como se guardó en su momento; nunca lo recalcula con datos nuevos.
+            </p>
+            <RiskAssessmentTraceList assessments={dossier.assessments} />
+            {assessmentHasMore && (
+              <button type="button" disabled={historyBusy !== null} onClick={loadOlderAssessments}>
+                {historyBusy === "assessments" ? "Cargando…" : "Cargar evaluaciones anteriores"}
+              </button>
+            )}
+            <p className="meta">
+              Mostrando {dossier.assessments.length} evaluaciones, de más reciente a más antigua.
+            </p>
+          </section>
+        )}
+
+        {tab === "plan" && (
+          <section className="card">
+            <h2>Plan de seguridad del paciente</h2>
+            {!dossier.safety_plan && <p className="meta">Sin plan guardado.</p>}
+            {dossier.safety_plan && (
+              <dl className="plan-dl">
+                {(
+                  [
+                    ["Señales de alarma", dossier.safety_plan.warning_signs],
+                    ["Estrategias de afrontamiento", dossier.safety_plan.coping_strategies],
+                    ["Apoyos sociales", dossier.safety_plan.social_supports],
+                    ["Contactos profesionales", dossier.safety_plan.professional_contacts],
+                    ["Entorno seguro", dossier.safety_plan.safe_environment],
+                    ["Razones para vivir", dossier.safety_plan.reasons_to_live],
+                  ] as const
+                ).map(([label, val]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{val || "—"}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </section>
+        )}
+
+        {tab === "tecnico" && (
+          <section className="card">
+            <h2>Detalle técnico</h2>
+            <p className="subtitle">
+              Trazabilidad completa de cada llamada al Agente 2: modelo, versión de prompt y esquema, tokens,
+              latencia y errores. Útil para auditoría e incidencias; no hace falta para el trabajo clínico
+              diario.
+            </p>
+            <Agent2TraceList
+              traces={dossier.agent2_traces ?? []}
+              assessments={dossier.assessments}
+              legacySignalCount={
+                dossier.signals.filter(
+                  (signal) => signal.signal_type === "linguistic_analysis" && !signal.agent2_trace_id
+                ).length
+              }
+            />
+            {agent2HasMore && (
+              <button type="button" disabled={historyBusy !== null} onClick={loadOlderAgent2Traces}>
+                {historyBusy === "agent2" ? "Cargando…" : "Cargar trazas anteriores"}
+              </button>
+            )}
+            <h3>Protocolo de notificación (texto fijo del servidor, no generado por el LLM)</h3>
+            <p className="info">{dossier.professional_protocol.notes}</p>
+            <h4>Plantilla Nivel 3</h4>
+            <pre className="protocol-box">{dossier.professional_protocol.level3}</pre>
+            <h4>Plantilla Nivel 4</h4>
+            <pre className="protocol-box">{dossier.professional_protocol.level4}</pre>
+          </section>
+        )}
       </div>
     </div>
   );

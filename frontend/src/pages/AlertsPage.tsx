@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, AlertOut } from "../api";
+import { api, AlertOut, formatDateTime } from "../api";
 import { useAuth } from "../auth/AuthContext";
 
 export default function AlertsPage() {
@@ -98,7 +98,46 @@ export default function AlertsPage() {
               {a.patient_display_name || a.patient_email || a.user_id}
             </Link>
           </p>
-          <p>{a.description}</p>
+          {/* Why it fired, in the therapist's terms, before the raw description. */}
+          {a.driver_family_label && (
+            <p className="alert-driver">
+              <strong>Disparada por:</strong> {a.driver_family_label}
+              {a.rule_title ? ` — ${a.rule_title}` : ""}
+            </p>
+          )}
+          {a.plain_explanation && <p>{a.plain_explanation}</p>}
+
+          {/* The sentence or declaration behind the alert. An alert without
+              its source text cannot be triaged or dismissed responsibly. */}
+          {a.evidence?.text && (
+            <blockquote className="evidence-quote">
+              <span className="meta">
+                {a.evidence.source_label} · {formatDateTime(a.evidence.created_at)}
+                {a.evidence.category ? ` · ${a.evidence.category}` : ""}
+                {a.evidence.declared_by ? ` · declarado por ${a.evidence.declared_by}` : ""}
+              </span>
+              <br />
+              {a.evidence.text}
+            </blockquote>
+          )}
+          {!a.evidence?.text &&
+            (a.driver_family === "desviacion_estructural" || a.driver_family === "convergencia") && (
+              <p className="meta">
+                Origen: evolución de los check-ins. Abre la ficha del paciente para ver las gráficas.
+              </p>
+            )}
+
+          {a.what_now && (
+            <p>
+              <strong>Qué hacer:</strong> {a.what_now}
+            </p>
+          )}
+
+          <details className="alert-raw">
+            <summary>Descripción original del motor</summary>
+            <p style={{ whiteSpace: "pre-wrap" }}>{a.description}</p>
+          </details>
+
           <p className="meta">
             Estado: {a.status} · {new Date(a.created_at).toLocaleString()}
             {a.acknowledged_at && ` · reconocida ${new Date(a.acknowledged_at).toLocaleString()}`}
