@@ -1,7 +1,12 @@
 """
-Conversation orchestration: wires Agent 2 (linguistic analysis) -> the
-deterministic Risk Engine -> Agent 1 (conversational reply) together,
-per the "flujo de respuesta" in doc 20.
+Conversation orchestration: wires Agent 2 (linguistic analysis) and Agent 4
+(psychosocial extraction) -> the deterministic Risk Engine -> Agent 1
+(conversational reply) together, per the "flujo de respuesta" in doc 20.
+
+Both analysts read the patient's message before the engine runs, and neither
+can decide anything: Agent 2 returns linguistic signals, Agent 4 returns
+structured observations about the person's social context, and the
+deterministic engine is still the only place an alert level is chosen.
 
 Critical safety property, implemented here rather than left to prompting
 alone: at alert_level 3 and 4 the server-owned static templates in
@@ -42,6 +47,7 @@ from app.content.safety_resources import (
     LEVEL4_PATIENT_MESSAGE_SECONDARY,
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
+from app.services import psychosocial as psychosocial_service
 from app.services import risk_engine
 from app.services import agent2_trace
 from app.services.llm import StructuredAnalysisError, get_llm_provider
@@ -206,6 +212,23 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
         source_type="chat_message",
         source_id=source_message.id,
         correlation_id=correlation_id,
+    )
+
+    # 2b. Agent 4: turn the social context inside the same message -- housing,
+    #     money, who they live with, who they can still call, losses, feeling
+    #     like a burden -- into structured observations. It runs BEFORE the
+    #     risk engine on purpose: a message saying the flat is gone and the
+    #     sister moved out must be able to move the level in the same turn,
+    #     not on the next one. It never raises, so the pipeline degrades to
+    #     the previously known context when the provider is down.
+    psychosocial_service.extract_and_store(
+        db,
+        user.id,
+        user_message,
+        source_type="chat_message",
+        source_id=source_message.id,
+        correlation_id=correlation_id,
+        observed_at=source_message.created_at,
     )
 
     # 3. Deterministic risk engine: the ONLY place alert_level is decided.

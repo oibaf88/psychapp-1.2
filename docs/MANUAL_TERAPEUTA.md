@@ -23,14 +23,22 @@ y cómo auditar cualquier decisión del sistema hasta la frase que la produjo.
 | **Chat** | Conversación del paciente con el Agente 1. | Paciente |
 | **Agente 1** | Responde al paciente. Nunca calcula riesgo. | LLM (Claude) |
 | **Agente 2** | Lee cada texto (diario y chat) y devuelve señales estructuradas. | LLM (Claude) |
+| **Agente 4** | Lee los mismos textos y estructura el contexto psicosocial: vivienda, dinero, convivencia, apoyos, pérdidas, sentirse una carga, señales de despedida. | LLM (Claude) |
+| **Índices psicosociales** | Convierten esas observaciones en cuatro números con umbrales fijos. | Código determinista, sin IA |
 | **Score estructural** | Compara los últimos 7 días de check-ins con la línea base de 21 días del propio paciente. | Estadística local, sin IA |
 | **Motor de riesgo** | Decide el nivel 0–4 aplicando reglas fijas en orden. | **Código determinista, sin IA** |
 | **Alertas** | Se crean automáticamente en niveles 3 y 4. | Motor determinista |
 | **Agente 3 (copiloto)** | Te resume y responde preguntas sobre un paciente. Solo lectura. | LLM (Claude) |
 
-Lo importante: **ningún modelo de lenguaje decide el nivel de alarma**. El
-Agente 2 aporta observaciones sobre el texto; el motor determinista decide.
-El Agente 3 no puede escribir nada en el historial clínico.
+Lo importante: **ningún modelo de lenguaje decide el nivel de alarma**. Los
+Agentes 2 y 4 aportan observaciones sobre el texto; el motor determinista
+decide. El Agente 3 no puede escribir nada en el historial clínico.
+
+Lo segundo más importante: **el contexto social cuenta para el riesgo**. Un
+paciente cuyos check-ins no se mueven puede subir de nivel porque perdió la
+vivienda, se quedó sin la única persona con la que hablaba o empezó a
+repartir sus cosas. Eso es deliberado: es exactamente el material que se
+pierde en una conversación y que más pesa en una decisión clínica.
 
 ---
 
@@ -84,7 +92,7 @@ el nivel más alto de evidencia y **ningún modelo puede sobrescribirlo**
 
 ---
 
-## 4. Los tres agentes
+## 4. Los cuatro agentes
 
 ### Agente 1 — conversacional
 Habla con el paciente. Recibe el nivel de alarma ya calculado como contexto
@@ -100,11 +108,11 @@ validado:
 | Campo | Tipo | Entra en una regla de riesgo |
 |---|---|---|
 | `rumination_score` | 0–1 | Sí, como señal convergente (> 0.60) y en la regla extrema (> 0.85) |
-| `negative_valence` | 0–1 | No |
+| `negative_valence` | 0–1 | Sí, como señal sutil (> 0.70) en la regla 8 |
 | `urgency_level` | 0–1 | No |
 | `ambivalence` | 0–1 | No |
 | `emotional_complexity` | low/medium/high | No |
-| `ideation_indirect` | booleano | **No** — es informativo para ti |
+| `ideation_indirect` | booleano | **Sí**, pero solo acompañado de contexto psicosocial (reglas 4 y 8) |
 | `ideation_direct` | booleano | **Sí → nivel 4** |
 | `consumption_crisis` | booleano | **Sí → nivel 3** |
 | `short_rationale` | texto | No |
@@ -119,6 +127,69 @@ Habla **contigo**, nunca con el paciente. Recibe el expediente del paciente
 con fechas y fuentes y debe citarlas. Es **estrictamente de solo lectura**:
 no puede crear hechos, señales, evaluaciones ni alertas, ni cambiar el nivel
 de riesgo, ni escribir nada que el paciente lea.
+
+### Agente 4 — extractor de contexto psicosocial
+No habla con nadie. Lee el **mismo texto** que el Agente 2 y devuelve
+observaciones estructuradas sobre las circunstancias de vida del paciente:
+una por dominio, cada una con **la cita literal** que la justifica.
+
+Existe por un punto ciego concreto. Si un paciente escribe «mi hermana se ha
+ido de casa, el casero me ha dado un mes y le he dado mi guitarra a mi
+sobrino», el Agente 2 no marca ninguna bandera (no hay ideación, no hay
+crisis de consumo) y el score estructural no se mueve (no es un check-in).
+El mensaje se pierde. Leídas juntas, esas tres frases son la antesala de una
+crisis.
+
+Los 18 dominios se agrupan en cuatro bloques:
+
+| Bloque | Dominios |
+|---|---|
+| Condiciones materiales | vivienda · convivencia · economía · empleo y estructura diaria · necesidades básicas · situación legal · acceso a recursos |
+| Vínculos y apoyo | red de apoyo · familia · pareja · aislamiento · pérdidas y duelos · estigma · cuidados a cargo |
+| Riesgo interpersonal | sentirse una carga · no pertenecer |
+| Señales sutiles | señales de despedida · contexto social del consumo |
+
+Cada observación lleva: `state` (protector / neutro / riesgo leve /
+moderado / alto), `direction` (mejora / estable / empeora), `onset`
+(reciente / crónico), `confidence` (0–1) y la cita.
+
+**Lo que el Agente 4 NO hace:** no decide niveles, no diagnostica, no
+sobrescribe nada que tú hayas confirmado, y no puntúa: los índices los
+calcula código determinista a partir de sus observaciones.
+
+#### Los cuatro índices deterministas
+
+| Índice | Escala | Umbral que usa el motor |
+|---|---|---|
+| **Apoyo disponible** | 0–1, **más alto es mejor** | Bajo en ≤ 0.34 |
+| **Adversidad material** | 0–1, más alto es peor | Alta en ≥ 0.50 |
+| **Riesgo interpersonal** | 0–1, más alto es peor | Alto en ≥ 0.66 **y** expresado en los últimos 14 días |
+| **Contexto de recaída** | 0–1, más alto es peor | Alto en ≥ 0.60 |
+
+El índice de riesgo interpersonal combina *sentirse una carga* (peso 0.40),
+*no pertenecer* (0.35) y *aislamiento* (0.25): son los constructos de la
+teoría interpersonal del suicidio, y se siguen por separado porque su
+convergencia es lo que convierte un mensaje aparentemente anodino en una
+señal de alarma.
+
+Una observación con `confidence` por debajo de 0.50 **se te muestra pero no
+puntúa**: una mención de pasada o irónica no debe mover un umbral.
+
+#### Hechos frente a inferencias, también aquí
+Todo lo que produce el Agente 4 es una **inferencia**. En la pestaña
+«Contexto psicosocial» puedes:
+
+- **Confirmar** una lectura → se convierte en un hecho confirmado
+  (`psychosocial_context`) y, a partir de ahí, ninguna extracción posterior
+  puede cambiar ese dominio sin pasar por ti: las lecturas nuevas te
+  aparecen como *actualización pendiente*.
+- **Descartar** una lectura → sale del cálculo inmediatamente y el motor se
+  reevalúa sin ella. La fila se conserva en el historial con tu motivo.
+- **Registrar** contexto que el paciente nunca escribió (te lo contó en
+  consulta). Se guarda como declaración profesional y manda sobre el modelo.
+
+Confirmar un contexto psicosocial **no genera ninguna alerta por sí mismo**:
+esa categoría de hecho está deliberadamente fuera de las que elevan a N3/N4.
 
 ---
 
@@ -197,22 +268,41 @@ score solo: lee el desglose por variable.**
 
 ## 6. El motor de riesgo: cómo se genera cada nivel
 
-Es código Python determinista. No hay IA en él. Se evalúan **once reglas en
-orden fijo** y gana **la primera que se cumple**.
+Es código Python determinista. No hay IA en él. Se evalúan **dieciséis reglas
+en orden fijo** y gana **la primera que se cumple**. Las marcadas con 🏠 son
+las que leen el contexto psicosocial del Agente 4.
 
 | # | Regla | Nivel | Condición |
 |---|---|---|---|
 | 1 | `N4_declaracion_ideacion_o_plan` | 4 | Hecho confirmado `ideation_active` o `planning` en las últimas **48 h** |
 | 2 | `N4_senal_linguistica_ideacion_directa` | 4 | Señal del Agente 2 con `ideation_direct = true` y **menos de 12 h** de antigüedad |
 | 3 | `N4_convergencia_critica_extrema` | 4 | score < 0.20 **y** rumiación > 0.85 **y** sueño empeorando |
-| 4 | `N3_declaracion_crisis_consumo` | 3 | Hecho confirmado `consumption_crisis` en 48 h |
-| 5 | `N3_senal_linguistica_crisis_consumo` | 3 | Señal del Agente 2 con `consumption_crisis = true` (< 12 h) |
-| 6 | `N3_unstable_persistente_con_convergencia` | 3 | Banda `unstable` **y** ≥ 3 días naturales distintos inestables **y** (sueño empeorando **o** rumiación > 0.60) |
-| 7 | `N3_unstable_persistente` | 3 | Banda `unstable` **y** ≥ 5 días naturales distintos inestables |
-| 8 | `N2_desviacion_moderada` | 2 | Banda `transition`, o primer día en `unstable` |
-| 9 | `N0_estable` | 0 | Banda `stable` |
-| 10 | `N1_datos_insuficientes_o_sin_criterios` | 1 | Banda `insufficient_data` |
-| 11 | `N1_sin_criterios_superiores` | 1 | Regla de cierre |
+| 4 🏠 | `N4_convergencia_interpersonal_despedida` | 4 | Ideación **indirecta** (< 12 h) **y** riesgo interpersonal ≥ 0.66 expresado en 14 días **y** señal de despedida vigente |
+| 5 | `N3_declaracion_crisis_consumo` | 3 | Hecho confirmado `consumption_crisis` en 48 h |
+| 6 | `N3_senal_linguistica_crisis_consumo` | 3 | Señal del Agente 2 con `consumption_crisis = true` (< 12 h) |
+| 7 🏠 | `N3_desconexion_psicosocial_aguda` | 3 | Un dominio de apoyo o material **empeoró** en 14 días **y** hay señal interna sutil (ideación indirecta, rumiación > 0.60 o valencia negativa > 0.70) |
+| 8 🏠 | `N3_riesgo_interpersonal_alto` | 3 | Riesgo interpersonal ≥ 0.66 **y** expresado en los últimos 14 días |
+| 9 🏠 | `N3_riesgo_recaida_contextual` | 3 | Contexto de recaída ≥ 0.60 **y** tendencia de craving al alza |
+| 10 | `N3_unstable_persistente_con_convergencia` | 3 | Banda `unstable` **y** ≥ 3 días naturales distintos inestables **y** (sueño empeorando **o** rumiación > 0.60) |
+| 11 | `N3_unstable_persistente` | 3 | Banda `unstable` **y** ≥ 5 días naturales distintos inestables |
+| 12 | `N2_desviacion_moderada` | 2 | Banda `transition`, o primer día en `unstable` |
+| 13 🏠 | `N2_vulnerabilidad_psicosocial` | 2 | Apoyo ≤ 0.34, **o** adversidad material ≥ 0.50, **o** un deterioro en 14 días |
+| 14 | `N0_estable` | 0 | Banda `stable` |
+| 15 | `N1_datos_insuficientes_o_sin_criterios` | 1 | Banda `insufficient_data` |
+| 16 | `N1_sin_criterios_superiores` | 1 | Regla de cierre |
+
+**Por qué la regla 4 llega a nivel 4.** Ninguna de sus tres condiciones
+dispararía nada por separado: la ideación indirecta es demasiado frecuente
+para alertar sobre ella, sentirse una carga no es una alerta, y regalar una
+guitarra tampoco. Juntas, y dentro de la misma ventana de 14 días, son la
+constelación clásica que precede a un intento. Si al hablar con la persona
+resulta ser un falso positivo, descarta la observación de despedida: la
+regla deja de cumplirse al instante y queda registrado por qué.
+
+**Ojo con el punto ciego que estas reglas cubren.** El score estructural
+solo mira check-ins y el Agente 2 solo mira un texto reciente. Una persona
+que pierde la vivienda y los apoyos puede seguir puntuando su ánimo igual
+que siempre durante semanas. Las reglas 🏠 son las únicas que ven eso.
 
 ### 6.1 Ventanas temporales, y por qué importan
 
@@ -224,6 +314,13 @@ orden fijo** y gana **la primera que se cumple**.
 - **Persistencia estructural: días naturales distintos.** Cinco check-ins el
   mismo martes cuentan como **un** día, no como cinco. Esto evita que un
   paciente muy activo dispare la regla en una tarde.
+- **Contexto psicosocial: sin caducidad, pero con ventana de cambio.** Que
+  alguien perdiera el piso sigue siendo cierto la semana que viene, así que
+  los dominios no expiran: se sustituyen cuando el paciente cuenta algo
+  nuevo de ese dominio. Lo que sí tiene ventana son los **cambios**: sólo
+  cuentan como deterioro agudo, señal de despedida o riesgo interpersonal
+  «vivo» los de los últimos **14 días**. Un dominio sin noticias desde hace
+  más de 120 días se marca como *sin actualizar*.
 
 ### 6.2 Qué significa cada nivel
 
@@ -308,7 +405,8 @@ disparar.
 | Pestaña | Para qué |
 |---|---|
 | **Resumen** | Tarjeta de nivel con su explicación, score estructural explicado y desglosado, gráficas de nivel y de score, línea de tiempo de alertas y hechos. |
-| **Métricas** | Las cinco gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos y señales del Agente 2. Cada gráfica lleva su propia nota de «cómo se lee». |
+| **Contexto psicosocial** | Vivienda, dinero, convivencia, apoyos, pérdidas, carga percibida y señales de despedida, con la cita literal de cada dominio, los cuatro índices, y las preguntas sugeridas para la sesión. Desde aquí confirmas, descartas o añades observaciones. |
+| **Métricas** | Las seis gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos, señales del Agente 2 y evolución de los índices psicosociales. Cada gráfica lleva su propia nota de «cómo se lee». |
 | **Evidencia** | Una tarjeta por texto analizado: lo que escribió, lo que leyó el Agente 2, qué nivel salió y si generó alerta. Filtrable por chat / diario / con bandera. |
 | **Copiloto clínico** | Conversación con el Agente 3 sobre este paciente. |
 | **Chat del paciente** | Transcripción completa de su conversación con el Agente 1. |
@@ -322,6 +420,10 @@ disparar.
 
 En la gráfica de señales del Agente 2 puedes **pinchar un punto** para
 saltar directamente al texto que lo produjo en la pestaña Evidencia.
+
+La pestaña «Contexto psicosocial» muestra un aviso ⚠ con el número de
+dominios que han empeorado en los últimos 14 días, para que se vea desde la
+barra de pestañas sin tener que entrar.
 
 ---
 
@@ -366,6 +468,10 @@ como no verificada.** Es un modelo de lenguaje: puede equivocarse al leer.
 | «La IA decidió el nivel 4» | El nivel lo decidió una regla fija. La IA solo aportó la lectura de un texto. |
 | «Si no hay alerta, no hace falta mirar» | El historial completo está disponible sin alerta y ése es su uso normal. |
 | «El copiloto ha visto algo que yo no» | El copiloto ve exactamente lo mismo que tú, en las pestañas. Verifícalo. |
+| «El contexto psicosocial es un dato de contexto, no clínico» | Es la entrada de cinco reglas del motor, dos de ellas de nivel 3 y una de nivel 4. Cambia decisiones. |
+| «Si el Agente 4 lo dice, es que el paciente lo dijo» | El Agente 4 **interpreta**. La cita literal está en cada tarjeta: léela antes de darla por buena, y descarta la lectura si no se sostiene. |
+| «Confirmé un contexto psicosocial y no pasó nada» | Correcto: confirmar contexto no genera alerta por sí mismo. Lo que hace es blindar ese dominio frente a lecturas posteriores del modelo. |
+| «El paciente lleva meses sin apoyos, saltará la alerta cada día» | No: el riesgo interpersonal solo cuenta como «vivo» si se ha expresado en los últimos 14 días. Un estado crónico sin novedades no vuelve a disparar. |
 
 ---
 
@@ -402,6 +508,20 @@ como no verificada.** Es un modelo de lenguaje: puede equivocarse al leer.
   señal resultante y la evaluación de riesgo del mismo ciclo.
 - **Traza de Agent 2**: registro de una llamada al analista lingüístico
   (modelo, versión de prompt y esquema, tokens, latencia, resultado).
+- **Observación psicosocial**: lectura estructurada de UN dominio de la vida
+  del paciente (vivienda, apoyo, economía…), con su cita literal. Es una
+  inferencia hasta que la confirmas.
+- **Dominio**: cada una de las 18 facetas del contexto psicosocial que el
+  Agente 4 puede reconocer.
+- **Carga percibida / pertenencia frustrada**: los dos constructos de la
+  teoría interpersonal del suicidio — sentirse un lastre para los demás y no
+  sentir que se pertenece a ningún sitio. Se siguen por separado porque su
+  convergencia es más informativa que cualquiera de los dos por su cuenta.
+- **Señal de despedida**: marcador de preparación aparentemente inocuo
+  (regalar pertenencias, dejar asuntos en orden, mensajes de cierre, calma
+  repentina tras la desesperanza).
+- **Actualización pendiente**: lectura nueva del Agente 4 sobre un dominio
+  que tú ya habías confirmado. No se aplica sola; espera tu revisión.
 
 ---
 

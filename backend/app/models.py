@@ -371,6 +371,163 @@ class TherapistCopilotMessage(Base):
     )
 
 
+class PsychosocialObservation(Base):
+    """One structured reading of the patient's social context, per domain.
+
+    These are INFERENCES, on the same side of the fact/inference wall as
+    ``alfa_signals``: Agent 4 produced them from a sentence the patient wrote,
+    so they can be wrong and the therapist must be able to see the sentence.
+    Every row therefore carries ``evidence_quote`` plus a link to the chat
+    message or diary entry it came from.
+
+    Why a dedicated table instead of another ``alfa_signals`` row:
+
+      * The risk engine and the panel query these by DOMAIN and by "is this
+        still the current picture", which a JSON blob cannot index.
+      * A psychosocial situation persists — losing your flat is still true
+        next week — whereas a linguistic signal is a reading of one moment.
+        So rows are superseded explicitly (``is_current`` / ``superseded_by``)
+        instead of expiring after a 12-hour freshness window.
+      * A professional can confirm one into a ConfirmedFact. Once
+        ``confirmed_fact_id`` is set, the deterministic engine treats the
+        domain as declared rather than inferred, and no later Agent 4 run may
+        silently flip it.
+    """
+
+    __tablename__ = "psychosocial_observations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    domain: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    # protector | neutro | riesgo_leve | riesgo_moderado | riesgo_alto
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="desconocido")
+    # mejora | estable | empeora | desconocido
+    onset: Mapped[str] = mapped_column(String(16), nullable=False, default="desconocido")
+    # reciente | cronico | desconocido
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    # chat_message | diary_entry | professional
+    source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    extraction_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("psychosocial_extraction_traces.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    recorded_by: Mapped[str] = mapped_column(String(16), nullable=False, default="agent4")
+    # agent4 | professional | user
+
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    confirmed_fact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('protector','neutro','riesgo_leve','riesgo_moderado','riesgo_alto')",
+            name="ck_psychosocial_state",
+        ),
+        CheckConstraint(
+            "direction IN ('mejora','estable','empeora','desconocido')",
+            name="ck_psychosocial_direction",
+        ),
+        CheckConstraint("onset IN ('reciente','cronico','desconocido')", name="ck_psychosocial_onset"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_psychosocial_confidence"),
+        CheckConstraint(
+            "source_type IN ('chat_message','diary_entry','professional')",
+            name="ck_psychosocial_source_type",
+        ),
+        CheckConstraint(
+            "recorded_by IN ('agent4','professional','user')",
+            name="ck_psychosocial_recorded_by",
+        ),
+        Index("ix_psychosocial_user_domain_current", "user_id", "domain", "is_current"),
+        Index("ix_psychosocial_user_observed", "user_id", "observed_at"),
+    )
+
+
+class PsychosocialExtractionTrace(Base):
+    """Auditable lineage for one Agent 4 psychosocial-extraction request.
+
+    Same contract as ``agent2_analysis_traces``: committed as ``started``
+    before the outbound call, never duplicates clinical content, and links to
+    the source record rather than copying it. Kept in its own table so the
+    Agent 2 history a therapist reviews stays a history of Agent 2.
+    """
+
+    __tablename__ = "psychosocial_extraction_traces"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    chat_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    diary_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("diary_entries.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="anthropic")
+    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    response_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    effort: Mapped[str] = mapped_column(String(16), nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stop_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    observation_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    app_release: Mapped[str] = mapped_column(String(64), nullable=False, default="local")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("source_type IN ('chat_message','diary_entry')", name="ck_psychosocial_trace_source_type"),
+        CheckConstraint(
+            "(source_type = 'chat_message' AND chat_message_id IS NOT NULL AND diary_entry_id IS NULL) OR "
+            "(source_type = 'diary_entry' AND diary_entry_id IS NOT NULL AND chat_message_id IS NULL)",
+            name="ck_psychosocial_trace_exact_source",
+        ),
+        CheckConstraint(
+            "status IN ('started','succeeded','refused','invalid_output','configuration_error',"
+            "'provider_error','timeout','abandoned')",
+            name="ck_psychosocial_trace_status",
+        ),
+        Index("ix_psychosocial_trace_user_started", "user_id", "started_at"),
+        Index("ix_psychosocial_trace_status_started", "status", "started_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

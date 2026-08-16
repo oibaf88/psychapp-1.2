@@ -233,6 +233,61 @@ def build_dossier_text(db: Session, patient: User, window_days: int = DEFAULT_WI
     else:
         parts.append("## SEÑALES DEL AGENTE 2\nNinguna en la ventana.")
 
+    # --- psychosocial context ---------------------------------------------
+    # Included because most of the therapist's questions ("why did this go
+    # wrong in March?") are answered by circumstances, not by scores, and
+    # because Agent 3 must be able to cite the sentence behind each domain.
+    psychosocial = clinical_view.build_psychosocial_view(db, patient.id, history_limit=60)
+    counts["psychosocial_domains"] = psychosocial["known_domain_count"]
+    if psychosocial["available"]:
+        index_rows = "\n".join(
+            f"- {index['label']}: {index['value'] if index['value'] is not None else 'sin datos'} "
+            f"({index['band']}) — {index['threshold_note']}"
+            for index in psychosocial["indices"]
+        )
+        domain_rows = "\n".join(
+            f"- [{group['group_label']}] {card['label']}: {card['state_label']}, {card['direction_label']} "
+            f"({card['evidence_kind']}, {card['observed_at'] or 'sin fecha'}). {card['summary']}"
+            + (f" Cita: «{card['evidence_quote']}»" if card.get("evidence_quote") else "")
+            for group in psychosocial["groups"]
+            for card in group["domains"]
+        )
+        extra = []
+        if psychosocial["acute_deterioration"]:
+            extra.append(
+                "Deterioro en los últimos 14 días: "
+                + ", ".join(item["label"] for item in psychosocial["acute_deterioration"])
+            )
+        if psychosocial["leave_taking"]:
+            extra.append(
+                "SEÑAL DE DESPEDIDA VIGENTE: "
+                + (psychosocial["leave_taking"].get("summary") or "")
+                + (
+                    f" Cita: «{psychosocial['leave_taking'].get('evidence_quote')}»"
+                    if psychosocial["leave_taking"].get("evidence_quote")
+                    else ""
+                )
+            )
+        if psychosocial["pending_updates"]:
+            extra.append(
+                "Dominios con una lectura nueva pendiente de revisión profesional: "
+                + ", ".join(item["label"] for item in psychosocial["pending_updates"])
+            )
+        parts.append(
+            "## CONTEXTO PSICOSOCIAL (INFERENCIAS del Agente 4 sobre los textos del paciente, "
+            "salvo las marcadas como declaración profesional)\n"
+            "Estos son datos estructurados extraídos de lo que el paciente escribió; cada uno lleva su "
+            "cita. Cítalos como «(contexto psicosocial, dominio, fecha)».\n"
+            f"### Índices deterministas\n{index_rows}\n"
+            f"### Dominios\n{domain_rows}"
+            + (f"\n### A destacar\n" + "\n".join(f"- {line}" for line in extra) if extra else "")
+        )
+    else:
+        parts.append(
+            "## CONTEXTO PSICOSOCIAL\nSin datos todavía: el paciente no ha escrito nada sobre su "
+            "vivienda, economía, convivencia o apoyos, y ningún profesional lo ha registrado."
+        )
+
     # --- assessments and alerts -------------------------------------------
     assessments = (
         db.query(RiskAssessment)

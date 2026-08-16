@@ -89,6 +89,12 @@ def _verify_production_schema() -> None:
         ("risk_assessments", "linguistic_signal_id_used"),
         ("risk_assessments", "calculation_trace"),
         ("therapist_copilot_messages", "id"),
+        # Psychosocial context. Without these the risk engine would run every
+        # evaluation against a table that does not exist, so refuse to serve
+        # rather than degrade silently on every request.
+        ("psychosocial_observations", "id"),
+        ("psychosocial_observations", "evidence_quote"),
+        ("psychosocial_extraction_traces", "id"),
     }
     with engine.connect() as conn:
         rows = conn.execute(
@@ -98,36 +104,54 @@ def _verify_production_schema() -> None:
                 "WHERE table_schema = current_schema()"
             )
         ).all()
-        hardening = conn.execute(
-            text(
-                "SELECT owner_role.rolname, relation.relrowsecurity, relation.relforcerowsecurity "
-                "FROM pg_class relation "
-                "JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace "
-                "JOIN pg_roles owner_role ON owner_role.oid = relation.relowner "
-                "WHERE namespace.nspname = current_schema() "
-                "AND relation.relname = 'agent2_analysis_traces'"
-            )
-        ).first()
-        backend_policy = conn.execute(
-            text(
-                "SELECT 1 FROM pg_policies "
-                "WHERE schemaname = current_schema() "
-                "AND tablename = 'agent2_analysis_traces' "
-                "AND policyname = 'backend_full_access' "
-                "AND 'psychdeep_backend' = ANY(roles)"
-            )
-        ).first()
+        # Every table holding LLM-derived clinical content must be owned by
+        # the backend role with FORCE RLS and its backend policy in place.
+        hardened_tables = (
+            "agent2_analysis_traces",
+            "psychosocial_observations",
+            "psychosocial_extraction_traces",
+        )
+        hardening = {
+            row[0]: (row[1], row[2], row[3])
+            for row in conn.execute(
+                text(
+                    "SELECT relation.relname, owner_role.rolname, relation.relrowsecurity, "
+                    "       relation.relforcerowsecurity "
+                    "FROM pg_class relation "
+                    "JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace "
+                    "JOIN pg_roles owner_role ON owner_role.oid = relation.relowner "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND relation.relname = ANY(:names)"
+                ),
+                {"names": list(hardened_tables)},
+            ).all()
+        }
+        policies = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT tablename FROM pg_policies "
+                    "WHERE schemaname = current_schema() "
+                    "AND tablename = ANY(:names) "
+                    "AND policyname = 'backend_full_access' "
+                    "AND 'psychdeep_backend' = ANY(roles)"
+                ),
+                {"names": list(hardened_tables)},
+            ).all()
+        }
     available = {(row[0], row[1]) for row in rows}
     missing = sorted(required - available)
     if missing:
         raise RuntimeError(
-            "Production schema is missing the Agent 2/risk-explanation migration: "
-            + ", ".join(f"{table}.{column}" for table, column in missing)
+            "Production schema is missing an expand migration (Agent 2 / risk explanations / "
+            "psychosocial context): " + ", ".join(f"{table}.{column}" for table, column in missing)
         )
-    if not hardening or hardening[0] != "psychdeep_backend" or not hardening[1] or not hardening[2]:
-        raise RuntimeError("Agent 2 trace table owner/RLS hardening is incomplete")
-    if not backend_policy:
-        raise RuntimeError("Agent 2 trace table backend RLS policy is missing")
+    for table_name in hardened_tables:
+        state = hardening.get(table_name)
+        if not state or state[0] != "psychdeep_backend" or not state[1] or not state[2]:
+            raise RuntimeError(f"{table_name} owner/RLS hardening is incomplete")
+        if table_name not in policies:
+            raise RuntimeError(f"{table_name} backend RLS policy is missing")
 
 
 @app.on_event("startup")

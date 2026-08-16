@@ -494,8 +494,120 @@ class PatientMetricsOut(BaseModel):
     linguistic: list[dict[str, Any]] = []
     levels: list[dict[str, Any]] = []
     daily_levels: list[dict[str, Any]] = []
+    psychosocial: list[dict[str, Any]] = []
+    daily_psychosocial: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+
+
+# --------------------------------------------------- psychosocial context ---
+class PsychosocialIndexOut(BaseModel):
+    key: str
+    label: str
+    value: Optional[float] = None
+    band: str
+    direction: str
+    meaning: str
+    threshold_note: str
+
+
+class PsychosocialDomainOut(BaseModel):
+    """One domain of the patient's social context as it stands right now."""
+
+    domain: str
+    label: str
+    group: str
+    group_label: str
+    state: str
+    state_label: str
+    direction: str
+    direction_label: str
+    onset: str
+    onset_label: str
+    confidence: float
+    summary: str
+    evidence_quote: Optional[str] = None
+    meaning: Optional[str] = None
+    session_question: Optional[str] = None
+    observation_id: Optional[str] = None
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    recorded_by: str
+    is_declared: bool
+    evidence_kind: str
+    observed_at: Optional[str] = None
+    age_days: Optional[float] = None
+    is_recent_change: bool
+    is_stale: bool
+    counts_for_scoring: bool
+    has_pending_update: bool
+    risk_value: Optional[float] = None
+
+
+class PsychosocialGroupOut(BaseModel):
+    group: str
+    group_label: str
+    domains: list[PsychosocialDomainOut] = []
+
+
+class PsychosocialHistoryItemOut(BaseModel):
+    observation_id: str
+    domain: str
+    label: str
+    state: str
+    state_label: str
+    direction: str
+    summary: str
+    evidence_quote: Optional[str] = None
+    source_type: str
+    source_id: Optional[str] = None
+    recorded_by: str
+    is_current: bool
+    is_confirmed: bool
+    dismissed_at: Optional[str] = None
+    dismissed_reason: Optional[str] = None
+    observed_at: Optional[str] = None
+
+
+class PsychosocialSessionQuestionOut(BaseModel):
+    domain: str
+    label: str
+    question: str
+    because: str
+    quote: Optional[str] = None
+
+
+class PsychosocialViewOut(BaseModel):
+    available: bool
+    generated_at: Optional[str] = None
+    headline: str
+    what_this_is: str
+    indices: list[PsychosocialIndexOut] = []
+    groups: list[PsychosocialGroupOut] = []
+    acute_deterioration: list[dict[str, Any]] = []
+    leave_taking: Optional[dict[str, Any]] = None
+    protective_domains: list[dict[str, Any]] = []
+    pending_updates: list[dict[str, Any]] = []
+    stale_domains: list[dict[str, Any]] = []
+    session_questions: list[PsychosocialSessionQuestionOut] = []
+    known_domain_count: int
+    total_domain_count: int
+    history: list[PsychosocialHistoryItemOut] = []
+
+
+class PsychosocialObservationIn(BaseModel):
+    """A professional recording social context the texts never mentioned."""
+
+    domain: str
+    state: str
+    direction: str = "desconocido"
+    onset: str = "desconocido"
+    summary: str = Field(min_length=1, max_length=400)
+    evidence_quote: Optional[str] = Field(default=None, max_length=600)
+
+
+class PsychosocialDismissIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=600)
 
 
 # ------------------------------------------------------ therapist copilot ---
@@ -535,6 +647,7 @@ class PatientDossierOut(BaseModel):
     current_risk: Optional[RiskAssessmentOut] = None
     level_explanation: LevelExplanationOut
     structural_explanation: StructuralExplanationOut
+    psychosocial: PsychosocialViewOut
     metrics: PatientMetricsOut
     evidence: list[EvidenceItemOut] = []
     timeline: TimelineOut

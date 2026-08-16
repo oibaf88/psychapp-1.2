@@ -29,7 +29,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "resumen", label: "1. En una página" },
   { id: "roles", label: "2. Roles y permisos" },
   { id: "fuentes", label: "3. De dónde salen los datos" },
-  { id: "agentes", label: "4. Los tres agentes" },
+  { id: "agentes", label: "4. Los cuatro agentes" },
   { id: "score", label: "5. El score estructural" },
   { id: "motor", label: "6. El motor de riesgo" },
   { id: "paradoja", label: "7. Score alto + alerta 4" },
@@ -245,7 +245,7 @@ export default function ManualPage() {
 
           {active === "agentes" && (
             <>
-              <h2>4. Los tres agentes</h2>
+              <h2>4. Los cuatro agentes</h2>
               <h3>Agente 1 — conversacional</h3>
               <p>
                 Habla con el paciente. Recibe el nivel ya calculado como contexto de solo lectura y nunca
@@ -305,7 +305,7 @@ export default function ManualPage() {
                         <code>ideation_indirect</code>
                       </td>
                       <td>booleano</td>
-                      <td>No — informativo para ti</td>
+                      <td>Sí, pero solo junto a contexto psicosocial (reglas 4 y 7)</td>
                     </tr>
                     <tr className="row-highlight">
                       <td>
@@ -338,6 +338,82 @@ export default function ManualPage() {
               <p>
                 Si el modelo devuelve algo que no cumple el esquema, la salida se descarta entera y el motor
                 sigue sin señal lingüística para ese texto. Cada llamada queda registrada en «Detalle técnico».
+              </p>
+              <h3>Agente 4 — extractor de contexto psicosocial</h3>
+              <p>
+                No habla con nadie. Lee <strong>el mismo texto</strong> que el Agente 2 y devuelve
+                observaciones estructuradas sobre las circunstancias de vida del paciente: una por dominio,
+                cada una con <strong>la cita literal</strong> que la justifica.
+              </p>
+              <p className="manual-key">
+                Existe por un punto ciego concreto. Si alguien escribe «mi hermana se ha ido de casa, el casero
+                me ha dado un mes y le he dado mi guitarra a mi sobrino», el Agente 2 no marca ninguna bandera
+                y el score estructural no se mueve. Leídas juntas, esas tres frases son la antesala de una
+                crisis.
+              </p>
+              <p>Los 18 dominios se agrupan en cuatro bloques:</p>
+              <ul>
+                <li>
+                  <strong>Condiciones materiales:</strong> vivienda · convivencia · economía · empleo y
+                  estructura diaria · necesidades básicas · situación legal · acceso a recursos.
+                </li>
+                <li>
+                  <strong>Vínculos y apoyo:</strong> red de apoyo · familia · pareja · aislamiento · pérdidas y
+                  duelos · estigma · cuidados a cargo.
+                </li>
+                <li>
+                  <strong>Riesgo interpersonal:</strong> sentirse una carga · no pertenecer.
+                </li>
+                <li>
+                  <strong>Señales sutiles:</strong> señales de despedida · contexto social del consumo.
+                </li>
+              </ul>
+              <p>Sobre esas observaciones, código determinista calcula cuatro índices:</p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Índice</th>
+                      <th>Escala</th>
+                      <th>Umbral que usa el motor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Apoyo disponible</td>
+                      <td>
+                        0–1, <strong>más alto es mejor</strong>
+                      </td>
+                      <td>Bajo en ≤ 0.34</td>
+                    </tr>
+                    <tr>
+                      <td>Adversidad material</td>
+                      <td>0–1, más alto es peor</td>
+                      <td>Alta en ≥ 0.50</td>
+                    </tr>
+                    <tr className="row-highlight">
+                      <td>Riesgo interpersonal</td>
+                      <td>0–1, más alto es peor</td>
+                      <td>Alto en ≥ 0.66 y expresado en los últimos 14 días</td>
+                    </tr>
+                    <tr>
+                      <td>Contexto de recaída</td>
+                      <td>0–1, más alto es peor</td>
+                      <td>Alto en ≥ 0.60</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p>
+                El riesgo interpersonal combina <em>sentirse una carga</em> (peso 0.40), <em>no pertenecer</em>{" "}
+                (0.35) y <em>aislamiento</em> (0.25): los constructos de la teoría interpersonal del suicidio.
+                Una observación con confianza por debajo de 0.50 se te muestra pero <strong>no puntúa</strong>.
+              </p>
+              <p>
+                Todo lo que produce el Agente 4 es una <strong>inferencia</strong>. En la pestaña «Contexto
+                psicosocial» puedes confirmarla como hecho (y entonces ninguna extracción posterior puede
+                cambiar ese dominio sin pasar por ti), descartarla indicando el motivo (sale del cálculo al
+                instante), o registrar tú contexto que el paciente nunca escribió.
               </p>
               <h3>Agente 3 — copiloto clínico</h3>
               <p>
@@ -464,8 +540,9 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
             <>
               <h2>6. El motor de riesgo: cómo se genera cada nivel</h2>
               <p>
-                Es código determinista, sin IA. Se evalúan <strong>once reglas en orden fijo</strong> y gana{" "}
-                <strong>la primera que se cumple</strong>.
+                Es código determinista, sin IA. Se evalúan <strong>dieciséis reglas en orden fijo</strong> y
+                gana <strong>la primera que se cumple</strong>. Las marcadas con 🏠 leen el contexto
+                psicosocial del Agente 4.
               </p>
               <div className="table-wrap">
                 <table className="table">
@@ -483,14 +560,19 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                         ["1", "N4_declaracion_ideacion_o_plan", 4, "Hecho confirmado ideation_active o planning en las últimas 48 h"],
                         ["2", "N4_senal_linguistica_ideacion_directa", 4, "Señal del Agente 2 con ideation_direct = true y menos de 12 h"],
                         ["3", "N4_convergencia_critica_extrema", 4, "score < 0.20 y rumiación > 0.85 y sueño empeorando"],
-                        ["4", "N3_declaracion_crisis_consumo", 3, "Hecho confirmado consumption_crisis en 48 h"],
-                        ["5", "N3_senal_linguistica_crisis_consumo", 3, "Señal del Agente 2 con consumption_crisis = true (< 12 h)"],
-                        ["6", "N3_unstable_persistente_con_convergencia", 3, "unstable y ≥ 3 días naturales distintos y (sueño empeorando o rumiación > 0.60)"],
-                        ["7", "N3_unstable_persistente", 3, "unstable y ≥ 5 días naturales distintos"],
-                        ["8", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
-                        ["9", "N0_estable", 0, "Banda stable"],
-                        ["10", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
-                        ["11", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
+                        ["4 🏠", "N4_convergencia_interpersonal_despedida", 4, "Ideación indirecta (< 12 h) y riesgo interpersonal ≥ 0.66 expresado en 14 días y señal de despedida vigente"],
+                        ["5", "N3_declaracion_crisis_consumo", 3, "Hecho confirmado consumption_crisis en 48 h"],
+                        ["6", "N3_senal_linguistica_crisis_consumo", 3, "Señal del Agente 2 con consumption_crisis = true (< 12 h)"],
+                        ["7 🏠", "N3_desconexion_psicosocial_aguda", 3, "Un dominio de apoyo o material empeoró en 14 días y hay señal interna sutil (ideación indirecta, rumiación > 0.60 o valencia negativa > 0.70)"],
+                        ["8 🏠", "N3_riesgo_interpersonal_alto", 3, "Riesgo interpersonal ≥ 0.66 y expresado en los últimos 14 días"],
+                        ["9 🏠", "N3_riesgo_recaida_contextual", 3, "Contexto de recaída ≥ 0.60 y tendencia de craving al alza"],
+                        ["10", "N3_unstable_persistente_con_convergencia", 3, "unstable y ≥ 3 días naturales distintos y (sueño empeorando o rumiación > 0.60)"],
+                        ["11", "N3_unstable_persistente", 3, "unstable y ≥ 5 días naturales distintos"],
+                        ["12", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
+                        ["13 🏠", "N2_vulnerabilidad_psicosocial", 2, "Apoyo ≤ 0.34, o adversidad material ≥ 0.50, o un deterioro en 14 días"],
+                        ["14", "N0_estable", 0, "Banda stable"],
+                        ["15", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
+                        ["16", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
                       ] as const
                     ).map(([n, code, level, condition]) => (
                       <tr key={code}>
@@ -676,7 +758,8 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                     {(
                       [
                         ["Resumen", "Tarjeta de nivel con su explicación, score estructural desglosado, gráficas de nivel y score, línea de tiempo de alertas y hechos."],
-                        ["Métricas", "Las cinco gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos y señales del Agente 2. Cada una con su nota de «cómo se lee»."],
+                        ["Contexto psicosocial", "Vivienda, dinero, convivencia, apoyos, pérdidas, carga percibida y señales de despedida, con la cita literal de cada dominio, los cuatro índices y las preguntas sugeridas para la sesión. Desde aquí confirmas, descartas o añades observaciones."],
+                        ["Métricas", "Las seis gráficas: nivel de alarma, score estructural, z-scores por variable, check-ins crudos, señales del Agente 2 y evolución de los índices psicosociales. Cada una con su nota de «cómo se lee»."],
                         ["Evidencia", "Una tarjeta por texto analizado: lo que escribió, lo que leyó el Agente 2, qué nivel salió y si generó alerta. Filtrable."],
                         ["Copiloto clínico", "Conversación con el Agente 3 sobre este paciente."],
                         ["Chat del paciente", "Transcripción completa de su conversación con el Agente 1."],

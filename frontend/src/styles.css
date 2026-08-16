@@ -1451,6 +1451,183 @@ tr.direction-peor td:first-child {
   background: #eef4fb;
   color: #22557f;
 }
+.event-tag-psychosocial {
+  background: #f1edfa;
+  color: #543f8c;
+}
+
+/* --- psychosocial context ------------------------------------------- */
+.ps-headline {
+  font-size: 1.02rem;
+  line-height: 1.5;
+  margin: 8px 0 14px;
+}
+
+.ps-indices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.ps-index {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--card-bg);
+}
+
+.ps-index-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ps-index-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* The bar is a magnitude, not a judgement: the colour comes from the band
+   the backend computed, because "high" is good for support and bad for the
+   other three indices. */
+.ps-index-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: #eef1f5;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.ps-index-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #9aa5b1;
+}
+
+.ps-index-bueno .ps-index-bar span {
+  background: #2e7d32;
+}
+.ps-index-regular .ps-index-bar span {
+  background: #e0a800;
+}
+.ps-index-malo .ps-index-bar span {
+  background: #c1121f;
+}
+.ps-index-malo {
+  border-color: #f0c2be;
+}
+
+.ps-group {
+  margin-top: 20px;
+}
+
+.ps-group h3 {
+  margin-bottom: 8px;
+}
+
+.ps-domain-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.ps-domain {
+  border: 1px solid var(--border);
+  border-left: 5px solid #9aa5b1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card-bg);
+}
+
+.ps-tone-good {
+  border-left-color: #2e7d32;
+}
+.ps-tone-neutral {
+  border-left-color: #9aa5b1;
+}
+.ps-tone-warn {
+  border-left-color: #e0a800;
+}
+.ps-tone-warn-strong {
+  border-left-color: #e07a1f;
+}
+.ps-tone-bad {
+  border-left-color: var(--danger);
+}
+
+.ps-domain-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ps-domain-head h4 {
+  margin: 0 4px 0 0;
+  font-size: 1rem;
+}
+
+.ps-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #eef1f5;
+  color: #47535f;
+}
+
+.ps-chip-good {
+  background: #e7f4e8;
+  color: #1f5c23;
+}
+.ps-chip-warn {
+  background: #fdf3d9;
+  color: #7a5a00;
+}
+.ps-chip-warn-strong {
+  background: #fbe6d2;
+  color: #8a4408;
+}
+.ps-chip-bad {
+  background: #fdecea;
+  color: #a12a1c;
+}
+.ps-chip-new {
+  background: #e8eefc;
+  color: #24467f;
+}
+/* A declaration is visually distinct from an inference on purpose. */
+.ps-chip-fact {
+  background: #22557f;
+  color: #ffffff;
+}
+
+.ps-question {
+  border-left: 3px solid var(--primary);
+  padding-left: 10px;
+  margin: 10px 0 0;
+}
+
+.ps-domain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ps-session .ps-question-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.ps-session .ps-question-list li {
+  margin-bottom: 10px;
+}
 
 /* --- evidence feed --------------------------------------------------- */
 .evidence-feed {

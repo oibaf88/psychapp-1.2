@@ -33,11 +33,20 @@ that was just the working filename. Core ideas from the docs:
   into an `alert_level` 0–4 through an explicit, auditable rule cascade — because
   risk classification in a system like this must be traceable and reproducible, not
   a black box.
-- A **two-agent LLM architecture**: one agent talks to the patient (empathetic,
+- A **multi-agent LLM architecture**: one agent talks to the patient (empathetic,
   grounded in MI/CBT/DBT-STOP/urge-surfing techniques, always redirecting to crisis
   resources when needed, and explicitly never allowed to compute or state a risk
-  level itself); a second, separate agent only ever reads free text the user wrote
-  and returns structured data about it — it never talks to the user.
+  level itself); separate agents only ever read free text the user wrote and return
+  structured data about it — they never talk to the user. Agent 2 returns linguistic
+  signals; Agent 4 returns the patient's **psychosocial context**; Agent 3 is a
+  read-only copilot for the therapist.
+- **Psychosocial context as first-class clinical data.** When a patient mentions in
+  passing that their sister moved out, that the landlord gave them a month, or that
+  they gave their guitar to their nephew, Agent 4 turns each into a structured
+  observation carrying the literal quote. Deterministic code folds those into four
+  indices, and the risk engine reads them under fixed thresholds. This closes a real
+  blind spot: none of those sentences trips a linguistic flag and none of them touches
+  a check-in, so before this the whole constellation was invisible to the engine.
 - **Server-owned, static Spanish crisis messaging** for Level 3/4 escalations —
   these are never LLM-generated, so a crisis response never depends on API
   availability or model behavior. They include Línea 024, 112, and Madrid-specific
@@ -80,8 +89,9 @@ provider could be swapped in without touching the rest of the app.
 | Area | What's implemented | Source material |
 |---|---|---|
 | Fact vs. inference model | `ConfirmedFact` / `AlfaSignal` tables, facts immutable except via versioned correction | "Muro de Hechos vs Inferencias" docs |
-| Deterministic risk engine | `app/services/risk_engine.py` — evaluates all 11 rules, persists an immutable `calculation_trace` with formulas, z-scores, thresholds, evidence, matched/selected rules and the final conclusion; the professional UI renders this snapshot without recalculating it | risk-engine pseudocode/schema docs |
-| Two-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, never computes risk) + Agent 2 (strict structured analysis). `agent2_analysis_traces` links exact chat/diary source, validated output signal, provider metadata and the risk assessment that consumed it | final two-agent architecture summary docs |
+| Deterministic risk engine | `app/services/risk_engine.py` — evaluates all 16 rules (11 original + 5 psychosocial), persists an immutable `calculation_trace` with formulas, z-scores, thresholds, evidence, matched/selected rules and the final conclusion; the professional UI renders this snapshot without recalculating it | risk-engine pseudocode/schema docs |
+| Multi-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, never computes risk) + Agent 2 (strict structured analysis). `agent2_analysis_traces` links exact chat/diary source, validated output signal, provider metadata and the risk assessment that consumed it | final two-agent architecture summary docs |
+| Psychosocial context | Agent 4 (`AGENT4_SYSTEM_PROMPT` + 18-domain catalogue in `app/content/psychosocial_catalog.py`) extracts one structured observation per domain with its literal quote into `psychosocial_observations`; `psychosocial_extraction_traces` carries the same lineage contract as Agent 2; `app/services/psychosocial.py` folds them into four deterministic indices consumed by five risk rules | "contexto de apoyo y social" requirement; Interpersonal Theory of Suicide for the two interpersonal constructs |
 | Escalation messaging | Static, server-owned Spanish templates for Level 3 (professional alarm) and Level 4 (emergency/crisis), in `app/content/safety_resources.py` | escalation-copy docs |
 | Local structural baseline | Rolling Z-score `structural_score` (1.0 = matches personal baseline → 0 = severe deviation) + `confidence_band` (stable/transition/unstable), computed locally in `app/services/baseline.py` | see **Assumption (a)** below — this deliberately replaces a third-party service mentioned in one doc |
 | RBAC | Role-scoped permissions (signal visibility, fact visibility, alert/assignment management, audit log access) for `therapist` / `supervisor` / `admin_clinical` in `security.py` + router-level dependencies | RBAC matrix doc |
@@ -343,12 +353,14 @@ psychapp/
 │   │   ├── main.py            # FastAPI app, CORS, startup seeding
 │   │   ├── config.py          # env-driven settings
 │   │   ├── database.py
-│   │   ├── models.py          # SQLAlchemy models (18 tables)
+│   │   ├── models.py          # SQLAlchemy models (21 tables)
 │   │   ├── schemas.py         # Pydantic request/response models
 │   │   ├── security.py        # JWT auth + bcrypt hashing
 │   │   ├── seed.py            # idempotent demo data
 │   │   ├── content/
-│   │   │   ├── prompts.py         # Agent 1 / 2 / 3 system prompts + tool schema
+│   │   │   ├── prompts.py         # Agent 1 / 2 / 3 / 4 system prompts + tool schemas
+│   │   │   ├── psychosocial_catalog.py # the 18 psychosocial domains: labels, weights,
+│   │   │   │                            #   clinical meaning, what to ask in session
 │   │   │   └── safety_resources.py # static Spanish crisis copy + resources
 │   │   ├── services/
 │   │   │   ├── llm/                # swappable LLM provider (Anthropic implementation)
@@ -356,8 +368,10 @@ psychapp/
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
 │   │   │   ├── clinical_view.py    # Spanish explanations, metric series, evidence feed
 │   │   │   ├── clinical_copilot.py # Agent 3: therapist <-> LLM, read-only over the record
+│   │   │   ├── psychosocial.py     # Agent 4 extraction + deterministic index over domains
+│   │   │   ├── psychosocial_trace.py # privacy-preserving Agent 4 lineage
 │   │   │   ├── agent2_trace.py     # privacy-preserving Agent 2 lineage
-│   │   │   ├── conversation.py     # Agent2 -> risk_engine -> Agent1 orchestration
+│   │   │   ├── conversation.py     # Agent2 + Agent4 -> risk_engine -> Agent1 orchestration
 │   │   │   ├── notifications.py
 │   │   │   ├── audit.py
 │   │   │   └── timeline.py
@@ -372,8 +386,9 @@ psychapp/
         ├── api.ts
         ├── auth/AuthContext.tsx
         ├── components/         # ClinicalCharts (recharts), ClinicalExplain (narrative +
-        │                        #  evidence feed), CopilotPanel, ClinicalTraceability
-        │                        #  (raw technical audit UI, now behind a "detail" tab)
+        │                        #  evidence feed), PsychosocialPanel (domain cards with
+        │                        #  quotes, confirm/dismiss), CopilotPanel,
+        │                        #  ClinicalTraceability (raw audit UI, behind a "detail" tab)
         └── pages/               # Login/Register, PatientDashboard, DiaryPage, ChatPage,
                                   #  WavePage, SafetyPlanPage, ProfessionalDashboard,
                                   #  AlertsPage, PatientDetailPage, CopilotPage, ManualPage
@@ -390,7 +405,11 @@ returned pre-explained, and the raw trace is available but demoted to a
 |---|---|
 | `GET /professional/patients/{id}/dossier` | Everything below, in one call |
 | `GET /professional/patients/{id}/explanation` | Why this patient is at this level, in Spanish, naming the evidence family that drove it |
-| `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, Agent 2 signals, event markers |
+| `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, Agent 2 signals, psychosocial indices over time, event markers |
+| `GET /professional/patients/{id}/psychosocial` | The patient's social context by domain, each with its literal quote, plus the four deterministic indices and the questions worth asking in session |
+| `POST /professional/patients/{id}/psychosocial` | Record context the patient never wrote about, as a professional declaration |
+| `POST /professional/patients/{id}/psychosocial/{obs}/confirm` | Promote one Agent 4 inference to a confirmed fact |
+| `POST /professional/patients/{id}/psychosocial/{obs}/dismiss` | Retire a wrong reading with a reason; the engine re-runs without it |
 | `GET /professional/patients/{id}/evidence` | One row per analysed text: what the patient wrote, what Agent 2 read in it, which level it produced and which alert it generated |
 | `GET /professional/patients/{id}/chat` | The patient's own conversation with Agent 1 |
 | `GET/POST /professional/patients/{id}/copilot/messages` | Agent 3, the read-only clinical copilot |
@@ -406,8 +425,16 @@ Three design points worth knowing:
 - **The composite is a mean of absolute z-scores**, so a large improvement also
   lowers the score. The API therefore also returns an adverse/favourable split
   and a per-variable direction, and the UI leads with those.
-- **Chat and diary are both sources.** Agent 2 analyses both, so both are
-  readable by the assigned professional and both appear in the evidence feed.
+- **Chat and diary are both sources.** Agent 2 and Agent 4 analyse both, so both
+  are readable by the assigned professional and both appear in the evidence feed.
+- **Social context can move the level on its own.** Five deterministic rules read
+  Agent 4's output: acute social rupture plus a subtle inner signal (N3), high
+  interpersonal risk voiced in the last 14 days (N3), relapse context with craving
+  rising (N3), psychosocial vulnerability (N2), and the convergence of indirect
+  ideation + perceived burdensomeness + a leave-taking marker (N4). That last one
+  exists because each of its three parts reads as harmless in isolation. Every one
+  of them stores the quotes it used, and the therapist can dismiss any single
+  reading — the engine then re-runs without it.
 
 Agent 3 is strictly read-only: it can create no facts, signals, assessments or
 alerts, so nothing it says can change a patient's alert level or what the

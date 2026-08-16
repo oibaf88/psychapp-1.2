@@ -18,7 +18,15 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models import CheckIn, ConfirmedFact, Consent, PatientProfessionalAssignment, SafetyPlan, User
+from app.models import (
+    CheckIn,
+    ConfirmedFact,
+    Consent,
+    PatientProfessionalAssignment,
+    PsychosocialObservation,
+    SafetyPlan,
+    User,
+)
 from app.security import hash_password
 
 DEMO_PASSWORD = "DemoPass123!"
@@ -84,6 +92,52 @@ def seed_demo_data(db: Session) -> None:
             declared_by="user",
         )
     )
+    db.commit()
+
+    # A small, deliberately UNALARMING psychosocial picture, so the context
+    # panel has something to show without an ANTHROPIC_API_KEY configured.
+    # Every row here is below the rule thresholds on purpose: the demo should
+    # illustrate the panel, not fabricate an alert nobody triggered.
+    for domain, state, direction, summary, quote in (
+        (
+            "vivienda",
+            "neutro",
+            "estable",
+            "Vive de alquiler con dos compañeros; sin incidencias declaradas.",
+            "sigo en el piso con los de siempre",
+        ),
+        (
+            "apoyo_social",
+            "protector",
+            "mejora",
+            "Ha retomado el grupo de ayuda mutua de los martes.",
+            "he vuelto al grupo de los martes",
+        ),
+        (
+            "empleo_ocupacion",
+            "riesgo_leve",
+            "estable",
+            "Trabajo por horas, sin turno fijo; la rutina diaria es irregular.",
+            "unos días curro y otros no, según me llamen",
+        ),
+    ):
+        db.add(
+            PsychosocialObservation(
+                user_id=patient.id,
+                domain=domain,
+                state=state,
+                direction=direction,
+                onset="desconocido",
+                confidence=0.8,
+                summary=summary,
+                evidence_quote=quote,
+                source_type="chat_message",
+                source_id=None,
+                recorded_by="agent4",
+                is_current=True,
+                observed_at=now - timedelta(days=3),
+            )
+        )
     db.commit()
 
     # Run risk engine once so the therapist sees a real assessment (expected ~0–1

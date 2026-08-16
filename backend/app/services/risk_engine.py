@@ -5,17 +5,36 @@ Direct implementation of the pseudocode in doc 17 ("Motor de Riesgo
 Determinista") and the helper functions in doc 18. This module is the
 single source of truth for alert_level (0-4). No LLM call ever happens
 inside this module.
+
+Four families of evidence reach it, all of them precomputed elsewhere:
+
+  * confirmed facts (declarations by the patient or a professional),
+  * Agent 2's linguistic signals over one recent text,
+  * the structural score over the patient's own check-in baseline,
+  * and, since v1.3, the psychosocial profile built by
+    ``app/services/psychosocial.py`` from what the patient told Agent 1
+    about their housing, money, household and support network.
+
+The psychosocial rules exist because of a specific blind spot. Losing your
+flat, your sister moving out and giving your guitar away are three sentences
+that trip no linguistic flag and touch no check-in, so the first three
+families see nothing at all. Read together, against fixed thresholds, they
+are the constellation that precedes a crisis. The engine reads them the same
+way it reads everything else: ordered rules, explicit conditions, the whole
+evaluation written into ``calculation_trace``.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.content.psychosocial_catalog import domain_label
 from app.models import AlfaSignal, ConfirmedFact, ProfessionalAlert, RiskAssessment
 from app.services import baseline as baseline_service
 from app.services import notifications as notification_service
+from app.services import psychosocial as psychosocial_service
 
-MODEL_VERSION = "risk-engine-v1.2"
+MODEL_VERSION = "risk-engine-v1.3"
 
 # N4 (emergencia): only explicit self-harm crisis declarations / ideation.
 N4_FACT_CATEGORIES = {"ideation_active", "planning"}
@@ -26,6 +45,12 @@ STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT = 3
 STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE = 5
 # Do not spam professionals with duplicate open alerts at the same level.
 ALERT_DEDUPE_HOURS = 24
+
+# Thresholds for the "subtle inner signal" half of the psychosocial rules.
+# Deliberately below the levels that fire on their own: the point of these
+# rules is that neither half would trigger anything by itself.
+SUBTLE_RUMINATION_MIN = 0.60
+SUBTLE_NEGATIVE_VALENCE_MIN = 0.70
 
 
 def _utc_iso(value: datetime) -> str:
@@ -120,10 +145,24 @@ def _linguistic_flags(
         "eligible_for_risk": bool(signals),
         "freshness_window_hours": window_hours,
         "ideation_direct": _truthy(value.get("ideation_direct")),
+        # Indirect ideation raises nothing on its own -- it is far too common
+        # to alert on -- but it is the inner half of the psychosocial
+        # convergence rules below.
+        "ideation_indirect": _truthy(value.get("ideation_indirect")),
         "consumption_crisis": _truthy(value.get("consumption_crisis")),
         "rumination_score": value.get("rumination_score"),
+        "negative_valence": value.get("negative_valence"),
         "raw": value,
     }
+
+
+def _psychosocial_profile(db: Session, user_id):
+    """Current psychosocial picture, computed deterministically from rows.
+
+    Wrapped in its own function so the rule table below reads uniformly and
+    so tests can substitute a profile without a database.
+    """
+    return psychosocial_service.current_profile(db, user_id)
 
 
 def _persistence_band(db: Session, user_id, band: str, days_minimum: int) -> bool:
@@ -391,7 +430,28 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
     sleep_values = [float(row.sleep_hours) for row in ordered_checkins]
     sleep_detail = baseline_service.calculate_trend_detail(sleep_values)
     sleep_worsening = sleep_detail.label == "empeorando"
-    rumination_high = isinstance(rumination, (int, float)) and rumination > 0.60
+    craving_values = [float(row.craving) for row in ordered_checkins]
+    craving_detail = baseline_service.calculate_trend_detail(craving_values)
+    craving_rising = craving_detail.label == "aumentando"
+    rumination_high = isinstance(rumination, (int, float)) and rumination > SUBTLE_RUMINATION_MIN
+    negative_valence = ling.get("negative_valence")
+    negative_valence_high = (
+        isinstance(negative_valence, (int, float)) and negative_valence > SUBTLE_NEGATIVE_VALENCE_MIN
+    )
+
+    # --- psychosocial context -------------------------------------------
+    # None of these predicates is a decision. They are the same kind of
+    # precomputed input as `sleep_worsening`: a number compared with a
+    # constant, recorded below so the therapist can see both.
+    agent2_available = bool(ling["eligible_for_risk"])
+    profile = _psychosocial_profile(db, user_id)
+    interpersonal_live = profile.interpersonal_risk_is_live
+    leave_taking = profile.has_leave_taking_signal
+    acute_rupture = profile.has_acute_rupture
+    ideation_indirect = bool(ling.get("ideation_indirect")) and agent2_available
+    # The "inner half" of a convergence rule: something the person expressed
+    # that, alone, is far too ordinary to alert on.
+    subtle_inner_signal = bool(ideation_indirect or rumination_high or negative_valence_high)
 
     n4_facts = _facts_in_categories(db, user_id, N4_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
     n3_facts = _facts_in_categories(db, user_id, N3_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
@@ -402,7 +462,6 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
     structural_extreme = structural.score is not None and structural.score < 0.20
     rumination_extreme = isinstance(rumination, (int, float)) and rumination > 0.85
     extreme_convergence = structural_extreme and rumination_extreme and sleep_worsening
-    agent2_available = bool(ling["eligible_for_risk"])
 
     rules = [
         _trace_rule(
@@ -440,6 +499,46 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             extreme_convergence if structural.score is not None and rumination is not None else None,
         ),
         _trace_rule(
+            "N4_convergencia_interpersonal_despedida",
+            4,
+            "Ideación indirecta + riesgo interpersonal alto + señales de despedida",
+            [
+                _trace_condition(
+                    "ideación indirecta en una señal vigente",
+                    ideation_indirect if agent2_available else None,
+                    "eq",
+                    True,
+                    ideation_indirect if agent2_available else None,
+                ),
+                _trace_condition(
+                    "índice de riesgo interpersonal",
+                    profile.interpersonal_risk_index,
+                    "gte",
+                    psychosocial_service.INTERPERSONAL_RISK_HIGH_MIN,
+                    profile.interpersonal_risk_is_high,
+                ),
+                _trace_condition(
+                    "riesgo interpersonal expresado en los últimos 14 días",
+                    profile.interpersonal_recent_evidence,
+                    "not_empty",
+                    True,
+                    bool(profile.interpersonal_recent_evidence),
+                ),
+                _trace_condition(
+                    "señal de despedida vigente",
+                    profile.leave_taking.summary if profile.leave_taking else None,
+                    "eq",
+                    True,
+                    leave_taking,
+                ),
+            ],
+            (
+                None
+                if not agent2_available or profile.interpersonal_risk_index is None
+                else (ideation_indirect and interpersonal_live and leave_taking)
+            ),
+        ),
+        _trace_rule(
             "N3_declaracion_crisis_consumo",
             3,
             "Hecho confirmado reciente de crisis de consumo",
@@ -461,6 +560,82 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
                 ),
             ],
             (ling["consumption_crisis"] if agent2_available else None),
+        ),
+        _trace_rule(
+            "N3_desconexion_psicosocial_aguda",
+            3,
+            "Ruptura psicosocial reciente junto a una señal interna sutil",
+            [
+                _trace_condition(
+                    "dominios psicosociales deteriorados en 14 días",
+                    profile.acute_deterioration,
+                    "not_empty",
+                    True,
+                    acute_rupture,
+                ),
+                _trace_condition(
+                    "ideación indirecta, rumiación > 0.60 o valencia negativa > 0.70",
+                    {
+                        "ideation_indirect": ideation_indirect if agent2_available else None,
+                        "rumination_score": rumination,
+                        "negative_valence": negative_valence,
+                    },
+                    "any",
+                    {
+                        "ideation_indirect": True,
+                        "rumination_score_gt": SUBTLE_RUMINATION_MIN,
+                        "negative_valence_gt": SUBTLE_NEGATIVE_VALENCE_MIN,
+                    },
+                    subtle_inner_signal,
+                ),
+            ],
+            None if not profile.available else (acute_rupture and subtle_inner_signal),
+        ),
+        _trace_rule(
+            "N3_riesgo_interpersonal_alto",
+            3,
+            "Sentirse una carga y no pertenecer, expresado en los últimos 14 días",
+            [
+                _trace_condition(
+                    "índice de riesgo interpersonal",
+                    profile.interpersonal_risk_index,
+                    "gte",
+                    psychosocial_service.INTERPERSONAL_RISK_HIGH_MIN,
+                    profile.interpersonal_risk_is_high,
+                ),
+                _trace_condition(
+                    "expresado en los últimos 14 días",
+                    profile.interpersonal_recent_evidence,
+                    "not_empty",
+                    True,
+                    bool(profile.interpersonal_recent_evidence),
+                ),
+            ],
+            None if profile.interpersonal_risk_index is None else interpersonal_live,
+        ),
+        _trace_rule(
+            "N3_riesgo_recaida_contextual",
+            3,
+            "Contexto de recaída sostenido con craving al alza",
+            [
+                _trace_condition(
+                    "índice de contexto de recaída",
+                    profile.relapse_context_index,
+                    "gte",
+                    psychosocial_service.RELAPSE_CONTEXT_HIGH_MIN,
+                    profile.relapse_context_is_high,
+                ),
+                _trace_condition(
+                    "tendencia de craving",
+                    craving_detail.label,
+                    "eq",
+                    "aumentando",
+                    craving_rising,
+                ),
+            ],
+            None
+            if profile.relapse_context_index is None
+            else bool(profile.relapse_context_is_high and craving_rising),
         ),
         _trace_rule(
             "N3_unstable_persistente_con_convergencia",
@@ -507,6 +682,37 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             or (structural.confidence_band == "unstable" and persistence_1["passed"]),
         ),
         _trace_rule(
+            "N2_vulnerabilidad_psicosocial",
+            2,
+            "Apoyo social bajo o adversidad material alta",
+            [
+                _trace_condition(
+                    "índice de apoyo",
+                    profile.support_index,
+                    "lte",
+                    psychosocial_service.SUPPORT_LOW_MAX,
+                    profile.support_is_low,
+                ),
+                _trace_condition(
+                    "índice de adversidad material",
+                    profile.material_adversity_index,
+                    "gte",
+                    psychosocial_service.MATERIAL_ADVERSITY_HIGH_MIN,
+                    profile.material_adversity_is_high,
+                ),
+                _trace_condition(
+                    "dominios deteriorados en 14 días",
+                    profile.acute_deterioration,
+                    "not_empty",
+                    True,
+                    acute_rupture,
+                ),
+            ],
+            None
+            if not profile.available
+            else bool(profile.support_is_low or profile.material_adversity_is_high or acute_rupture),
+        ),
+        _trace_rule(
             "N0_estable",
             0,
             "Situación estable respecto a la línea base",
@@ -549,11 +755,30 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
         "N4_declaracion_ideacion_o_plan": "Declaración confirmada de ideación activa o planificación (hecho, no inferencia)",
         "N4_senal_linguistica_ideacion_directa": "Señal lingüística reciente de ideación directa (inferencia Agent 2; revisión humana prioritaria)",
         "N4_convergencia_critica_extrema": "Convergencia extrema: score estructural muy bajo + rumiación alta + sueño empeorando",
+        "N4_convergencia_interpersonal_despedida": (
+            "Convergencia interpersonal: ideación indirecta + sentirse una carga / no pertenecer "
+            "+ señales de despedida recientes (inferencias sobre textos concretos; revisión humana inmediata)"
+        ),
         "N3_declaracion_crisis_consumo": "Declaración de crisis de consumo (alarma profesional, no emergencia 112 automática)",
         "N3_senal_linguistica_crisis_consumo": "Señal lingüística de crisis de consumo (inferencia; revisión profesional)",
+        "N3_desconexion_psicosocial_aguda": (
+            "Ruptura psicosocial reciente (apoyo, vivienda, economía o pérdida) junto a una señal "
+            "interna sutil que por sí sola no habría disparado nada"
+        ),
+        "N3_riesgo_interpersonal_alto": (
+            "Carga percibida y pertenencia frustrada altas, expresadas en los últimos 14 días "
+            "(constructos interpersonales; revisión profesional)"
+        ),
+        "N3_riesgo_recaida_contextual": (
+            "Contexto social de consumo sostenido con tendencia de craving al alza (riesgo de recaída)"
+        ),
         "N3_unstable_persistente_con_convergencia": "Desviación estructural persistente (≥3 días inestable) con convergencia de señales",
         "N3_unstable_persistente": "structural_score en banda inestable de forma sostenida (≥5 días)",
         "N2_desviacion_moderada": "Desviación moderada o inicio de inestabilidad (prevención, sin alerta profesional automática)",
+        "N2_vulnerabilidad_psicosocial": (
+            "Vulnerabilidad psicosocial: apoyo bajo, adversidad material alta o un deterioro reciente "
+            "del contexto (prevención, sin alerta profesional automática)"
+        ),
         "N0_estable": "Situación estable respecto a la línea base personal",
         "N1_datos_insuficientes_o_sin_criterios": "Sin criterios de nivel superior (datos insuficientes o sin desviación clara)",
         "N1_sin_criterios_superiores": "Situación dentro de parámetros de autogestión",
@@ -570,11 +795,30 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
         "linguistic_signal_eligible_for_risk": agent2_available,
         "linguistic_flags": {
             "ideation_direct": ling["ideation_direct"] if agent2_available else None,
+            "ideation_indirect": ideation_indirect if agent2_available else None,
             "consumption_crisis": ling["consumption_crisis"] if agent2_available else None,
         },
         "sleep_trend": sleep_detail.label,
         "sleep_trend_slope": sleep_detail.slope,
+        "craving_trend": craving_detail.label,
+        "craving_trend_slope": craving_detail.slope,
         "rumination_threshold_exceeded": rumination_high if rumination is not None else None,
+        # The psychosocial summary travels with the assessment so the alert,
+        # the panel and any later audit all read the same numbers, taken at
+        # decision time rather than recomputed from newer observations.
+        "psychosocial": {
+            "available": profile.available,
+            "support_index": profile.support_index,
+            "material_adversity_index": profile.material_adversity_index,
+            "interpersonal_risk_index": profile.interpersonal_risk_index,
+            "relapse_context_index": profile.relapse_context_index,
+            "acute_deterioration": profile.acute_deterioration,
+            "interpersonal_recent_evidence": profile.interpersonal_recent_evidence,
+            "leave_taking_signal": bool(profile.leave_taking),
+            "risk_domains": profile.risk_domains,
+            "protective_domains": profile.protective_domains,
+            "known_domain_count": profile.known_domain_count,
+        },
     }
     input_facts = {
         "n4_declarations": n4_facts,
@@ -622,9 +866,16 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
                 "structural_stable_gte": 0.60,
                 "structural_transition_gte": 0.35,
                 "structural_extreme_lt": 0.20,
-                "rumination_high_gt": 0.60,
+                "rumination_high_gt": SUBTLE_RUMINATION_MIN,
                 "rumination_extreme_gt": 0.85,
                 "sleep_worsening_slope_lt": -0.15,
+                "craving_rising_slope_gt": 0.15,
+                "negative_valence_high_gt": SUBTLE_NEGATIVE_VALENCE_MIN,
+                "psychosocial_support_low_lte": psychosocial_service.SUPPORT_LOW_MAX,
+                "psychosocial_material_adversity_high_gte": psychosocial_service.MATERIAL_ADVERSITY_HIGH_MIN,
+                "psychosocial_interpersonal_high_gte": psychosocial_service.INTERPERSONAL_RISK_HIGH_MIN,
+                "psychosocial_relapse_context_high_gte": psychosocial_service.RELAPSE_CONTEXT_HIGH_MIN,
+                "psychosocial_recent_change_days": psychosocial_service.RECENT_CHANGE_DAYS,
             },
         },
         "inputs": {
@@ -664,16 +915,45 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             },
             "confirmed_facts": {"window_hours": CRITICAL_DECLARATION_WINDOW_HOURS, "n4": n4_facts, "n3": n3_facts},
             "persistence": {"unstable_1d": persistence_1, "unstable_3d": persistence_3, "unstable_5d": persistence_5},
+            "craving_trend": {
+                "points": [
+                    {
+                        "checkin_id": str(row.id),
+                        "created_at": _utc_iso(row.created_at),
+                        "x": index,
+                        "craving": float(row.craving),
+                    }
+                    for index, row in enumerate(ordered_checkins)
+                ],
+                "sample_count": craving_detail.sample_count,
+                "slope": craving_detail.slope,
+                "formula": "sum((x-x_mean)*(y-y_mean)) / sum((x-x_mean)^2)",
+                "classification": craving_detail.label,
+            },
+            # Full psychosocial snapshot, including the quote behind every
+            # domain, so a level raised by social context can be audited from
+            # the stored decision alone.
+            "psychosocial": profile.as_dict(),
         },
         "derivations": {
             "structural_score": structural.score,
             "confidence_band": structural.confidence_band,
             "sleep_worsening": sleep_worsening,
+            "craving_rising": craving_rising,
             "rumination_score": rumination,
             "rumination_high": rumination_high if rumination is not None else None,
+            "negative_valence": negative_valence,
+            "negative_valence_high": negative_valence_high if negative_valence is not None else None,
             "agent2_signal_available": agent2_available,
+            "ideation_indirect": ideation_indirect if agent2_available else None,
             "n4_fact_count": len(n4_facts),
             "n3_fact_count": len(n3_facts),
+            "psychosocial_available": profile.available,
+            "psychosocial_acute_rupture": acute_rupture,
+            "psychosocial_interpersonal_live": interpersonal_live,
+            "psychosocial_leave_taking": leave_taking,
+            "psychosocial_subtle_inner_signal": subtle_inner_signal,
+            "psychosocial_acute_domains_labels": [domain_label(key) for key in profile.acute_deterioration],
         },
         "rules": rules,
         "conclusion": {
@@ -811,14 +1091,32 @@ def run_and_persist(
     return assessment
 
 
+def _as_domain_list(input_signals: dict, key: str) -> list[str]:
+    psychosocial = input_signals.get("psychosocial") if isinstance(input_signals, dict) else None
+    values = psychosocial.get(key) if isinstance(psychosocial, dict) else None
+    return [str(value) for value in values] if isinstance(values, list) else []
+
+
 def _alert_title(decision: RiskDecision) -> str:
     if decision.level == 4:
+        if "N4_convergencia_interpersonal_despedida" in decision.triggering_rules:
+            return "ALERTA NIVEL 4 – EMERGENCIA (convergencia interpersonal y señales de despedida)"
         return "ALERTA NIVEL 4 – EMERGENCIA"
     if decision.level == 3:
         if "N3_declaracion_crisis_consumo" in decision.triggering_rules:
             return "Alerta Nivel 3 – Crisis de consumo declarada"
         if "N3_senal_linguistica_crisis_consumo" in decision.triggering_rules:
             return "Alerta Nivel 3 – Señal lingüística de crisis de consumo"
+        if "N3_desconexion_psicosocial_aguda" in decision.triggering_rules:
+            domains = ", ".join(
+                domain_label(key)
+                for key in _as_domain_list(decision.input_signals, "acute_deterioration")
+            )
+            return f"Alerta Nivel 3 – Ruptura psicosocial reciente{f' ({domains})' if domains else ''}"
+        if "N3_riesgo_interpersonal_alto" in decision.triggering_rules:
+            return "Alerta Nivel 3 – Carga percibida y falta de pertenencia"
+        if "N3_riesgo_recaida_contextual" in decision.triggering_rules:
+            return "Alerta Nivel 3 – Contexto de recaída con craving al alza"
         if "N3_unstable_persistente_con_convergencia" in decision.triggering_rules:
             return "Alerta Nivel 3 – Desviación estructural con convergencia"
         return "Alerta Nivel 3 – Desviación estructural persistente"

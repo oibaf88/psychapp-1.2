@@ -16,6 +16,7 @@ import {
   EventTimeline,
   LevelHistoryChart,
   LinguisticSignalChart,
+  PsychosocialIndexChart,
   StructuralScoreChart,
   ZScoreChart,
 } from "../components/ClinicalCharts";
@@ -25,9 +26,11 @@ import {
   StructuralExplanationCard,
 } from "../components/ClinicalExplain";
 import CopilotPanel from "../components/CopilotPanel";
+import PsychosocialPanel from "../components/PsychosocialPanel";
 
 type Tab =
   | "resumen"
+  | "psicosocial"
   | "metricas"
   | "evidencia"
   | "copiloto"
@@ -185,8 +188,14 @@ export default function PatientDetailPage() {
   const metrics = dossier.metrics;
   const patientChat = dossier.chat_messages ?? [];
 
+  const psychosocial = dossier.psychosocial;
+  const psychosocialBadge = psychosocial?.acute_deterioration?.length
+    ? ` ⚠ ${psychosocial.acute_deterioration.length}`
+    : "";
+
   const tabs: { id: Tab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
+    { id: "psicosocial", label: `Contexto psicosocial${psychosocialBadge}` },
     { id: "metricas", label: "Métricas" },
     { id: "evidencia", label: `Evidencia (${dossier.evidence.length})` },
     { id: "copiloto", label: "Copiloto clínico" },
@@ -271,11 +280,60 @@ export default function PatientDetailPage() {
                 <StructuralScoreChart points={metrics.daily_structural} />
               </div>
             </section>
+            {psychosocial?.available && (
+              <section className="card">
+                <h2>Contexto psicosocial</h2>
+                <p className="ps-headline">{psychosocial.headline}</p>
+                <section className="ps-indices">
+                  {psychosocial.indices.map((index) => (
+                    <div key={index.key} className={`ps-index ps-index-${index.band}`}>
+                      <div className="ps-index-head">
+                        <strong>{index.label}</strong>
+                        <span className="ps-index-value">
+                          {index.value === null || index.value === undefined
+                            ? "sin datos"
+                            : index.value.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="ps-index-bar">
+                        <span style={{ width: `${Math.round((index.value ?? 0) * 100)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </section>
+                <p>
+                  <button type="button" className="secondary" onClick={() => setTab("psicosocial")}>
+                    Ver el detalle y las citas →
+                  </button>
+                </p>
+              </section>
+            )}
             <section className="card">
-              <h2>Alertas y hechos registrados</h2>
+              <h2>Alertas, hechos y cambios de contexto</h2>
               <EventTimeline events={metrics.events} />
             </section>
           </>
+        )}
+
+        {tab === "psicosocial" && (
+          <section className="card">
+            <h2>Contexto psicosocial: vivienda, dinero, convivencia y apoyos</h2>
+            <p className="subtitle">
+              Datos estructurados que el <strong>Agente 4</strong> extrae de lo que el paciente escribe en el
+              chat y el diario. El motor determinista los usa con umbrales fijos, así que un paciente puede
+              subir de nivel por su situación social aunque sus check-ins sigan planos.
+            </p>
+            {psychosocial ? (
+              <PsychosocialPanel
+                patientId={p.id}
+                view={psychosocial}
+                canEdit={isTherapist}
+                onChanged={load}
+              />
+            ) : (
+              <p className="meta">Sin contexto psicosocial disponible.</p>
+            )}
+          </section>
         )}
 
         {tab === "metricas" && (
@@ -292,6 +350,7 @@ export default function PatientDetailPage() {
               <ZScoreChart points={metrics.daily_structural} />
               <CheckInChart points={metrics.checkins} />
               <LinguisticSignalChart points={metrics.linguistic} onSelect={openEvidence} />
+              <PsychosocialIndexChart points={metrics.daily_psychosocial ?? []} />
             </div>
           </section>
         )}

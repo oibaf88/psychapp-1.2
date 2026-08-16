@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
+from app.models import CheckIn, PsychosocialObservation
 from app.schemas import RiskAssessmentOut
 from app.services import baseline, conversation, risk_engine
 from app.services.conversation import AnalysisOutcome, LinguisticAnalysis
@@ -30,7 +31,7 @@ class _FakeQuery:
     def __init__(self, rows):
         self.rows = rows
 
-    def filter(self, *_args):
+    def filter(self, *_args, **_kwargs):
         return self
 
     def order_by(self, *_args):
@@ -42,13 +43,26 @@ class _FakeQuery:
     def all(self):
         return self.rows
 
+    def first(self):
+        return self.rows[0] if self.rows else None
+
 
 class _FakeDb:
-    def __init__(self, checkins=None):
-        self.checkins = checkins or []
+    """Model-aware stub: the engine reads check-ins and psychosocial rows.
 
-    def query(self, _model):
-        return _FakeQuery(self.checkins)
+    Returning check-ins for every model would make the psychosocial profile
+    try to read a domain off a CheckIn, so the mapping is explicit and any
+    unexpected model comes back empty.
+    """
+
+    def __init__(self, checkins=None, psychosocial=None):
+        self.rows_by_model = {
+            CheckIn: checkins or [],
+            PsychosocialObservation: psychosocial or [],
+        }
+
+    def query(self, model):
+        return _FakeQuery(self.rows_by_model.get(model, []))
 
 
 def _structural(score=0.8, band="stable"):
@@ -67,14 +81,25 @@ def _structural(score=0.8, band="stable"):
     )
 
 
-def _linguistic(*, eligible=True, ideation=False, crisis=False, rumination=0.7, signal_id=None):
+def _linguistic(
+    *,
+    eligible=True,
+    ideation=False,
+    indirect=False,
+    crisis=False,
+    rumination=0.7,
+    negative_valence=0.6,
+    signal_id=None,
+):
     signal_id = (signal_id or uuid.uuid4()) if eligible else None
     raw = dict(VALID_ANALYSIS) if eligible else {}
     if eligible:
         raw.update(
             ideation_direct=ideation,
+            ideation_indirect=indirect,
             consumption_crisis=crisis,
             rumination_score=rumination,
+            negative_valence=negative_valence,
         )
     return {
         "_signal_uuid": signal_id,
@@ -83,8 +108,10 @@ def _linguistic(*, eligible=True, ideation=False, crisis=False, rumination=0.7, 
         "eligible_for_risk": eligible,
         "freshness_window_hours": 12,
         "ideation_direct": ideation if eligible else False,
+        "ideation_indirect": indirect if eligible else False,
         "consumption_crisis": crisis if eligible else False,
         "rumination_score": rumination if eligible else None,
+        "negative_valence": raw.get("negative_valence") if eligible else None,
         "raw": raw,
     }
 
@@ -200,7 +227,7 @@ class DeterministicExplanationTests(unittest.TestCase):
         # before calculating the slope.  The fake query does not implement SQL
         # ordering, so feed it in the same newest-first order here.
         checkins = [
-            SimpleNamespace(id=uuid.uuid4(), sleep_hours=value, created_at=datetime.utcnow())
+            SimpleNamespace(id=uuid.uuid4(), sleep_hours=value, craving=4, created_at=datetime.utcnow())
             for value in (5.0, 6.0, 7.0)
         ]
         p1, p3, p5 = persistence
@@ -244,7 +271,8 @@ class DeterministicExplanationTests(unittest.TestCase):
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 11)
+        # 11 original rules plus the five psychosocial-context ones.
+        self.assertEqual(len(trace["rules"]), 16)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])

@@ -1,5 +1,5 @@
 """
-System prompts for the two LLM agents described in docs 8, 19 and 20.
+System prompts for the LLM agents described in docs 8, 19 and 20.
 
 Agent 1 (conversational orchestrator) and Agent 2 (linguistic analyst) are
 deliberately separate roles with separate, narrow contracts:
@@ -11,12 +11,30 @@ deliberately separate roles with separate, narrow contracts:
     and returns strict structured JSON, which is stored as an inference
     (AlfaSignal) and fed into the deterministic risk engine.
 
-Both prompts are transcribed from the docs almost verbatim (originally
-written for a locally fine-tuned open model per doc 8/19) and adapted
-here for use with Claude via the Anthropic Messages API, per the explicit
-project brief. See README "Assumptions" for why Claude was used instead
-of the fine-tuned local model the docs originally sketched.
+Two further roles were added later and follow the same discipline:
+
+  - Agent 3 (clinical copilot) talks to the professional, never to the
+    patient, and is read-only over the record.
+  - Agent 4 (psychosocial extractor) never talks to anyone. It reads the
+    same free text as Agent 2 and turns the social context inside it —
+    housing, money, who they live with, who they can call, losses, feeling
+    like a burden — into structured observations. Those observations are
+    inferences, they are stored per domain with the literal quote that
+    produced them, and the deterministic risk engine reads them under
+    fixed thresholds. Agent 4 never decides an alert level either.
+
+Both original prompts are transcribed from the docs almost verbatim
+(originally written for a locally fine-tuned open model per doc 8/19) and
+adapted here for use with Claude via the Anthropic Messages API, per the
+explicit project brief. See README "Assumptions" for why Claude was used
+instead of the fine-tuned local model the docs originally sketched.
 """
+from app.content.psychosocial_catalog import (
+    DIRECTIONS,
+    DOMAINS,
+    ONSETS,
+    STATES,
+)
 
 # Persisted with every Agent 2 invocation so reviewers can tell exactly
 # which instruction/schema contract produced a historic analysis.
@@ -184,7 +202,9 @@ escribes.
 ### Qué recibes
 Recibes un expediente estructurado del paciente con: check-ins diarios, \
 entradas de diario, la conversación del paciente con el Agente 1, los \
-hechos confirmados, las señales del Agente 2, las evaluaciones del motor \
+hechos confirmados, las señales del Agente 2, el contexto psicosocial \
+extraído por el Agente 4 (vivienda, economía, convivencia, apoyos, pérdidas, \
+carga percibida, señales de despedida), las evaluaciones del motor \
 determinista de riesgo y las alertas generadas. Todo con fechas.
 
 ### Qué haces
@@ -199,9 +219,14 @@ acompañada de dónde sale: «(diario, 12/08)», «(chat, 14/08)», \
 fuente, no lo afirmes.
 2. **Distingue hecho de inferencia.** Los hechos confirmados y lo que el \
 paciente escribió literalmente son HECHOS. Las puntuaciones del Agente 2 \
-(rumiación, valencia, ideación) son INFERENCIAS de un modelo de lenguaje y \
-debes nombrarlas como tales. Tu propia lectura también es una inferencia: \
-márcala.
+(rumiación, valencia, ideación) y los dominios psicosociales del Agente 4 \
+(vivienda, apoyos, carga percibida…) son INFERENCIAS de un modelo de lenguaje \
+y debes nombrarlas como tales, salvo las marcadas como declaración \
+profesional. Tu propia lectura también es una inferencia: márcala.
+
+2b. **El contexto psicosocial se cita con su frase.** Cuando uses un dominio \
+psicosocial, apóyalo en la cita literal que lo acompaña. Si un dominio lleva \
+semanas sin actualizarse, dilo en vez de darlo por vigente.
 3. **No diagnostiques.** No emites diagnósticos DSM/CIE, no propones \
 medicación ni dosis, no predices conductas futuras. Describes lo observado.
 4. **No calculas el nivel de alarma.** El nivel lo decide exclusivamente el \
@@ -230,6 +255,167 @@ profesional que lo tiene asignado. Sigue la estructura por defecto \
 (situación actual · qué ha cambiado · fuentes · qué falta por saber · qué \
 mirar en sesión) y cita fechas y fuentes en cada punto.
 """
+
+AGENT4_PROMPT_VERSION = "agent4-prompt-2026-08-16"
+AGENT4_SCHEMA_VERSION = "agent4-schema-2026-08-16"
+
+
+def _domain_reference() -> str:
+    """Render the catalogue as the reference block Agent 4 reads.
+
+    Generated from ``psychosocial_catalog`` instead of retyped here so the
+    prompt, the tool enum, the deterministic index and the therapist labels
+    can never describe different domains.
+    """
+    lines = []
+    for domain in DOMAINS:
+        examples = " / ".join(f"«{example}»" for example in domain.examples)
+        lines.append(f"- `{domain.key}` — {domain.label}: {domain.meaning}" + (f" Ejemplos: {examples}." if examples else ""))
+    return "\n".join(lines)
+
+
+AGENT4_SYSTEM_PROMPT = f"""\
+Eres un extractor de CONTEXTO PSICOSOCIAL integrado en PsychApp. NO \
+conversas con nadie y NUNCA generas una respuesta dirigida al paciente. Lees \
+un fragmento de texto escrito por una persona en tratamiento por consumo de \
+estimulantes / chemsex, con posible riesgo autolítico, y devuelves \
+observaciones estructuradas sobre sus condiciones de vida y sus vínculos.
+
+Tu salida se guarda como INFERENCIA (nunca como hecho confirmado) y la usa un \
+motor determinista para decidir, con umbrales fijos, si el equipo clínico debe \
+mirar a esta persona. Por eso importa más la precisión que la exhaustividad.
+
+### Qué extraer
+Solo lo que el texto sostenga. Un dominio por observación, con la cita \
+literal que la justifica. Dominios disponibles:
+
+{_domain_reference()}
+
+### Cómo puntuar
+- `state` describe la situación en ese dominio: `protector` (es un recurso, \
+le sostiene), `neutro` (mencionado sin carga), `riesgo_leve`, \
+`riesgo_moderado`, `riesgo_alto`.
+- `direction` describe hacia dónde va SEGÚN EL TEXTO: `mejora`, `estable`, \
+`empeora`, `desconocido`. Si el texto no dice nada de la evolución, pon \
+`desconocido`; no lo deduzcas de tu impresión general.
+- `onset`: `reciente` si el propio texto sitúa el cambio en días o pocas \
+semanas, `cronico` si lo describe como algo que lleva tiempo, `desconocido` \
+si no se puede saber.
+- `confidence` (0-1): cuánto sostiene el texto esa lectura. Una mención de \
+pasada, ambigua o irónica va por debajo de 0.5. Una afirmación explícita del \
+paciente sobre su propia vida va por encima de 0.8.
+- `evidence_quote`: fragmento LITERAL del texto, copiado tal cual, máximo unas \
+25 palabras. Es lo que el terapeuta va a leer para comprobar tu lectura. Si no \
+puedes citar, no emitas la observación.
+
+### Reglas estrictas
+1. No inventes. Si el texto no habla de dinero, no emitas `economia`. Es \
+correcto y esperable devolver una lista vacía.
+2. No arrastres contexto de otras conversaciones: solo tienes este texto.
+3. No emitas juicios clínicos, diagnósticos ni recomendaciones. Describes \
+circunstancias, no personas. Nada de «carece de habilidades sociales».
+4. No decides ningún nivel de alarma. Esa decisión es exclusivamente del \
+motor determinista.
+5. Registra también lo PROTECTOR. «He vuelto al grupo de los martes» es una \
+observación tan valiosa como una pérdida, y el clínico necesita ambas.
+6. Presta atención especial a lo que suena inofensivo: repartir pertenencias, \
+dejar cosas ordenadas, dar las gracias como quien cierra, buscar quién se \
+quede con su perro, o una calma repentina después de semanas de desesperanza. \
+Va en `senales_despedida`, aunque el tono sea ligero o de broma. No lo \
+interpretes ni lo dramatices: regístralo con su cita y deja que el motor y el \
+clínico decidan.
+7. Lo dicho en negativo cuenta: «ya no me habla nadie» es `aislamiento` en \
+riesgo, no ausencia de dato.
+8. Máximo 8 observaciones por texto. Si hay más, quédate con las de mayor \
+`confidence`.
+9. Un dominio no puede aparecer dos veces. Si el texto lo toca en dos frases, \
+funde ambas en una observación y cita la más clara.
+
+### Campos de resumen
+- `has_psychosocial_content`: false solo si el texto no aporta absolutamente \
+nada de contexto social o material.
+- `overall_note`: una frase descriptiva, en español, sin alarmismo, sobre lo \
+que el texto añade al contexto psicosocial. Si no hay nada, dilo así.
+
+Devuelve SIEMPRE un único objeto JSON que cumpla exactamente el esquema \
+solicitado. Sin texto alrededor.
+"""
+
+
+AGENT4_TOOL_SCHEMA = {
+    "name": "record_psychosocial_observations",
+    "description": (
+        "Registra las observaciones psicosociales estructuradas extraídas del texto. "
+        "Debe llamarse siempre, incluso si la lista de observaciones va vacía."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "has_psychosocial_content": {
+                "type": "boolean",
+                "description": "false solo si el texto no aporta ningún dato de contexto social o material.",
+            },
+            "overall_note": {
+                "type": "string",
+                "description": "Una frase descriptiva y sin alarmismo, en español, sobre lo que aporta este texto.",
+            },
+            "observations": {
+                "type": "array",
+                "description": "Una entrada por dominio detectado. Puede ir vacía. Máximo 8.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {
+                            "type": "string",
+                            "enum": [domain.key for domain in DOMAINS],
+                            "description": "Dominio psicosocial al que se refiere la observación.",
+                        },
+                        "state": {
+                            "type": "string",
+                            "enum": list(STATES),
+                            "description": "Situación en ese dominio según el texto.",
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": list(DIRECTIONS),
+                            "description": "Evolución que el propio texto describe.",
+                        },
+                        "onset": {
+                            "type": "string",
+                            "enum": list(ONSETS),
+                            "description": "Antigüedad de la situación según el texto.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Cuánto sostiene el texto esta lectura.",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Descripción breve (1 frase) de la situación en ese dominio, en español.",
+                        },
+                        "evidence_quote": {
+                            "type": "string",
+                            "description": "Fragmento literal del texto que justifica la observación.",
+                        },
+                    },
+                    "required": [
+                        "domain",
+                        "state",
+                        "direction",
+                        "onset",
+                        "confidence",
+                        "summary",
+                        "evidence_quote",
+                    ],
+                },
+            },
+        },
+        "required": ["has_psychosocial_content", "overall_note", "observations"],
+    },
+}
+
 
 AGENT2_TOOL_SCHEMA = {
     "name": "record_linguistic_signals",

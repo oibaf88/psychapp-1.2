@@ -245,6 +245,7 @@ export type DriverFamily =
   | "senal_linguistica"
   | "desviacion_estructural"
   | "convergencia"
+  | "contexto_psicosocial"
   | "sin_criterios";
 
 export interface EvidenceRef {
@@ -260,7 +261,147 @@ export interface EvidenceRef {
   analysis?: Record<string, unknown> | null;
   trace_id?: string | null;
   signal_id?: string | null;
+  /** Present when the level was raised by social context: one entry per
+   *  domain that drove it, each with the patient's own words. */
+  psychosocial_domains?: PsychosocialEvidenceDomain[] | null;
+  psychosocial_indices?: Record<string, number | null> | null;
 }
+
+export interface PsychosocialEvidenceDomain {
+  domain: string;
+  label: string;
+  state?: string | null;
+  state_label?: string | null;
+  summary?: string | null;
+  quote?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  observed_at?: string | null;
+  is_declared?: boolean;
+}
+
+// ------------------------------------------------- psychosocial context ---
+/** How a domain reads right now, on the shared ordinal scale. */
+export type PsychosocialState =
+  | "protector"
+  | "neutro"
+  | "riesgo_leve"
+  | "riesgo_moderado"
+  | "riesgo_alto";
+
+export type PsychosocialDirection = "mejora" | "estable" | "empeora" | "desconocido";
+
+export interface PsychosocialIndexOut {
+  key: string;
+  label: string;
+  value?: number | null;
+  band: "bueno" | "regular" | "malo" | "sin_datos";
+  direction: "higher_is_better" | "lower_is_better";
+  meaning: string;
+  threshold_note: string;
+}
+
+export interface PsychosocialDomainOut {
+  domain: string;
+  label: string;
+  group: string;
+  group_label: string;
+  state: PsychosocialState;
+  state_label: string;
+  direction: PsychosocialDirection;
+  direction_label: string;
+  onset: string;
+  onset_label: string;
+  confidence: number;
+  summary: string;
+  evidence_quote?: string | null;
+  meaning?: string | null;
+  session_question?: string | null;
+  observation_id?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  recorded_by: string;
+  is_declared: boolean;
+  evidence_kind: string;
+  observed_at?: string | null;
+  age_days?: number | null;
+  is_recent_change: boolean;
+  is_stale: boolean;
+  counts_for_scoring: boolean;
+  has_pending_update: boolean;
+  risk_value?: number | null;
+}
+
+export interface PsychosocialGroupOut {
+  group: string;
+  group_label: string;
+  domains: PsychosocialDomainOut[];
+}
+
+export interface PsychosocialSessionQuestion {
+  domain: string;
+  label: string;
+  question: string;
+  because: string;
+  quote?: string | null;
+}
+
+export interface PsychosocialHistoryItem {
+  observation_id: string;
+  domain: string;
+  label: string;
+  state: PsychosocialState;
+  state_label: string;
+  direction: PsychosocialDirection;
+  summary: string;
+  evidence_quote?: string | null;
+  source_type: string;
+  source_id?: string | null;
+  recorded_by: string;
+  is_current: boolean;
+  is_confirmed: boolean;
+  dismissed_at?: string | null;
+  dismissed_reason?: string | null;
+  observed_at?: string | null;
+}
+
+export interface PsychosocialViewOut {
+  available: boolean;
+  generated_at?: string | null;
+  headline: string;
+  what_this_is: string;
+  indices: PsychosocialIndexOut[];
+  groups: PsychosocialGroupOut[];
+  acute_deterioration: { domain: string; label: string; summary: string }[];
+  leave_taking?: (Record<string, unknown> & { summary?: string; evidence_quote?: string | null }) | null;
+  protective_domains: { domain: string; label: string; summary: string }[];
+  pending_updates: { domain: string; label: string }[];
+  stale_domains: { domain: string; label: string }[];
+  session_questions: PsychosocialSessionQuestion[];
+  known_domain_count: number;
+  total_domain_count: number;
+  history: PsychosocialHistoryItem[];
+}
+
+export interface PsychosocialPoint {
+  at: string;
+  date: string;
+  support_index?: number | null;
+  material_adversity_index?: number | null;
+  interpersonal_risk_index?: number | null;
+  relapse_context_index?: number | null;
+  acute_deterioration: string[];
+  leave_taking_signal: boolean;
+  assessment_id: string;
+}
+
+export const PSYCHOSOCIAL_STATE_TONE: Record<PsychosocialState, string> = {
+  protector: "good",
+  neutro: "neutral",
+  riesgo_leve: "warn",
+  riesgo_moderado: "warn-strong",
+  riesgo_alto: "bad",
+};
 
 export interface LevelExplanationOut {
   level?: number | null;
@@ -396,7 +537,7 @@ export interface LevelPoint {
 export interface MetricEvent {
   at: string;
   date: string;
-  kind: "alert" | "fact";
+  kind: "alert" | "fact" | "psychosocial";
   level?: number | null;
   label: string;
   status: string;
@@ -414,6 +555,9 @@ export interface PatientMetricsOut {
   linguistic: LinguisticPoint[];
   levels: LevelPoint[];
   daily_levels: { date: string; max_level: number }[];
+  /** Replay of the psychosocial indices as each decision saw them. */
+  psychosocial: PsychosocialPoint[];
+  daily_psychosocial: PsychosocialPoint[];
   events: MetricEvent[];
   counts: Record<string, number>;
 }
@@ -444,6 +588,7 @@ export interface PatientDossierOut {
   current_risk?: RiskAssessmentOut | null;
   level_explanation: LevelExplanationOut;
   structural_explanation: StructuralExplanationOut;
+  psychosocial: PsychosocialViewOut;
   metrics: PatientMetricsOut;
   evidence: EvidenceItemOut[];
   timeline: TimelineOut;
@@ -576,8 +721,46 @@ export const DRIVER_FAMILY_SHORT: Record<string, string> = {
   senal_linguistica: "Texto del paciente",
   desviacion_estructural: "Check-ins",
   convergencia: "Varias señales",
+  contexto_psicosocial: "Contexto social",
   sin_criterios: "Sin criterios",
 };
+
+/** Domains a professional can record by hand, mirroring the backend catalogue. */
+export const PSYCHOSOCIAL_DOMAIN_OPTIONS = [
+  { value: "vivienda", label: "Vivienda" },
+  { value: "convivencia", label: "Convivencia" },
+  { value: "economia", label: "Recursos económicos" },
+  { value: "empleo_ocupacion", label: "Empleo y estructura diaria" },
+  { value: "necesidades_basicas", label: "Necesidades básicas" },
+  { value: "legal_administrativo", label: "Situación legal y administrativa" },
+  { value: "acceso_recursos", label: "Acceso a recursos y continuidad" },
+  { value: "apoyo_social", label: "Red de apoyo" },
+  { value: "familia", label: "Familia" },
+  { value: "pareja", label: "Pareja o vínculo íntimo" },
+  { value: "aislamiento", label: "Aislamiento y soledad" },
+  { value: "duelo_perdida", label: "Pérdidas y duelos" },
+  { value: "estigma_discriminacion", label: "Estigma y discriminación" },
+  { value: "cuidados_responsabilidades", label: "Cuidados y responsabilidades" },
+  { value: "carga_percibida", label: "Sentirse una carga" },
+  { value: "pertenencia_frustrada", label: "No pertenecer / no ser necesitado" },
+  { value: "senales_despedida", label: "Señales de despedida" },
+  { value: "contexto_consumo", label: "Contexto social del consumo" },
+];
+
+export const PSYCHOSOCIAL_STATE_OPTIONS = [
+  { value: "protector", label: "Protector (le sostiene)" },
+  { value: "neutro", label: "Neutro" },
+  { value: "riesgo_leve", label: "Riesgo leve" },
+  { value: "riesgo_moderado", label: "Riesgo moderado" },
+  { value: "riesgo_alto", label: "Riesgo alto" },
+];
+
+export const PSYCHOSOCIAL_DIRECTION_OPTIONS = [
+  { value: "desconocido", label: "Sin datos de evolución" },
+  { value: "mejora", label: "Mejorando" },
+  { value: "estable", label: "Estable" },
+  { value: "empeora", label: "Empeorando" },
+];
 
 export const LEVEL_SHORT_LABELS: Record<number, string> = {
   0: "Autogestión",
@@ -605,5 +788,6 @@ export const FACT_CATEGORIES = [
   { value: "consumption_crisis", label: "Crisis de consumo" },
   { value: "ideation_active", label: "Ideación suicida activa (autodeclarada)" },
   { value: "planning", label: "Planificación (autodeclarada)" },
+  { value: "psychosocial_context", label: "Contexto psicosocial confirmado" },
   { value: "other", label: "Otro hecho" },
 ];

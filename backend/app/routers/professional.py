@@ -32,6 +32,7 @@ from app.models import (
     DiaryEntry,
     PatientProfessionalAssignment,
     ProfessionalAlert,
+    PsychosocialObservation,
     RiskAssessment,
     SafetyPlan,
     User,
@@ -53,6 +54,9 @@ from app.schemas import (
     PatientChatMessageOut,
     PatientDossierOut,
     PatientMetricsOut,
+    PsychosocialDismissIn,
+    PsychosocialObservationIn,
+    PsychosocialViewOut,
     DeepStatisticalAnalysisOut,
     BiometricDataOut,
     AppUsageDataOut,
@@ -65,6 +69,7 @@ from app.schemas import (
 )
 from app.security import require_professional
 from app.services import audit, clinical_copilot, clinical_view, risk_engine
+from app.services import psychosocial as psychosocial_service
 from app.services.timeline import build_timeline
 
 router = APIRouter(prefix="/api/v1/professional", tags=["professional"])
@@ -451,6 +456,10 @@ def declare_fact_for_patient(
         "ideation_active",
         "planning",
         "correction",
+        # Social circumstances the professional confirms. Deliberately absent
+        # from N3/N4_FACT_CATEGORIES: confirming that someone lost their flat
+        # is context for the psychosocial rules, never an automatic alert.
+        psychosocial_service.PSYCHOSOCIAL_FACT_CATEGORY,
         "other",
     }
     if payload.category not in allowed:
@@ -719,6 +728,7 @@ def patient_dossier(
             )
         ),
         structural_explanation=StructuralExplanationOut(**clinical_view.structural_explanation(assessment)),
+        psychosocial=PsychosocialViewOut(**clinical_view.build_psychosocial_view(db, patient_id)),
         metrics=PatientMetricsOut(**clinical_view.build_metrics(db, patient_id, max(window_days, 90))),
         evidence=[EvidenceItemOut(**item) for item in clinical_view.build_evidence_feed(db, patient_id)],
         timeline=TimelineOut(**timeline),
@@ -821,6 +831,135 @@ def patient_evidence(
         extra={"row_count": len(rows)},
     )
     return rows
+
+
+# ------------------------------------------- Agent 4 · psychosocial context ---
+@router.get("/patients/{patient_id}/psychosocial", response_model=PsychosocialViewOut)
+def patient_psychosocial(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """The patient's social context: housing, money, household, support, losses.
+
+    Structured by Agent 4 from what the patient wrote, scored deterministically
+    and shown with the literal sentence behind every domain.
+    """
+    _require_clinical_read(db, professional, patient_id)
+    view = clinical_view.build_psychosocial_view(db, patient_id)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="patient_psychosocial_viewed",
+        entity_type="user",
+        entity_id=patient_id,
+        extra={"known_domains": view["known_domain_count"]},
+    )
+    return view
+
+
+def _get_observation(db: Session, patient_id: uuid.UUID, observation_id: uuid.UUID) -> PsychosocialObservation:
+    row = db.get(PsychosocialObservation, observation_id)
+    if row is None or row.user_id != patient_id:
+        raise HTTPException(status_code=404, detail="Observación psicosocial no encontrada")
+    return row
+
+
+@router.post("/patients/{patient_id}/psychosocial/{observation_id}/confirm", response_model=FactOut, status_code=201)
+def confirm_psychosocial_observation(
+    patient_id: uuid.UUID,
+    observation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Turn one Agent 4 inference into a confirmed fact.
+
+    From then on the domain is a declaration a human stands behind: later
+    extractions are surfaced as pending updates instead of overwriting it.
+    """
+    _require_fact_access(professional, db, patient_id)
+    observation = _get_observation(db, patient_id, observation_id)
+    fact = psychosocial_service.confirm_observation(db, observation)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="psychosocial_observation_confirmed",
+        entity_type="psychosocial_observation",
+        entity_id=observation.id,
+        extra={"patient_id": str(patient_id), "domain": observation.domain, "fact_id": str(fact.id)},
+    )
+    risk_engine.run_and_persist(db, patient_id)
+    return fact
+
+
+@router.post("/patients/{patient_id}/psychosocial/{observation_id}/dismiss", status_code=204)
+def dismiss_psychosocial_observation(
+    patient_id: uuid.UUID,
+    observation_id: uuid.UUID,
+    payload: PsychosocialDismissIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Retire a wrong reading and re-run the engine without it.
+
+    The row is kept for audit, so a dismissed false positive stays visible in
+    the history together with the reason it was dismissed.
+    """
+    _require_fact_access(professional, db, patient_id)
+    observation = _get_observation(db, patient_id, observation_id)
+    psychosocial_service.dismiss_observation(db, observation, reason=payload.reason)
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="psychosocial_observation_dismissed",
+        entity_type="psychosocial_observation",
+        entity_id=observation.id,
+        extra={"patient_id": str(patient_id), "domain": observation.domain, "reason": payload.reason},
+    )
+    risk_engine.run_and_persist(db, patient_id)
+    return None
+
+
+@router.post("/patients/{patient_id}/psychosocial", response_model=PsychosocialViewOut, status_code=201)
+def record_psychosocial_observation(
+    patient_id: uuid.UUID,
+    payload: PsychosocialObservationIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Record social context the patient never wrote about.
+
+    Stored as a professional declaration, so it outranks Agent 4 in the same
+    domain and feeds the deterministic rules straight away.
+    """
+    _require_fact_access(professional, db, patient_id)
+    try:
+        observation = psychosocial_service.record_professional_observation(
+            db,
+            patient_id,
+            domain=payload.domain,
+            state=payload.state,
+            direction=payload.direction,
+            onset=payload.onset,
+            summary=payload.summary,
+            evidence_quote=payload.evidence_quote,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="psychosocial_observation_recorded",
+        entity_type="psychosocial_observation",
+        entity_id=observation.id,
+        extra={"patient_id": str(patient_id), "domain": observation.domain, "state": observation.state},
+    )
+    risk_engine.run_and_persist(db, patient_id)
+    return clinical_view.build_psychosocial_view(db, patient_id)
 
 
 @router.get("/patients/{patient_id}/explanation", response_model=LevelExplanationOut)

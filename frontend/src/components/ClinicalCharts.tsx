@@ -28,6 +28,7 @@ import {
   LevelPoint,
   LinguisticPoint,
   MetricEvent,
+  PsychosocialPoint,
   StructuralPoint,
   formatDay,
 } from "../api";
@@ -348,19 +349,90 @@ export function LinguisticSignalChart({
   );
 }
 
-/** Alerts and confirmed facts as a readable timeline, not a chart. */
+/** The social ground the patient is standing on, over time.
+ *
+ *  Plotted from the snapshot each risk decision stored, so the line is what
+ *  the engine actually saw on each day rather than a recomputation from
+ *  today's observations.
+ */
+export function PsychosocialIndexChart({ points }: { points: PsychosocialPoint[] }) {
+  const flagged = points.map((point) => ({
+    ...point,
+    rupture: point.acute_deterioration.length > 0 || point.leave_taking_signal ? 1 : null,
+  }));
+  return (
+    <ChartCard
+      title="Contexto psicosocial en el tiempo"
+      question="¿Se le está estrechando el suelo — apoyos, dinero, vivienda — mientras hablamos de síntomas?"
+      howToRead="Cuatro índices de 0 a 1 construidos con umbrales fijos a partir de lo que el paciente ha contado. El apoyo es la única línea donde MÁS ALTO ES MEJOR; en las otras tres, más alto es peor. Los rombos marcan días con un deterioro reciente o una señal de despedida. Estas curvas no dependen de los check-ins: por eso pueden moverse con el score estructural completamente plano."
+      empty={points.length === 0}
+    >
+      <ResponsiveContainer width="100%" height={240}>
+        <ComposedChart data={flagged} margin={{ top: 8, right: 16, bottom: 4, left: -18 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <ReferenceLine y={0.66} stroke={COLORS.level} strokeDasharray="4 4" />
+          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
+          <YAxis domain={[0, 1]} tick={{ fontSize: 11 }} />
+          <Tooltip labelFormatter={formatDay} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Line
+            type="monotone"
+            dataKey="support_index"
+            name="Apoyo (más alto, mejor)"
+            stroke={COLORS.score}
+            strokeWidth={2}
+            connectNulls
+            dot={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="material_adversity_index"
+            name="Adversidad material"
+            stroke={COLORS.urgency}
+            connectNulls
+            dot={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="interpersonal_risk_index"
+            name="Riesgo interpersonal"
+            stroke={COLORS.rumination}
+            strokeWidth={2}
+            connectNulls
+            dot={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="relapse_context_index"
+            name="Contexto de recaída"
+            stroke={COLORS.craving}
+            strokeDasharray="4 3"
+            connectNulls
+            dot={false}
+          />
+          <Scatter dataKey="rupture" name="Deterioro o despedida" fill={COLORS.level} shape="diamond" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+/** Alerts, confirmed facts and psychosocial changes as a readable timeline. */
 export function EventTimeline({ events }: { events: MetricEvent[] }) {
   if (events.length === 0) {
-    return <p className="meta">Sin alertas ni hechos registrados en la ventana.</p>;
+    return <p className="meta">Sin alertas, hechos ni cambios de contexto registrados en la ventana.</p>;
   }
+  const tagLabel = (event: MetricEvent) => {
+    if (event.kind === "alert") return `Alerta N${event.level}`;
+    if (event.kind === "psychosocial") return "Contexto";
+    return "Hecho";
+  };
   return (
     <ol className="event-timeline">
       {[...events].reverse().map((event) => (
         <li key={`${event.kind}-${event.id}`} className={`event-${event.kind}`}>
           <span className="event-date">{formatDay(event.at)}</span>
-          <span className={`event-tag event-tag-${event.kind}`}>
-            {event.kind === "alert" ? `Alerta N${event.level}` : "Hecho"}
-          </span>
+          <span className={`event-tag event-tag-${event.kind}`}>{tagLabel(event)}</span>
           <span className="event-label">{event.label}</span>
           <span className="meta"> · {event.status}</span>
         </li>
