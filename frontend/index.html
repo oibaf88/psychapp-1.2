@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#3a6ea5" />
+    <!-- Matches the top chrome, which is now brand dark. -->
+    <meta name="theme-color" content="#141413" />
+    <!-- The two faces above the fold. Self-hosted, so this is a same-origin
+         hint and no third party learns who opened the app. -->
+    <link rel="preload" href="/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/lora-400-latin.woff2" as="font" type="font/woff2" crossorigin />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
