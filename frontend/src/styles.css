@@ -1,11 +1,157 @@
+@import "./fonts.css";
+
+/* =====================================================================
+ * Claude design language — style layer only.
+ *
+ * This file carries the brand's colour and type system. It deliberately
+ * changes nothing about the app's structure or behaviour: no markup, no
+ * routes, no logic, no copy. Where the design language and the product's
+ * needs disagree, the product wins — the three places that happens are
+ * marked SEMANTIC, PRODUCT or A11Y below and explained where they sit.
+ *
+ * Palette (Anthropic brand):
+ *   dark #141413 · light #faf9f5 · mid gray #b0aea5 · light gray #e8e6dc
+ *   accents: orange #d97757 · blue #6a9bcc · green #788c5d
+ * Type: Poppins (headings and UI chrome), Lora (prose).
+ *
+ * A11Y note on the orange. White text on #d97757 measures 3.12:1, which
+ * fails WCAG AA for body text, so the brand orange is never used as a
+ * background behind white text here. It appears as a surface under DARK
+ * ink (5.90:1) and, deepened to #b4552f, as text on light (4.66:1). The
+ * top chrome uses brand dark under light text (17.5:1) instead — which is
+ * also how Claude's own surfaces read.
+ * ===================================================================== */
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
-  --primary: #3a6ea5;
-  --danger: #c0392b;
-  --bg: #f6f8fb;
+
+  /* --- brand core ---------------------------------------------------- */
+  --brand-ink: #141413;
+  --brand-light: #faf9f5;
+  --brand-gray: #b0aea5;
+  --brand-gray-light: #e8e6dc;
+  --brand-orange: #d97757;
+  --brand-blue: #6a9bcc;
+  --brand-green: #788c5d;
+
+  /* Text-safe deepenings of the accents, for use as ink on light
+     surfaces where the brand tones alone fall below 4.5:1. */
+  --brand-orange-ink: #b4552f;
+  --brand-blue-ink: #3f6f9f;
+  --brand-green-ink: #54663d;
+
+  /* --- warm neutral ramp, derived from the two brand neutrals -------- */
+  --sand-50: #faf9f5;
+  --sand-100: #f5f3ec;
+  --sand-200: #efece2;
+  --sand-300: #e8e6dc;
+  --sand-400: #d8d5c9;
+  --sand-500: #b0aea5;
+  --sand-600: #8a887f;
+  --sand-700: #6b6961;
+  --sand-800: #45443f;
+
+  /* --- roles the components actually use ----------------------------- */
+  --primary: var(--brand-orange);
+  --primary-ink: var(--brand-orange-ink);
+  --bg: var(--sand-50);
   --card-bg: #ffffff;
-  --border: #e0e4ea;
+  --border: var(--sand-300);
+  --ink: var(--brand-ink);
+  --ink-soft: #45443f;
+  --ink-muted: #6b6961;
+  --ink-faint: #8a887f;
+  --chrome-bg: var(--brand-ink);
+  --chrome-ink: var(--brand-light);
+
+  /* --- status. SEMANTIC: these encode clinical meaning, not brand ----
+     Alert levels are colour-coded across the whole panel and a therapist
+     reads them at a glance, so they stay unmistakably red/amber/green.
+     They are warmed to sit on the sand surfaces, never neutralised. */
+  --danger: #b3261e;
+  --danger-strong: #8f1d17;
+  --danger-bg: #fbeae7;
+  --danger-border: #eec4bd;
+  --warning: #9a6700;
+  --warning-bg: #fbf3de;
+  --warning-border: #ecdcb4;
+  --success: #4f7a52;
+  --success-ink: #3d6340;
+  --success-bg: #eaf1e6;
+  --success-border: #cddcc6;
+  --accent-bg: #f6efe7;
+  --accent-border: #e6d7c7;
+
+  /* --- type --------------------------------------------------------- */
+  --font-heading: "Poppins", "Segoe UI", Arial, sans-serif;
+  --font-body: "Lora", Georgia, "Times New Roman", serif;
+  --font-ui: "Poppins", "Segoe UI", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings and UI chrome wear Poppins; running prose wears Lora.
+   Controls, tables and dense clinical data stay in the sans face —
+   PRODUCT: a serif in a data table costs scannability, and the panel is
+   read under time pressure. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.08rem;
+}
+
+h4 {
+  font-size: 0.98rem;
+}
+
+button,
+input,
+select,
+textarea,
+.table,
+.tab,
+.meta,
+.chip,
+.ps-chip,
+.badge,
+label,
+nav,
+.navbar,
+code,
+pre {
+  font-family: var(--font-ui);
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
 }
 
 * {
@@ -15,7 +161,21 @@
 body {
   margin: 0;
   background: var(--bg);
-  color: #1e2430;
+  color: var(--ink);
+}
+
+/* The app never styled links, so they were rendering in the browser's
+   default blue and violet — which read as a bug against a warm palette.
+   `--primary-ink` is the text-safe deepening of the brand orange (4.66:1
+   on the page surface); the chrome overrides it with its own colour. */
+a {
+  color: var(--primary-ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--brand-ink);
 }
 
 main {
@@ -28,8 +188,8 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--primary);
-  color: white;
+  background: var(--chrome-bg);
+  color: var(--chrome-ink);
   padding: 12px 20px;
   flex-wrap: wrap;
   gap: 8px;
@@ -76,7 +236,7 @@ main {
 }
 
 .subtitle {
-  color: #5a6472;
+  color: #6b6961;
   margin-top: 0;
 }
 
@@ -99,6 +259,9 @@ main {
 
 input[type="range"] {
   width: 100%;
+  /* Sliders were rendering with the browser's default blue accent, the one
+     remaining piece of system chrome that ignored the palette. */
+  accent-color: var(--primary);
 }
 
 input,
@@ -115,12 +278,13 @@ textarea {
 
 button {
   background: var(--primary);
-  color: white;
+  color: var(--brand-ink);
   border: none;
   padding: 10px 16px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 0.95rem;
+  font-weight: 600;
 }
 
 button:disabled {
@@ -133,7 +297,7 @@ button:disabled {
 }
 
 .info {
-  background: #eef4fb;
+  background: #f6efe7;
   border-radius: 6px;
   padding: 8px 12px;
   font-size: 0.9rem;
@@ -151,7 +315,7 @@ button:disabled {
 
 .demo-hint {
   font-size: 0.75rem;
-  color: #8a94a3;
+  color: #8a887f;
 }
 
 .crisis-bar {
@@ -175,7 +339,7 @@ button:disabled {
 .crisis-fullscreen {
   position: fixed;
   inset: 0;
-  background: #7a1f1f;
+  background: #8f1d17;
   color: white;
   display: flex;
   flex-direction: column;
@@ -196,7 +360,7 @@ button:disabled {
 
 .crisis-cta {
   background: white;
-  color: #7a1f1f;
+  color: #8f1d17;
   font-weight: 700;
   padding: 16px 24px;
   border-radius: 10px;
@@ -274,14 +438,14 @@ button:disabled {
 }
 
 .breathing-ratio {
-  color: #5a6472;
+  color: #6b6961;
   font-size: 0.9rem;
   margin-top: -4px;
 }
 
 .disclaimer {
   font-size: 0.8rem;
-  color: #8a94a3;
+  color: #8a887f;
 }
 
 .wave-visual {
@@ -363,12 +527,12 @@ button:disabled {
 .chat-user {
   align-self: flex-end;
   background: var(--primary);
-  color: white;
+  color: var(--brand-ink);
 }
 
 .chat-assistant {
   align-self: flex-start;
-  background: #eef1f5;
+  background: #f5f3ec;
   white-space: pre-wrap;
 }
 
@@ -403,7 +567,7 @@ button:disabled {
 }
 
 .alert-level-3 {
-  border-left: 6px solid #e6a23c;
+  border-left: 6px solid #9a6700;
 }
 
 .alert-actions {
@@ -415,7 +579,7 @@ button:disabled {
 
 .meta {
   font-size: 0.8rem;
-  color: #52606d;
+  color: #45443f;
 }
 
 .loading {
@@ -460,7 +624,7 @@ button:disabled {
 }
 
 .btn-secondary {
-  background: #5a6472;
+  background: #6b6961;
 }
 
 .btn-danger {
@@ -477,11 +641,11 @@ button:disabled {
 }
 
 .badge-ok {
-  color: #1b7a3d;
+  color: #4f7a52;
 }
 
 .badge-off {
-  color: #8a94a3;
+  color: #8a887f;
 }
 
 .role-hint ul {
@@ -492,14 +656,14 @@ button:disabled {
   padding: 8px 10px;
   margin: 8px 0;
   border-radius: 6px;
-  background: #fafbfc;
+  background: #faf9f5;
   border-left: 4px solid var(--border);
 }
 
 button.linkish {
   background: none;
   border: none;
-  color: var(--primary);
+  color: var(--primary-ink);
   padding: 0;
   text-decoration: underline;
   cursor: pointer;
@@ -524,8 +688,8 @@ button.linkish {
 }
 
 .tab {
-  background: #e8edf3;
-  color: #1e2430;
+  background: #f5f3ec;
+  color: #141413;
   border: 1px solid var(--border);
   padding: 8px 12px;
   border-radius: 999px;
@@ -534,7 +698,7 @@ button.linkish {
 
 .tab.active {
   background: var(--primary);
-  color: white;
+  color: var(--brand-ink);
   border-color: var(--primary);
 }
 
@@ -562,25 +726,25 @@ button.linkish {
 }
 
 .risk-banner.level-2 {
-  border-left: 6px solid #e6a23c;
+  border-left: 6px solid #9a6700;
 }
 
 .risk-banner.level-0,
 .risk-banner.level-1 {
-  border-left: 6px solid #2e7d32;
+  border-left: 6px solid #4f7a52;
 }
 
 .level-pill {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #eef1f5;
+  background: #f5f3ec;
   font-size: 0.85rem;
 }
 
 .level-pill.level-3,
 .level-pill.level-4 {
-  background: #fdecea;
+  background: #fbeae7;
   color: var(--danger);
 }
 
@@ -599,8 +763,8 @@ button.linkish {
 }
 
 .protocol-box {
-  background: #0f172a;
-  color: #e2e8f0;
+  background: #141413;
+  color: #e8e6dc;
   padding: 12px;
   border-radius: 8px;
   white-space: pre-wrap;
@@ -613,7 +777,7 @@ button.linkish {
 .trace-integrity-note,
 .trace-legacy-note {
   border-left: 4px solid var(--primary);
-  background: #f0f6fc;
+  background: #faf9f5;
   border-radius: 0 8px 8px 0;
   padding: 10px 12px;
   font-size: 0.9rem;
@@ -621,8 +785,8 @@ button.linkish {
 
 .trace-legacy-note {
   border-left-color: #9a6700;
-  background: #fff8e6;
-  color: #634700;
+  background: #fbf3de;
+  color: #704800;
 }
 
 .trace-list {
@@ -642,11 +806,11 @@ button.linkish {
 
 .trace-card.level-0,
 .trace-card.level-1 {
-  border-left: 5px solid #2e7d32;
+  border-left: 5px solid #4f7a52;
 }
 
 .trace-card.level-2 {
-  border-left: 5px solid #c27803;
+  border-left: 5px solid #9a6700;
 }
 
 .trace-card.level-3,
@@ -662,12 +826,12 @@ button.linkish {
   gap: 12px;
   padding: 14px 16px;
   cursor: pointer;
-  background: #fbfcfe;
+  background: #faf9f5;
 }
 
 .trace-card-summary:hover,
 .agent2-summary:hover {
-  background: #f3f6fa;
+  background: #faf9f5;
 }
 
 .trace-card-summary:focus-visible,
@@ -683,26 +847,26 @@ button.linkish {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: #edf0f4;
-  color: #344054;
+  background: #f5f3ec;
+  color: #45443f;
   font-weight: 750;
 }
 
 .risk-orb.level-0,
 .risk-orb.level-1 {
-  background: #e7f5eb;
-  color: #176236;
+  background: #eaf1e6;
+  color: #3d6340;
 }
 
 .risk-orb.level-2 {
-  background: #fff1ce;
+  background: #fbf3de;
   color: #704800;
 }
 
 .risk-orb.level-3,
 .risk-orb.level-4 {
-  background: #fde7e4;
-  color: #9f2d22;
+  background: #fbeae7;
+  color: #8f1d17;
 }
 
 .trace-summary-copy,
@@ -713,7 +877,7 @@ button.linkish {
 }
 
 .trace-summary-copy > span {
-  color: #5a6472;
+  color: #6b6961;
   font-size: 0.88rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -721,7 +885,7 @@ button.linkish {
 }
 
 .trace-summary-meta {
-  color: #697586;
+  color: #6b6961;
   font-size: 0.78rem;
   text-align: right;
 }
@@ -736,9 +900,9 @@ button.linkish {
   grid-template-columns: minmax(220px, 1.4fr) minmax(150px, 0.7fr) minmax(180px, 0.9fr);
   gap: 14px;
   padding: 14px;
-  border: 1px solid #dce5ef;
+  border: 1px solid #e8e6dc;
   border-radius: 10px;
-  background: #f8fafc;
+  background: #faf9f5;
 }
 
 .decision-result,
@@ -780,7 +944,7 @@ button.linkish {
 .trace-identifiers dt,
 .trace-run-metadata dt,
 .trace-field-list dt {
-  color: #697586;
+  color: #6b6961;
   font-size: 0.78rem;
 }
 
@@ -819,9 +983,9 @@ button.linkish {
   grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(110px, 0.6fr));
   gap: 10px;
   margin-top: 10px;
-  border: 1px solid #dce5ef;
+  border: 1px solid #e8e6dc;
   border-radius: 9px;
-  background: #f8fafc;
+  background: #faf9f5;
   padding: 11px;
 }
 
@@ -857,7 +1021,7 @@ button.linkish {
   top: 30px;
   bottom: -1px;
   width: 2px;
-  background: #dce2e9;
+  background: #e8e6dc;
 }
 
 .decision-marker {
@@ -867,23 +1031,23 @@ button.linkish {
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 2px solid #aab4c0;
+  border: 2px solid #b0aea5;
   border-radius: 50%;
   background: white;
-  color: #52606d;
+  color: #45443f;
   font-weight: 750;
 }
 
 .decision-step.matched .decision-marker,
 .decision-step.selected .decision-marker {
-  border-color: #237a43;
-  background: #e8f7ed;
-  color: #176236;
+  border-color: #4f7a52;
+  background: #eaf1e6;
+  color: #3d6340;
 }
 
 .decision-step.not-matched .decision-marker {
-  border-color: #9aa5b1;
-  background: #f2f4f7;
+  border-color: #8a887f;
+  background: #f5f3ec;
 }
 
 .decision-content {
@@ -908,8 +1072,8 @@ button.linkish {
   width: fit-content;
   border-radius: 999px;
   padding: 3px 8px;
-  background: #eceff3;
-  color: #465466;
+  background: #f5f3ec;
+  color: #45443f;
   font-size: 0.75rem;
   font-weight: 650;
   white-space: nowrap;
@@ -918,19 +1082,19 @@ button.linkish {
 .trace-status.matched,
 .trace-status.selected,
 .trace-status.success {
-  background: #e5f5ea;
-  color: #176236;
+  background: #eaf1e6;
+  color: #3d6340;
 }
 
 .trace-status.not-matched,
 .trace-status.pending {
-  background: #eef2f7;
-  color: #475467;
+  background: #f5f3ec;
+  color: #45443f;
 }
 
 .trace-status.failure {
-  background: #fde9e7;
-  color: #9f2d22;
+  background: #fbeae7;
+  color: #8f1d17;
 }
 
 .observed-grid {
@@ -945,7 +1109,7 @@ button.linkish {
   flex-direction: column;
   gap: 2px;
   border-radius: 6px;
-  background: #f6f8fb;
+  background: #faf9f5;
   padding: 7px 9px;
   overflow-wrap: anywhere;
 }
@@ -968,10 +1132,10 @@ button.linkish {
   flex-direction: column;
   gap: 5px;
   min-width: 0;
-  border: 1px solid #e1e6ec;
+  border: 1px solid #e8e6dc;
   border-radius: 8px;
   padding: 9px 10px;
-  background: #fbfcfd;
+  background: #faf9f5;
   font-size: 0.86rem;
 }
 
@@ -991,11 +1155,11 @@ button.linkish {
 }
 
 .boolean-yes {
-  color: #9f2d22;
+  color: #8f1d17;
 }
 
 .boolean-no {
-  color: #176236;
+  color: #3d6340;
 }
 
 .trace-field-list {
@@ -1006,7 +1170,7 @@ button.linkish {
 }
 
 .trace-field-list > div {
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid #f5f3ec;
   padding: 6px 0;
   min-width: 0;
 }
@@ -1025,13 +1189,13 @@ button.linkish {
 .json-disclosure {
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fafbfc;
+  background: #faf9f5;
 }
 
 .json-disclosure summary {
   padding: 9px 11px;
   cursor: pointer;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 600;
 }
 
@@ -1040,8 +1204,8 @@ button.linkish {
   margin: 0;
   border-top: 1px solid var(--border);
   padding: 12px;
-  background: #172033;
-  color: #e7edf5;
+  background: #141413;
+  color: #f5f3ec;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1049,11 +1213,11 @@ button.linkish {
 }
 
 .agent2-card.success {
-  border-left: 5px solid #237a43;
+  border-left: 5px solid #4f7a52;
 }
 
 .agent2-card.pending {
-  border-left: 5px solid #6b7785;
+  border-left: 5px solid #6b6961;
 }
 
 .agent2-card.failure {
@@ -1073,12 +1237,12 @@ button.linkish {
   gap: 3px;
   min-width: 0;
   border-radius: 7px;
-  background: #f2f5f8;
+  background: #f5f3ec;
   padding: 8px 9px;
 }
 
 .agent2-linkage span {
-  color: #697586;
+  color: #6b6961;
   font-size: 0.75rem;
 }
 
@@ -1101,29 +1265,29 @@ button.linkish {
 }
 
 .agent2-input {
-  background: #f8fafc;
+  background: #faf9f5;
 }
 
 .agent2-output {
-  background: #f7fbf8;
+  background: #eaf1e6;
 }
 
 .agent2-panel blockquote {
   margin: 12px 0 0;
-  border-left: 4px solid #8796a8;
+  border-left: 4px solid #8a887f;
   padding: 6px 0 6px 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .trace-empty {
-  color: #697586;
+  color: #6b6961;
   font-style: italic;
 }
 
 .trace-error {
   border-left: 4px solid var(--danger);
-  background: #fff1ef;
+  background: #fbeae7;
   border-radius: 0 6px 6px 0;
   padding: 8px 10px;
 }
@@ -1137,7 +1301,7 @@ button.linkish {
 
 .trace-run-metadata > div {
   min-width: 0;
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid #f5f3ec;
   padding-bottom: 5px;
 }
 
@@ -1147,7 +1311,7 @@ button.linkish {
   align-items: end;
   gap: 10px;
   border-radius: 9px;
-  background: #f2f5f8;
+  background: #f5f3ec;
   padding: 12px;
   margin-top: 14px;
 }
@@ -1158,7 +1322,7 @@ button.linkish {
 
 .trace-filter-count {
   padding: 9px 4px;
-  color: #5a6472;
+  color: #6b6961;
   font-size: 0.85rem;
   white-space: nowrap;
 }
@@ -1232,20 +1396,20 @@ button.linkish {
 
 .explain-card.level-0,
 .explain-card.level-1 {
-  border-left-color: #4caf50;
+  border-left-color: #4f7a52;
 }
 .explain-card.level-2 {
-  border-left-color: #e0a800;
+  border-left-color: #9a6700;
 }
 .explain-card.level-3 {
-  border-left-color: #e07a1f;
+  border-left-color: #b4552f;
 }
 .explain-card.level-4 {
   border-left-color: var(--danger);
-  background: #fff6f5;
+  background: #fbeae7;
 }
 .explain-card.level-na {
-  border-left-color: #9aa5b1;
+  border-left-color: #8a887f;
 }
 
 .explain-head {
@@ -1297,7 +1461,7 @@ button.linkish {
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: #6a7480;
+  color: #6b6961;
   margin-bottom: 2px;
 }
 
@@ -1309,7 +1473,7 @@ button.linkish {
 .explain-reconcile {
   margin: 16px 0 0;
   padding: 12px 14px;
-  background: #eef4fb;
+  background: #f6efe7;
   border-left: 4px solid var(--primary);
   border-radius: 4px;
   line-height: 1.5;
@@ -1318,7 +1482,7 @@ button.linkish {
 .explain-scale {
   margin: 4px 0 10px;
   padding: 10px 12px;
-  background: #f3f5f8;
+  background: #f5f3ec;
   border-radius: 6px;
   line-height: 1.5;
 }
@@ -1335,7 +1499,7 @@ button.linkish {
 .explain-caveats {
   margin: 14px 0 0;
   padding-left: 20px;
-  color: #59626e;
+  color: #6b6961;
   font-size: 0.9rem;
   line-height: 1.5;
 }
@@ -1352,21 +1516,21 @@ button.linkish {
   white-space: nowrap;
 }
 .direction-pill.direction-peor {
-  background: #fdecea;
-  color: #a12a1c;
+  background: #fbeae7;
+  color: #8f1d17;
 }
 .direction-pill.direction-mejor {
-  background: #e8f5e9;
-  color: #1f6f2b;
+  background: #eaf1e6;
+  color: #3d6340;
 }
 .direction-pill.direction-igual,
 .direction-pill.direction-sin_datos {
-  background: #eef0f3;
-  color: #59626e;
+  background: #f5f3ec;
+  color: #6b6961;
 }
 
 tr.direction-peor td:first-child {
-  border-left: 3px solid #e07a1f;
+  border-left: 3px solid #b4552f;
 }
 
 /* --- charts ---------------------------------------------------------- */
@@ -1391,7 +1555,7 @@ tr.direction-peor td:first-child {
 
 .chart-question {
   margin: 0 0 10px;
-  color: #59626e;
+  color: #6b6961;
   font-size: 0.9rem;
 }
 
@@ -1404,14 +1568,14 @@ tr.direction-peor td:first-child {
   margin: 8px 0 0;
   font-size: 0.85rem;
   line-height: 1.5;
-  color: #4c5560;
+  color: #45443f;
 }
 
 .chart-empty {
   padding: 28px 8px;
   text-align: center;
-  color: #6a7480;
-  background: #f7f8fa;
+  color: #6b6961;
+  background: #faf9f5;
   border-radius: 8px;
 }
 
@@ -1433,7 +1597,7 @@ tr.direction-peor td:first-child {
 
 .event-date {
   min-width: 100px;
-  color: #6a7480;
+  color: #6b6961;
   font-size: 0.88rem;
 }
 
@@ -1444,12 +1608,12 @@ tr.direction-peor td:first-child {
   font-weight: 600;
 }
 .event-tag-alert {
-  background: #fdecea;
-  color: #a12a1c;
+  background: #fbeae7;
+  color: #8f1d17;
 }
 .event-tag-fact {
-  background: #eef4fb;
-  color: #22557f;
+  background: #f6efe7;
+  color: #b4552f;
 }
 
 /* --- evidence feed --------------------------------------------------- */
@@ -1467,8 +1631,8 @@ tr.direction-peor td:first-child {
 }
 
 .evidence-item.evidence-flagged {
-  border-color: #f0b8b0;
-  background: #fffaf9;
+  border-color: #eec4bd;
+  background: #fbeae7;
 }
 
 .evidence-item.evidence-highlight {
@@ -1491,27 +1655,27 @@ tr.direction-peor td:first-child {
   font-weight: 600;
 }
 .source-pill.source-chat_message {
-  background: #e8f1fb;
-  color: #22557f;
+  background: #f6efe7;
+  color: #b4552f;
 }
 .source-pill.source-diary_entry {
-  background: #f1ecf9;
-  color: #5b3f86;
+  background: #f0edf6;
+  color: #574a8a;
 }
 
 .evidence-alert-tag {
   padding: 2px 8px;
   border-radius: 4px;
-  background: #fdecea;
-  color: #a12a1c;
+  background: #fbeae7;
+  color: #8f1d17;
   font-size: 0.8rem;
   font-weight: 600;
 }
 
 .evidence-status {
   font-size: 0.8rem;
-  color: #8a6d3b;
-  background: #fcf8e3;
+  color: #9a6700;
+  background: #fbf3de;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -1520,7 +1684,7 @@ tr.direction-peor td:first-child {
   margin: 8px 0;
   padding: 10px 14px;
   border-left: 4px solid var(--primary);
-  background: #f7f9fc;
+  background: #faf9f5;
   border-radius: 0 6px 6px 0;
   white-space: pre-wrap;
   line-height: 1.55;
@@ -1552,12 +1716,12 @@ tr.direction-peor td:first-child {
   margin-top: 14px;
   padding: 12px 14px;
   border-radius: 8px;
-  background: #f7f9fc;
+  background: #faf9f5;
   border: 1px solid var(--border);
 }
 
 .evidence-block.evidence-fact {
-  background: #f4f9f4;
+  background: #eaf1e6;
 }
 
 .evidence-head {
@@ -1576,7 +1740,7 @@ tr.direction-peor td:first-child {
 .alert-raw {
   margin: 10px 0;
   font-size: 0.9rem;
-  color: #59626e;
+  color: #6b6961;
 }
 
 .alert-raw summary {
@@ -1602,12 +1766,12 @@ tr.direction-peor td:first-child {
 }
 
 .transcript-user {
-  background: #e8f1fb;
+  background: #f6efe7;
   align-self: flex-start;
 }
 
 .transcript-assistant {
-  background: #f3f5f8;
+  background: #f5f3ec;
   align-self: flex-end;
 }
 
@@ -1629,7 +1793,7 @@ tr.direction-peor td:first-child {
 
 .copilot-disclaimer {
   padding: 10px 12px;
-  background: #f3f5f8;
+  background: #f5f3ec;
   border-radius: 6px;
   font-size: 0.88rem;
   line-height: 1.5;
@@ -1642,14 +1806,14 @@ tr.direction-peor td:first-child {
   min-height: 220px;
   max-height: 60vh;
   overflow-y: auto;
-  background: #fbfcfe;
+  background: #faf9f5;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
 .copilot-empty {
-  color: #6a7480;
+  color: #6b6961;
   text-align: center;
   padding: 24px 8px;
 }
@@ -1661,7 +1825,7 @@ tr.direction-peor td:first-child {
 }
 
 .copilot-user {
-  background: #e8f1fb;
+  background: #f6efe7;
   align-self: flex-end;
 }
 
@@ -1672,12 +1836,12 @@ tr.direction-peor td:first-child {
 }
 
 .copilot-bubble.copilot-error {
-  background: #fdecea;
-  border-color: #f0b8b0;
+  background: #fbeae7;
+  border-color: #eec4bd;
 }
 
 .copilot-pending {
-  color: #6a7480;
+  color: #6b6961;
   font-style: italic;
 }
 
@@ -1704,12 +1868,12 @@ tr.direction-peor td:first-child {
   background: #fff;
   font-size: 0.85rem;
   cursor: pointer;
-  color: #2c3542;
+  color: #141413;
 }
 
 .chip:hover:not(:disabled) {
   border-color: var(--primary);
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .copilot-picker label {
@@ -1732,7 +1896,7 @@ tr.direction-peor td:first-child {
 .manual-callout {
   padding: 14px 16px;
   border-left: 5px solid var(--danger);
-  background: #fff6f5;
+  background: #fbeae7;
   border-radius: 0 8px 8px 0;
   line-height: 1.55;
   margin-bottom: 18px;
@@ -1761,19 +1925,19 @@ tr.direction-peor td:first-child {
   padding: 8px 10px;
   border-radius: 0 6px 6px 0;
   cursor: pointer;
-  color: #2c3542;
+  color: #141413;
   font-size: 0.92rem;
 }
 
 .manual-nav-item:hover {
-  background: #eef2f7;
+  background: #f5f3ec;
 }
 
 .manual-nav-item.active {
-  background: #e8f1fb;
+  background: #f6efe7;
   border-left-color: var(--primary);
   font-weight: 600;
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .manual-content h2 {
@@ -1791,18 +1955,18 @@ tr.direction-peor td:first-child {
 
 .manual-key {
   padding: 12px 14px;
-  background: #eef4fb;
+  background: #f6efe7;
   border-left: 4px solid var(--primary);
   border-radius: 0 6px 6px 0;
   line-height: 1.55;
 }
 
 .manual-wrong {
-  color: #a12a1c;
+  color: #8f1d17;
 }
 
 tr.row-highlight {
-  background: #f6f9ff;
+  background: #faf9f5;
 }
 
 @media (max-width: 900px) {
@@ -1856,19 +2020,19 @@ tr.row-highlight {
   color: var(--danger);
 }
 .psy-band-moderada .psy-gauge-value {
-  color: #b7791f;
+  color: #9a6700;
 }
 .psy-band-baja .psy-gauge-value {
-  color: #1f6f2b;
+  color: #3d6340;
 }
 .psy-band-sin_datos .psy-gauge-value {
-  color: #6a7480;
+  color: #6b6961;
 }
 
 .psy-gauge-track {
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #e8f5e9 0%, #fdf3d8 45%, #fdecea 100%);
+  background: linear-gradient(90deg, #eaf1e6 0%, #fbf3de 45%, #fbeae7 100%);
   border: 1px solid var(--border);
   overflow: hidden;
   margin: 6px 0 4px;
@@ -1876,7 +2040,7 @@ tr.row-highlight {
 
 .psy-gauge-fill {
   height: 100%;
-  background: #b5651d;
+  background: var(--brand-orange-ink);
   opacity: 0.75;
 }
 
@@ -1884,7 +2048,7 @@ tr.row-highlight {
   display: flex;
   justify-content: space-between;
   font-size: 0.78rem;
-  color: #6a7480;
+  color: #6b6961;
 }
 
 .psy-grid {
@@ -1903,13 +2067,13 @@ tr.row-highlight {
 }
 
 .psy-card.psy-risk {
-  border-left-color: #e07a1f;
+  border-left-color: #b4552f;
 }
 .psy-card.psy-protective {
-  border-left-color: #2e7d32;
+  border-left-color: #4f7a52;
 }
 .psy-card.psy-neutral {
-  border-left-color: #9aa5b1;
+  border-left-color: #8a887f;
 }
 
 .psy-card.psy-status-refuted {
@@ -1919,7 +2083,7 @@ tr.row-highlight {
   text-decoration: line-through;
 }
 .psy-card.psy-status-confirmed {
-  box-shadow: inset 3px 0 0 #22557f;
+  box-shadow: inset 3px 0 0 #b4552f;
 }
 
 .psy-card-head {
@@ -1931,7 +2095,7 @@ tr.row-highlight {
 }
 
 .psy-category {
-  color: #59626e;
+  color: #6b6961;
   font-size: 0.9rem;
 }
 
@@ -1949,28 +2113,28 @@ tr.row-highlight {
   white-space: nowrap;
 }
 .psy-pill-risk {
-  background: #fdecea;
-  color: #a12a1c;
+  background: #fbeae7;
+  color: #8f1d17;
 }
 .psy-pill-protective {
-  background: #e8f5e9;
-  color: #1f6f2b;
+  background: #eaf1e6;
+  color: #3d6340;
 }
 .psy-pill-neutral {
-  background: #eef0f3;
-  color: #59626e;
+  background: #f5f3ec;
+  color: #6b6961;
 }
 .psy-pill-change {
-  background: #fff3cd;
-  color: #8a6d3b;
+  background: #fbf3de;
+  color: #9a6700;
 }
 .psy-pill-confirmed {
-  background: #e8f1fb;
-  color: #22557f;
+  background: #f6efe7;
+  color: #b4552f;
 }
 .psy-pill-refuted {
-  background: #eef0f3;
-  color: #59626e;
+  background: #f5f3ec;
+  color: #6b6961;
 }
 
 .psy-summary {
@@ -1989,7 +2153,7 @@ tr.row-highlight {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: #6a7480;
+  color: #6b6961;
 }
 
 .psy-numbers dd {
@@ -2006,8 +2170,8 @@ tr.row-highlight {
 }
 
 .psy-acute {
-  border: 1px solid #f0c987;
-  background: #fffaf0;
+  border: 1px solid #ecdcb4;
+  background: #fbf3de;
   border-radius: 10px;
   padding: 14px 16px;
   margin-bottom: 18px;

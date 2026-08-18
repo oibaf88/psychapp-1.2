@@ -131,14 +131,14 @@ export default function PatientDashboard() {
               <YAxis yAxisId="right" orientation="right" domain={[0, 1]} />
               <Tooltip />
               <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke="#4f8ef7" connectNulls />
-              <Line yAxisId="left" type="monotone" dataKey="craving" name="Craving" stroke="#f76c4f" connectNulls />
+              <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke="#2a78d6" connectNulls />
+              <Line yAxisId="left" type="monotone" dataKey="craving" name="Craving" stroke="#eb6834" connectNulls />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="structural_score"
                 name="Score estructural"
-                stroke="#2e7d32"
+                stroke="#0ca30c"
                 connectNulls
                 strokeWidth={2}
               />

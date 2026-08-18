@@ -33,19 +33,34 @@ import {
   formatDay,
 } from "../api";
 
+/* Series colours, validated rather than chosen by eye.
+ *
+ * Two groups ever share a chart: the four check-in variables, and the four
+ * Agent 2 signals. Both were run through the palette validator for CVD
+ * separation and normal-vision distance against the white card surface,
+ * with all pairs compared (not just adjacent ones):
+ *
+ *   check-ins  #2a78d6 #eb6834 #4a3aa7 #1baf7a  -> worst CVD ΔE 9.2
+ *   Agent 2    #e34948 #4a3aa7 #eda100 #2a78d6  -> worst CVD ΔE 13.0
+ *
+ * `level` and `score` are STATUS colours (critical / good), kept apart from
+ * the categorical slots so a status tone never impersonates a series.
+ * Violet and blue appear in both groups; that is fine because the two
+ * groups never share a chart and each chart carries its own legend.
+ */
 const COLORS = {
-  level: "#c1121f",
-  score: "#2e7d32",
-  mood: "#4f8ef7",
-  craving: "#f76c4f",
-  sleep: "#9b59b6",
-  efficacy: "#0f9b8e",
-  rumination: "#d1495b",
-  valence: "#8d6a9f",
-  urgency: "#e07a1f",
-  ambivalence: "#5c6f7d",
-  psychosocial: "#b5651d",
-  neutral: "#9aa5b1",
+  level: "#d03b3b",
+  score: "#0ca30c",
+  mood: "#2a78d6",
+  craving: "#eb6834",
+  sleep: "#4a3aa7",
+  efficacy: "#1baf7a",
+  rumination: "#e34948",
+  valence: "#4a3aa7",
+  urgency: "#eda100",
+  ambivalence: "#2a78d6",
+  psychosocial: "#c4562e",
+  neutral: "#898781",
 };
 
 export function ChartCard({
