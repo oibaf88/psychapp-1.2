@@ -63,13 +63,13 @@ export default function WavePage() {
           <svg className="wave-svg" viewBox="0 0 320 160" preserveAspectRatio="none">
             <defs>
               <linearGradient id="waveFrontGradient" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#73d2de" />
-                <stop offset="46%" stopColor="#2f8fbd" />
-                <stop offset="100%" stopColor="#1b4f8a" />
+                <stop offset="0%" stopColor="#7fd8c2" />
+                <stop offset="46%" stopColor="#6c98f4" />
+                <stop offset="100%" stopColor="#2f4f9e" />
               </linearGradient>
               <linearGradient id="waveBackGradient" x1="0" x2="1" y1="0" y2="1">
-                <stop offset="0%" stopColor="#b6e6ff" stopOpacity="0.7" />
-                <stop offset="100%" stopColor="#5aa4d6" stopOpacity="0.55" />
+                <stop offset="0%" stopColor="#b9cdfa" stopOpacity="0.7" />
+                <stop offset="100%" stopColor="#6c98f4" stopOpacity="0.55" />
               </linearGradient>
             </defs>
             <path className="wave-back" d={waveBack} />

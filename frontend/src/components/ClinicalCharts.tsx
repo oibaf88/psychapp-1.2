@@ -33,34 +33,43 @@ import {
   formatDay,
 } from "../api";
 
-/* Series colours, validated rather than chosen by eye.
+/* Series colours, re-stepped for the dark card surface and validated
+ * rather than chosen by eye.
  *
- * Two groups ever share a chart: the four check-in variables, and the four
- * Agent 2 signals. Both were run through the palette validator for CVD
- * separation and normal-vision distance against the white card surface,
- * with all pairs compared (not just adjacent ones):
+ * The previous steps were validated against a WHITE card. The surface is
+ * now #1a2332, so they were re-stepped and re-run — a dark palette is
+ * selected for its surface, never an automatic flip of the light one.
  *
- *   check-ins  #2a78d6 #eb6834 #4a3aa7 #1baf7a  -> worst CVD ΔE 9.2
- *   Agent 2    #e34948 #4a3aa7 #eda100 #2a78d6  -> worst CVD ΔE 13.0
+ * The four categorical slots below are assigned in fixed order and shared
+ * by both groups that ever appear together in one chart (the four check-in
+ * variables, and the four Agent 2 signals); the groups never co-occur, so
+ * one theme serves both. Against #1a2332, on the adjacent pairlist that
+ * line charts are read on:
  *
- * `level` and `score` are STATUS colours (critical / good), kept apart from
- * the categorical slots so a status tone never impersonates a series.
- * Violet and blue appear in both groups; that is fine because the two
- * groups never share a chart and each chart carries its own legend.
+ *   #3987e5 #d95926 #199e70 #c98500
+ *   worst adjacent CVD ΔE 8.4 (protan) · normal-vision 19.8 · all >= 3:1
+ *
+ * Four is the ceiling here, not a preference: past three slots no hue set
+ * clears all-pairs CVD inside the dark lightness band, so a fifth series
+ * must fold to "Other" or be faceted rather than take a generated hue.
+ *
+ * `level` and `score` are STATUS colours (critical / good) and stay the
+ * stylesheet's semantic red and green, kept apart from the categorical
+ * slots so a status tone never impersonates a series.
  */
 const COLORS = {
-  level: "#d03b3b",
-  score: "#0ca30c",
-  mood: "#2a78d6",
-  craving: "#eb6834",
-  sleep: "#4a3aa7",
-  efficacy: "#1baf7a",
-  rumination: "#e34948",
-  valence: "#4a3aa7",
-  urgency: "#eda100",
-  ambivalence: "#2a78d6",
-  psychosocial: "#c4562e",
-  neutral: "#898781",
+  level: "#e36a6a",
+  score: "#55bd91",
+  mood: "#3987e5",
+  craving: "#d95926",
+  sleep: "#199e70",
+  efficacy: "#c98500",
+  rumination: "#3987e5",
+  valence: "#d95926",
+  urgency: "#199e70",
+  ambivalence: "#c98500",
+  psychosocial: "#c98500",
+  neutral: "#9aa8bc",
 };
 
 export function ChartCard({
@@ -154,11 +163,11 @@ export function StructuralScoreChart({ points }: { points: StructuralPoint[] }) 
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={points} margin={{ top: 8, right: 16, bottom: 4, left: -18 }}>
           <CartesianGrid strokeDasharray="3 3" />
-          <ReferenceArea y1={0.6} y2={1} fill="#2e7d32" fillOpacity={0.06} />
-          <ReferenceArea y1={0.35} y2={0.6} fill="#e0a800" fillOpacity={0.08} />
-          <ReferenceArea y1={0} y2={0.35} fill="#c1121f" fillOpacity={0.07} />
-          <ReferenceLine y={0.6} stroke="#2e7d32" strokeDasharray="4 4" />
-          <ReferenceLine y={0.35} stroke="#c1121f" strokeDasharray="4 4" />
+          <ReferenceArea y1={0.6} y2={1} fill="#55bd91" fillOpacity={0.06} />
+          <ReferenceArea y1={0.35} y2={0.6} fill="#e5b75f" fillOpacity={0.08} />
+          <ReferenceArea y1={0} y2={0.35} fill="#e36a6a" fillOpacity={0.07} />
+          <ReferenceLine y={0.6} stroke="#55bd91" strokeDasharray="4 4" />
+          <ReferenceLine y={0.35} stroke="#e36a6a" strokeDasharray="4 4" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
           <YAxis domain={[0, 1]} tick={{ fontSize: 11 }} />
           <Tooltip
@@ -195,7 +204,7 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={points} margin={{ top: 8, right: 16, bottom: 4, left: -18 }}>
           <CartesianGrid strokeDasharray="3 3" />
-          <ReferenceLine y={0} stroke="#333" />
+          <ReferenceLine y={0} stroke="#3a4a63" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
           <YAxis tick={{ fontSize: 11 }} />
           <Tooltip labelFormatter={formatDay} />
@@ -393,10 +402,10 @@ export function PsychosocialIndexChart({ points }: { points: PsychosocialPoint[]
           margin={{ top: 8, right: 16, bottom: 4, left: -18 }}
         >
           <CartesianGrid strokeDasharray="3 3" />
-          <ReferenceArea y1={0.6} y2={1.12} fill="#c1121f" fillOpacity={0.07} />
-          <ReferenceArea y1={0.35} y2={0.6} fill="#e0a800" fillOpacity={0.08} />
-          <ReferenceLine y={0.6} stroke="#c1121f" strokeDasharray="4 4" />
-          <ReferenceLine y={0.35} stroke="#e0a800" strokeDasharray="4 4" />
+          <ReferenceArea y1={0.6} y2={1.12} fill="#e36a6a" fillOpacity={0.07} />
+          <ReferenceArea y1={0.35} y2={0.6} fill="#e5b75f" fillOpacity={0.08} />
+          <ReferenceLine y={0.6} stroke="#e36a6a" strokeDasharray="4 4" />
+          <ReferenceLine y={0.35} stroke="#e5b75f" strokeDasharray="4 4" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
           <YAxis domain={[0, 1.12]} ticks={[0, 0.25, 0.5, 0.75, 1]} tick={{ fontSize: 11 }} />
           <Tooltip
