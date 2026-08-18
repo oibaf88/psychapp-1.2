@@ -202,6 +202,12 @@ class ChatMessageOut(BaseModel):
     role: str
     content: str
     ui_mode: Optional[str]
+    # Which model wrote this turn. Null on the patient's own messages, and on
+    # replies assembled from the server-owned safety templates — those have
+    # no model behind them, and saying so is the point.
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    provider_base_url: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -350,6 +356,10 @@ class Agent2AnalysisTraceOut(BaseModel):
     source_text: str
     status: str
     provider: str
+    # Where the call went. The model name alone stops identifying anything
+    # once the endpoint is configurable: two installs can both report
+    # "llama-3.1-8b" and mean different weights on different machines.
+    provider_base_url: Optional[str] = None
     requested_model: str
     response_model: Optional[str] = None
     effort: str
@@ -395,6 +405,9 @@ class PatientChatMessageOut(BaseModel):
     role: str
     content: str
     ui_mode: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    provider_base_url: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -685,3 +698,44 @@ class PatientDossierOut(BaseModel):
     deep_analysis: Optional[DeepStatisticalAnalysisOut] = None
     safety_plan: Optional[SafetyPlanOut] = None
     professional_protocol: dict[str, str]
+
+
+# ------------------------------------------------- runtime LLM endpoint ----
+class LLMEndpointConfigIn(BaseModel):
+    """A model endpoint to serve the inference agents from."""
+
+    provider: str = Field(pattern="^(anthropic|openai_compatible)$")
+    base_url: Optional[str] = None
+    chat_model: str = Field(min_length=1, max_length=160)
+    analysis_model: str = Field(min_length=1, max_length=160)
+    # null keeps the stored key, "" clears it. The current key is never
+    # returned, so the UI cannot echo it back by accident.
+    api_key: Optional[str] = Field(default=None, max_length=400)
+    max_tokens: int = Field(default=4096, ge=256, le=32768)
+    timeout_seconds: int = Field(default=120, ge=5, le=600)
+    label: Optional[str] = Field(default=None, max_length=120)
+
+
+class LLMEndpointTestIn(BaseModel):
+    provider: str = Field(pattern="^(anthropic|openai_compatible)$")
+    base_url: Optional[str] = None
+    chat_model: str = Field(min_length=1, max_length=160)
+    analysis_model: Optional[str] = Field(default=None, max_length=160)
+    api_key: Optional[str] = Field(default=None, max_length=400)
+    timeout_seconds: int = Field(default=30, ge=5, le=600)
+
+
+class LLMEndpointTestOut(BaseModel):
+    ok: bool
+    detail: str
+    sample: Optional[str] = None
+    error_code: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class LLMEndpointStatusOut(BaseModel):
+    active: dict[str, Any]
+    environment_default: dict[str, Any]
+    override_allowed: bool
+    is_local: bool
+    notice: Optional[str] = None

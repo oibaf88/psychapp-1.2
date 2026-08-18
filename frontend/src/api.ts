@@ -57,6 +57,7 @@ export const api = {
     request<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
   put: <T,>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
+  del: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
 export type UserRole = "patient" | "therapist" | "supervisor" | "admin_clinical";
@@ -103,6 +104,14 @@ export interface ChatMessageOut {
   role: "user" | "assistant";
   content: string;
   ui_mode: string | null;
+  /**
+   * Which model wrote this assistant turn. Null on the patient's own
+   * messages, and on replies built from the server-owned safety templates —
+   * those have no model behind them, which is worth seeing as such.
+   */
+  provider?: string | null;
+  model?: string | null;
+  provider_base_url?: string | null;
   created_at: string;
 }
 
@@ -204,6 +213,8 @@ export interface Agent2TraceOut {
   source_type?: string | null;
   source_id?: string | null;
   provider?: string | null;
+  /** Where the call went. Null for the official API, set for a self-hosted one. */
+  provider_base_url?: string | null;
   model?: string | null;
   response_model?: string | null;
   requested_model?: string | null;
@@ -587,6 +598,9 @@ export interface PatientChatMessageOut {
   role: "user" | "assistant";
   content: string;
   ui_mode?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  provider_base_url?: string | null;
   created_at: string;
 }
 
@@ -780,3 +794,99 @@ export const FACT_CATEGORIES = [
   { value: "planning", label: "Planificación (autodeclarada)" },
   { value: "other", label: "Otro hecho" },
 ];
+
+// ------------------------------------------------ runtime LLM endpoint ----
+// PsychDeep ships pointed at Claude. These types back the Settings screen,
+// where the two inference agents can be aimed at a model you host yourself.
+
+export interface LLMEndpointSummary {
+  provider: "anthropic" | "openai_compatible" | string;
+  provider_label: string;
+  label: string;
+  base_url: string | null;
+  chat_model: string;
+  analysis_model: string;
+  max_tokens: number;
+  timeout_seconds: number;
+  source: "environment" | "runtime" | string;
+  config_id: string | null;
+  updated_at: string | null;
+  has_api_key: boolean;
+}
+
+export interface LLMEndpointStatusOut {
+  active: LLMEndpointSummary;
+  environment_default: LLMEndpointSummary;
+  override_allowed: boolean;
+  is_local: boolean;
+  notice: string | null;
+}
+
+export interface LLMEndpointConfigIn {
+  provider: "anthropic" | "openai_compatible";
+  base_url?: string | null;
+  chat_model: string;
+  analysis_model: string;
+  /** null keeps the stored key; "" clears it. It is never sent back out. */
+  api_key?: string | null;
+  max_tokens: number;
+  timeout_seconds: number;
+  label?: string | null;
+}
+
+export interface LLMEndpointTestIn {
+  provider: "anthropic" | "openai_compatible";
+  base_url?: string | null;
+  chat_model: string;
+  analysis_model?: string | null;
+  api_key?: string | null;
+  timeout_seconds: number;
+}
+
+export interface LLMEndpointTestOut {
+  ok: boolean;
+  detail: string;
+  sample?: string | null;
+  error_code?: string | null;
+  base_url?: string | null;
+}
+
+export const llmSettingsApi = {
+  read: () => api.get<LLMEndpointStatusOut>("/api/v1/settings/llm"),
+  save: (body: LLMEndpointConfigIn) => api.put<LLMEndpointStatusOut>("/api/v1/settings/llm", body),
+  reset: () => api.del<LLMEndpointStatusOut>("/api/v1/settings/llm"),
+  test: (body: LLMEndpointTestIn) => api.post<LLMEndpointTestOut>("/api/v1/settings/llm/test", body),
+};
+
+/**
+ * How one stored interaction names the model behind it.
+ *
+ * History spans endpoints: a reply from March may have come from Claude and
+ * one from April from a local Llama. Rows written before provenance was
+ * recorded say so plainly rather than inheriting whatever is configured
+ * today — presenting today's setting as though it were the record would be
+ * the one genuinely misleading option.
+ */
+export function modelProvenanceLabel(source: {
+  provider?: string | null;
+  model?: string | null;
+  provider_base_url?: string | null;
+}): string | null {
+  if (!source.provider && !source.model) return null;
+  const model = source.model || "modelo sin identificar";
+  if (source.provider === "openai_compatible") {
+    const host = hostOf(source.provider_base_url);
+    return host ? `${model} · servidor propio (${host})` : `${model} · servidor propio`;
+  }
+  if (source.provider === "anthropic") return `${model} · API de Anthropic`;
+  return model;
+}
+
+function hostOf(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}

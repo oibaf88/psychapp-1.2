@@ -28,6 +28,7 @@ from app.content.prompts import (
     AGENT4_TOOL_SCHEMA,
 )
 from app.models import Agent2AnalysisTrace
+from app.services import llm_config
 from app.services.llm import ProviderMetadata, StructuredAnalysisError
 
 # Each structured-extraction agent pins its own prompt and schema so a
@@ -74,6 +75,7 @@ def start(
 
     prompt_version, system_prompt, schema_version, tool_schema = AGENT_CONTRACTS[agent_role]
     settings = get_settings()
+    active = llm_config.resolve(db)
     now = datetime.now(timezone.utc)
     trace = Agent2AnalysisTrace(
         id=uuid.uuid4(),
@@ -84,10 +86,14 @@ def start(
         chat_message_id=source_id if source_type == "chat_message" else None,
         diary_entry_id=source_id if source_type == "diary_entry" else None,
         status="started",
-        provider="anthropic",
-        requested_model=settings.anthropic_analysis_model,
-        effort=settings.anthropic_analysis_effort,
-        max_tokens=settings.anthropic_max_tokens,
+        # Provisional: recorded before the call so a trace that never comes
+        # back still says which endpoint it was aimed at. `apply_metadata`
+        # replaces these with what the provider actually reported.
+        provider=active.provider,
+        provider_base_url=active.base_url,
+        requested_model=active.analysis_model,
+        effort=settings.anthropic_analysis_effort if active.provider == "anthropic" else "n/a",
+        max_tokens=active.max_tokens,
         prompt_version=prompt_version,
         prompt_sha256=_sha256_text(system_prompt),
         schema_version=schema_version,
@@ -110,6 +116,7 @@ def apply_metadata(trace: Agent2AnalysisTrace, metadata: ProviderMetadata | None
     if metadata is None:
         return
     trace.provider = metadata.provider
+    trace.provider_base_url = metadata.base_url
     trace.requested_model = metadata.requested_model
     trace.response_model = metadata.response_model
     trace.provider_message_id = metadata.message_id

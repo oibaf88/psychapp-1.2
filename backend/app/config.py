@@ -41,6 +41,19 @@ class Settings(BaseSettings):
     # Caps thinking + response text together, so leave headroom.
     anthropic_max_tokens: int = 8192
 
+    # --- Runtime LLM endpoint override ----------------------------------
+    # Lets the two inference agents be pointed at a model you host yourself
+    # (llama.cpp, Ollama, LM Studio, vLLM) from the Settings screen, without
+    # redeploying, so a local model can be tried against the real app.
+    #
+    # The server fetches whatever URL is configured, so this is genuinely a
+    # deployment decision and not only a UI one: patient text is sent to that
+    # endpoint, and Agent 2's ability to spot a linguistic risk marker
+    # becomes a property of the model behind it. Turn it off on any
+    # deployment where the people using the app are not the people running
+    # it. Every change is written to the audit log either way.
+    llm_allow_runtime_override: bool = True
+
     # --- App / locale -----------------------------------------------------
     app_locale: str = "es-ES"
     app_env: str = "local"

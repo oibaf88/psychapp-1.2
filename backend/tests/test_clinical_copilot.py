@@ -163,7 +163,7 @@ class AskTests(unittest.TestCase):
     def test_successful_answer_is_persisted_with_context_counts(self):
         db = _populated_db()
         provider = SimpleNamespace(chat=lambda *_a, **_k: "Resumen del paciente.")
-        with patch.object(clinical_copilot, "get_llm_provider", return_value=provider):
+        with patch.object(clinical_copilot, "build_provider", return_value=provider):
             answer = clinical_copilot.ask(
                 db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
             )
@@ -179,7 +179,7 @@ class AskTests(unittest.TestCase):
             raise RuntimeError("provider down")
 
         with patch.object(
-            clinical_copilot, "get_llm_provider", return_value=SimpleNamespace(chat=_boom)
+            clinical_copilot, "build_provider", return_value=SimpleNamespace(chat=_boom)
         ):
             answer = clinical_copilot.ask(
                 db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
@@ -192,7 +192,7 @@ class AskTests(unittest.TestCase):
         db = _populated_db()
         with patch.object(
             clinical_copilot,
-            "get_llm_provider",
+            "build_provider",
             return_value=SimpleNamespace(chat=lambda *_a, **_k: "   "),
         ):
             answer = clinical_copilot.ask(
@@ -204,7 +204,7 @@ class AskTests(unittest.TestCase):
         db = _populated_db()
         with patch.object(
             clinical_copilot,
-            "get_llm_provider",
+            "build_provider",
             return_value=SimpleNamespace(chat=lambda *_a, **_k: "ok"),
         ):
             clinical_copilot.ask(db, professional=_professional(), patient=_patient(), question="hola")
@@ -215,7 +215,7 @@ class AskTests(unittest.TestCase):
         db = _populated_db()
         with patch.object(
             clinical_copilot,
-            "get_llm_provider",
+            "build_provider",
             return_value=SimpleNamespace(chat=lambda *_a, **_k: "resumen"),
         ):
             answer = clinical_copilot.summarize(db, professional=_professional(), patient=_patient())
@@ -226,7 +226,7 @@ class AskTests(unittest.TestCase):
         db = _populated_db()
         with patch.object(
             clinical_copilot,
-            "get_llm_provider",
+            "build_provider",
             return_value=SimpleNamespace(chat=lambda *_a, **_k: "ok"),
         ):
             clinical_copilot.ask(db, professional=_professional(), patient=_patient(), question="hola")

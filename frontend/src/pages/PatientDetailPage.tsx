@@ -10,6 +10,7 @@ import {
   formatDateTime,
 } from "../api";
 import { useAuth } from "../auth/AuthContext";
+import ModelStamp from "../components/ModelStamp";
 import { Agent2TraceList, RiskAssessmentTraceList } from "../components/ClinicalTraceability";
 import {
   CheckInChart,
@@ -360,6 +361,7 @@ export default function PatientDetailPage() {
                     {m.ui_mode && m.ui_mode !== "normal" ? ` · modo ${m.ui_mode}` : ""}
                   </div>
                   <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>
+                  {m.role === "assistant" && <ModelStamp message={m} />}
                 </div>
               ))}
             </div>

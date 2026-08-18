@@ -2345,3 +2345,153 @@ tr.row-highlight {
   color: var(--warning);
   border: 1px solid var(--warning-border);
 }
+
+/* ------------------------------------------- runtime LLM endpoint (Ajustes) */
+/* The Settings screen is the one place a person chooses which model serves
+   the app, so the active endpoint is stated as a fact before the form that
+   changes it — you should be able to answer "what is running right now?"
+   without reading a single input. */
+
+.llm-active {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0 16px;
+  background: var(--sand-50);
+}
+
+.llm-active-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.llm-active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  margin: 12px 0 0;
+}
+
+.llm-active-grid dt {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.llm-active-grid dd {
+  margin: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.llm-provider-choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.llm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.llm-option.is-selected {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.llm-option input {
+  width: auto;
+  margin: 3px 0 0;
+  flex: 0 0 auto;
+}
+
+.llm-option span {
+  display: block;
+}
+
+.llm-option strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.llm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.btn-chip {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.btn-chip:hover {
+  border-color: var(--primary);
+}
+
+/* The form fields carry their own hint text, so they need a block wrapper
+   rather than the bare `label` rule the rest of the cards use. */
+.field {
+  display: block;
+  margin-bottom: 14px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field > span:first-child {
+  display: block;
+}
+
+.field .meta {
+  display: block;
+  margin-top: 4px;
+  font-weight: 400;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0 14px;
+}
+
+.warning {
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+/* Provenance stamp under an assistant turn or an analysis row. Deliberately
+   quiet: it matters when you go looking, and should not compete with the
+   clinical content when you are not. */
+.model-stamp {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin-top: 4px;
+}
+
+.model-stamp.is-local {
+  color: var(--warning);
+}

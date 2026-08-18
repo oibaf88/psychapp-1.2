@@ -31,6 +31,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -328,6 +329,13 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant
     content: Mapped[str] = mapped_column(Text, nullable=False)
     ui_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)  # normal|support|crisis
+    # Provenance of an assistant turn. NULL on patient messages, and on
+    # assistant turns that came from a server-owned safety template rather
+    # than from a model — which is itself the useful distinction when
+    # reading back a crisis conversation.
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -492,6 +500,10 @@ class Agent2AnalysisTrace(Base):
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="anthropic")
+    # Where the call went. Once the endpoint is configurable, the model name
+    # alone stops identifying anything: two deployments can both say
+    # "llama-3.1-8b" and mean different weights on different machines.
+    provider_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
     response_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     effort: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -540,4 +552,64 @@ class Agent2AnalysisTrace(Base):
         Index("ix_agent2_trace_user_started", "user_id", "started_at"),
         Index("ix_agent2_trace_status_started", "status", "started_at"),
         Index("ix_agent2_trace_role_started", "agent_role", "started_at"),
+    )
+
+
+class LLMEndpointConfig(Base):
+    """Which model actually serves this deployment, changeable at runtime.
+
+    PsychApp defaults to Claude over the Anthropic API. This table lets an
+    operator point the two inference agents at a model they host themselves —
+    llama.cpp, Ollama, LM Studio, vLLM — without redeploying, so a local
+    model can be tried against the real app and the real data.
+
+    Exactly one row is active at a time. Superseded rows are kept, never
+    updated in place: a patient's history can span several models, and
+    "which model produced this analysis" has to stay answerable long after
+    the endpoint was changed. ``api_key`` is write-only from the API's point
+    of view — it is never serialised back out — and is usually empty, since
+    local runtimes rarely authenticate.
+    """
+
+    __tablename__ = "llm_endpoint_configs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="anthropic")
+    # anthropic | openai_compatible
+    label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    chat_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    analysis_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("provider IN ('anthropic','openai_compatible')", name="ck_llm_endpoint_provider"),
+        # A local endpoint without a URL is unusable; a hosted one has none.
+        CheckConstraint(
+            "(provider = 'anthropic' AND base_url IS NULL) OR "
+            "(provider = 'openai_compatible' AND base_url IS NOT NULL)",
+            name="ck_llm_endpoint_base_url",
+        ),
+        CheckConstraint("max_tokens BETWEEN 256 AND 32768", name="ck_llm_endpoint_max_tokens"),
+        CheckConstraint("timeout_seconds BETWEEN 5 AND 600", name="ck_llm_endpoint_timeout"),
+        Index("ix_llm_endpoint_active", "is_active", "created_at"),
+        # One active endpoint at a time, enforced by the database rather than
+        # by the service that writes it: a second active row would make
+        # "which model answered" ambiguous for everything written afterwards.
+        Index(
+            "ux_llm_endpoint_single_active",
+            "is_active",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
     )

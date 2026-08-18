@@ -265,7 +265,7 @@ def extract_and_store(
         return ExtractionOutcome(None, "trace_persistence_error")
 
     try:
-        provider_result = get_llm_provider().analyze_structured(
+        provider_result = get_llm_provider(db).analyze_structured(
             AGENT4_SYSTEM_PROMPT,
             text,
             AGENT4_TOOL_SCHEMA,

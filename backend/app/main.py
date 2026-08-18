@@ -18,12 +18,14 @@ from app.routers import (
     consents,
     diary,
     facts,
+    llm_settings,
     notifications,
     professional,
     safety,
     timeline,
     metrics,
 )
+from app.services import llm_config
 from app.services.risk_engine import MODEL_VERSION as RISK_ENGINE_VERSION
 
 logging.basicConfig(level=logging.INFO)
@@ -174,12 +176,17 @@ def on_startup():
 
 @app.get("/api/v1/health")
 def health():
+    # Health is unauthenticated, so it reports which model is in force but
+    # never where it lives: the endpoint URL of a self-hosted model is
+    # internal topology, and the Settings screen shows it to signed-in users
+    # who can already change it.
+    active = llm_config.resolve()
     return {
         "status": "ok",
-        "llm_configured": bool(settings.anthropic_api_key),
-        "llm_provider": settings.llm_provider,
-        "chat_model": settings.anthropic_chat_model,
-        "analysis_model": settings.anthropic_analysis_model,
+        "llm_configured": bool(settings.anthropic_api_key) or active.is_local,
+        "llm_provider": active.provider,
+        "chat_model": active.chat_model,
+        "analysis_model": active.analysis_model,
         "risk_engine_version": RISK_ENGINE_VERSION,
         "risk_explanation_schema": "risk-explanation-v1",
         "agent2_tracking": True,
@@ -200,3 +207,4 @@ app.include_router(professional.router)
 app.include_router(notifications.router)
 app.include_router(audit.router)
 app.include_router(metrics.router)
+app.include_router(llm_settings.router)
