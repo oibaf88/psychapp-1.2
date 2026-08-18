@@ -82,14 +82,25 @@ def _structural(score=0.8, band="stable"):
     )
 
 
-def _linguistic(*, eligible=True, ideation=False, crisis=False, rumination=0.7, signal_id=None):
+def _linguistic(
+    *,
+    eligible=True,
+    ideation=False,
+    ideation_indirect=False,
+    crisis=False,
+    rumination=0.7,
+    negative_valence=0.4,
+    signal_id=None,
+):
     signal_id = (signal_id or uuid.uuid4()) if eligible else None
     raw = dict(VALID_ANALYSIS) if eligible else {}
     if eligible:
         raw.update(
             ideation_direct=ideation,
+            ideation_indirect=ideation_indirect,
             consumption_crisis=crisis,
             rumination_score=rumination,
+            negative_valence=negative_valence,
         )
     return {
         "_signal_uuid": signal_id,
@@ -98,8 +109,10 @@ def _linguistic(*, eligible=True, ideation=False, crisis=False, rumination=0.7, 
         "eligible_for_risk": eligible,
         "freshness_window_hours": 12,
         "ideation_direct": ideation if eligible else False,
+        "ideation_indirect": ideation_indirect if eligible else False,
         "consumption_crisis": crisis if eligible else False,
         "rumination_score": rumination if eligible else None,
+        "negative_valence": negative_valence if eligible else None,
         "raw": raw,
     }
 
@@ -218,7 +231,7 @@ class _CalculationHarness:
         # before calculating the slope.  The fake query does not implement SQL
         # ordering, so feed it in the same newest-first order here.
         checkins = [
-            SimpleNamespace(id=uuid.uuid4(), sleep_hours=value, created_at=datetime.utcnow())
+            SimpleNamespace(id=uuid.uuid4(), sleep_hours=value, craving=5, created_at=datetime.utcnow())
             for value in (5.0, 6.0, 7.0)
         ]
         p1, p3, p5 = persistence
@@ -264,7 +277,7 @@ class DeterministicExplanationTests(_CalculationHarness, unittest.TestCase):
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 14)
+        self.assertEqual(len(trace["rules"]), 17)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])
@@ -418,7 +431,7 @@ class PsychosocialRuleTests(_CalculationHarness, unittest.TestCase):
 
     def test_acute_change_without_any_corroboration_stays_below_level_three(self):
         stable_sleep = [
-            SimpleNamespace(id=uuid.uuid4(), sleep_hours=7.0, created_at=datetime.utcnow())
+            SimpleNamespace(id=uuid.uuid4(), sleep_hours=7.0, craving=5, created_at=datetime.utcnow())
             for _ in range(3)
         ]
         fake_db = _FakeDb(
@@ -499,3 +512,173 @@ class PsychosocialRuleTests(_CalculationHarness, unittest.TestCase):
         decision = self._calculate(structural=_structural(score=0.9, band="stable"))
         self.assertEqual(decision.level, 0)
         self.assertEqual(decision.triggering_rules, ["N0_estable"])
+
+
+class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
+    """The constellation that reads as harmless message by message.
+
+    Each leg of the level-4 rule is, on its own, something a person might say
+    on an ordinary bad week. The rule exists because their coincidence is not
+    ordinary, and because nothing else in the pipeline was able to see it: the
+    linguistic flags stay false and the structural score never moves.
+    """
+
+    def _rising_craving_checkins(self):
+        return [
+            SimpleNamespace(id=uuid.uuid4(), sleep_hours=7.0, craving=value, created_at=datetime.utcnow())
+            for value in (9, 6, 2)  # newest first; the engine reverses it
+        ]
+
+    def _interpersonal_context(self, *, leave_taking=True, days_ago=2):
+        rows = [
+            _psychosocial_row(
+                domain="perceived_burden",
+                category="burden_expressed",
+                intensity=0.9,
+                days_ago=days_ago,
+            ),
+            _psychosocial_row(
+                domain="thwarted_belonging",
+                category="belonging_absent",
+                intensity=0.9,
+                days_ago=days_ago,
+            ),
+        ]
+        if leave_taking:
+            rows.append(
+                _psychosocial_row(
+                    domain="leave_taking",
+                    category="giving_possessions_away",
+                    intensity=0.8,
+                    is_change=True,
+                    days_ago=days_ago,
+                )
+            )
+        return rows
+
+    def test_the_whole_constellation_reaches_level_four(self):
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            psychosocial=self._interpersonal_context(),
+        )
+        self.assertEqual(decision.level, 4)
+        self.assertEqual(decision.triggering_rules, ["N4_convergencia_interpersonal_despedida"])
+
+    def test_without_the_leave_taking_signal_it_does_not_reach_level_four(self):
+        """Removing one leg must de-escalate: the rule is a conjunction."""
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            psychosocial=self._interpersonal_context(leave_taking=False),
+        )
+        self.assertLess(decision.level, 4)
+        self.assertNotIn("N4_convergencia_interpersonal_despedida", decision.triggering_rules)
+
+    def test_without_indirect_ideation_it_does_not_reach_level_four(self):
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(ideation_indirect=False, rumination=0.2),
+            psychosocial=self._interpersonal_context(),
+        )
+        self.assertLess(decision.level, 4)
+        self.assertNotIn("N4_convergencia_interpersonal_despedida", decision.triggering_rules)
+
+    def test_chronic_interpersonal_risk_alone_does_not_keep_re_alerting(self):
+        """Expressed months ago, it is context; expressed this week, a signal.
+
+        Without this window a chronic "nobody needs me" would re-raise the
+        same alarm every single day the therapist closed it.
+        """
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            psychosocial=self._interpersonal_context(days_ago=90),
+        )
+        self.assertLess(decision.level, 3)
+
+    def test_live_interpersonal_risk_alone_reaches_level_three(self):
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(rumination=0.1),
+            psychosocial=self._interpersonal_context(leave_taking=False),
+        )
+        self.assertEqual(decision.level, 3)
+        self.assertEqual(decision.triggering_rules, ["N3_riesgo_interpersonal_alto"])
+
+    def test_low_confidence_readings_never_move_a_threshold(self):
+        """A hedged or ironic mention is shown to the therapist, not scored."""
+        rows = [
+            _psychosocial_row(
+                domain="perceived_burden", category="burden_expressed", intensity=1.0, confidence=0.3
+            ),
+            _psychosocial_row(
+                domain="thwarted_belonging", category="belonging_absent", intensity=1.0, confidence=0.3
+            ),
+        ]
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            psychosocial=rows,
+        )
+        self.assertLess(decision.level, 3)
+        block = decision.calculation_trace["inputs"]["psychosocial"]
+        self.assertIsNone(block["indices"]["interpersonal_risk_index"])
+        self.assertEqual(block["scored_count"], 0)
+        self.assertEqual(len(block["domains"]), 2)
+
+    def test_relapse_context_with_rising_craving_reaches_level_three(self):
+        fake_db = _FakeDb(
+            self._rising_craving_checkins(),
+            psychosocial=[
+                _psychosocial_row(
+                    domain="substance_environment",
+                    category="using_environment_exposure",
+                    intensity=0.9,
+                ),
+                _psychosocial_row(
+                    domain="cohabitation", category="lives_with_people_who_use", intensity=0.9
+                ),
+            ],
+        )
+        persistence_values = {
+            1: _persistence(0, 1),
+            risk_engine.STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT: _persistence(0, 3),
+            risk_engine.STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE: _persistence(0, 5),
+        }
+        with (
+            patch.object(baseline, "compute_structural_score", return_value=_structural(score=0.9, band="stable")),
+            patch.object(risk_engine, "_linguistic_flags", return_value=_linguistic(rumination=0.1)),
+            patch.object(risk_engine, "_facts_in_categories", side_effect=[[], []]),
+            patch.object(
+                risk_engine,
+                "_persistence_detail",
+                side_effect=lambda _db, _uid, _band, days: persistence_values[days],
+            ),
+        ):
+            decision = risk_engine.calculate_risk_level(fake_db, uuid.uuid4())
+
+        self.assertEqual(decision.level, 3)
+        self.assertEqual(decision.triggering_rules, ["N3_riesgo_recaida_contextual"])
+
+    def test_rules_reading_absent_data_are_recorded_as_not_evaluable(self):
+        """Absence of data is not evidence of safety, and says so in the trace."""
+        decision = self._calculate(structural=_structural(score=0.9, band="stable"))
+        by_code = {rule["code"]: rule for rule in decision.calculation_trace["rules"]}
+        for code in (
+            "N4_convergencia_interpersonal_despedida",
+            "N3_riesgo_interpersonal_alto",
+            "N3_riesgo_recaida_contextual",
+            "N2_vulnerabilidad_psicosocial",
+        ):
+            self.assertEqual(by_code[code]["status"], "not_evaluable", code)
+            self.assertIsNone(by_code[code]["matched"], code)
+
+    def test_declared_ideation_still_outranks_the_new_rule(self):
+        fact = {"id": str(uuid.uuid4()), "category": "planning", "created_at": datetime.utcnow().isoformat()}
+        decision = self._calculate(
+            n4=[fact],
+            linguistic=_linguistic(ideation_indirect=True),
+            psychosocial=self._interpersonal_context(),
+        )
+        self.assertEqual(decision.triggering_rules, ["N4_declaracion_ideacion_o_plan"])

@@ -18,6 +18,8 @@ project brief. See README "Assumptions" for why Claude was used instead
 of the fine-tuned local model the docs originally sketched.
 """
 
+from app.content import psychosocial_catalog
+
 # Persisted with every Agent 2 invocation so reviewers can tell exactly
 # which instruction/schema contract produced a historic analysis.
 AGENT2_PROMPT_VERSION = "agent2-prompt-2026-08-15"
@@ -173,8 +175,8 @@ solicitado, con un valor para cada campo. No añadas texto, explicaciones \
 ni marcas de código alrededor del JSON.
 """
 
-AGENT4_PROMPT_VERSION = "agent4-prompt-2026-08-15"
-AGENT4_SCHEMA_VERSION = "agent4-schema-2026-08-15"
+AGENT4_PROMPT_VERSION = "agent4-prompt-2026-08-18"
+AGENT4_SCHEMA_VERSION = "agent4-schema-2026-08-18"
 
 AGENT4_SYSTEM_PROMPT = """\
 Eres un EXTRACTOR DE CONTEXTO PSICOSOCIAL integrado en PsychApp. NO \
@@ -213,6 +215,15 @@ Frases del tipo «nada, que me he ido unos días a casa de un colega», «ya no 
 quedo con los del gimnasio», «he dejado el grupo» o «este mes voy justo» son \
 exactamente lo que debes capturar.
 
+### Riesgo interpersonal: dos cosas distintas que hay que separar
+Dos dominios recogen los constructos de la teoría interpersonal del suicidio. No los mezcles entre sí ni con «apoyo social»:
+- `perceived_burden` (carga percibida): la persona se vive como un lastre para otros — «solo doy disgustos», «estarían mejor sin mí», «les estoy arruinando la vida». Regístralo aunque lo diga de pasada, en tono de broma o quitándole importancia.
+- `thwarted_belonging` (pertenencia frustrada): siente que no encaja, que no es querido ni necesitado — «sobro en todas partes», «nadie me echaría de menos». Se puede estar rodeado de gente y no pertenecer, así que esto NO es lo mismo que estar solo.
+Cuando el texto sostenga los dos, extrae los dos: es su convergencia lo que importa, y solo puede verse si van en observaciones separadas.
+
+### Señales de despedida
+`leave_taking` recoge marcadores de preparación que por separado parecen inofensivos y que por eso se pierden: repartir o regalar pertenencias, dejar papeles o asuntos en orden, mensajes de agradecimiento o de cierre, buscar a alguien que se quede con su animal, y la calma repentina tras un periodo de desesperanza. Extráelos SIEMPRE que aparezcan, con `is_change = true`, por triviales que parezcan. «Le he dado mi guitarra a mi sobrino» o «quería darte las gracias por todo» son exactamente el caso. No infieras intención suicida ni la nombres: solo registras el hecho y su cita.
+
 ### Reglas estrictas
 1. Solo extraes lo que el texto DICE o implica de forma directa. Si no está, \
 no lo inventes. Ante la duda, no extraigas.
@@ -235,85 +246,21 @@ sin interpretar motivaciones.
 8. Si el texto no contiene NADA psicosocial (p. ej. solo estado de ánimo, o \
 una nota logística), devuelve `has_psychosocial_content = false` y una \
 lista `observations` vacía.
-9. Como máximo 8 observaciones. Si hay más, quédate con las de mayor \
-relevancia clínica.
+9. Como máximo 8 observaciones, una por dominio. Si hay más, quédate con \
+las de mayor relevancia clínica.
 
 Devuelve SIEMPRE un único objeto JSON que cumpla exactamente el esquema \
 solicitado. No añadas texto ni marcas de código alrededor del JSON.
 """
 
-# Domains and their allowed categories. Kept in one structure so the JSON
-# schema, the deterministic weights and the Spanish labels cannot drift apart.
-AGENT4_DOMAIN_CATEGORIES: dict[str, tuple[str, ...]] = {
-    "housing": (
-        "housing_stable",
-        "housing_precarious",
-        "housing_temporary",
-        "housing_homeless",
-        "housing_eviction_risk",
-        "housing_institution",
-    ),
-    "cohabitation": (
-        "lives_alone",
-        "lives_with_family",
-        "lives_with_partner",
-        "lives_shared",
-        "lives_with_people_who_use",
-        "cohabitation_conflict",
-    ),
-    "social_support": (
-        "support_strong",
-        "support_limited",
-        "support_absent",
-        "isolation_increasing",
-        "new_supportive_relationship",
-    ),
-    "family": (
-        "family_supportive",
-        "family_conflict",
-        "family_estranged",
-        "family_caregiving_burden",
-        "family_unaware",
-    ),
-    "economic": (
-        "income_stable",
-        "income_precarious",
-        "debt",
-        "food_insecurity",
-        "benefit_loss",
-        "financial_dependence",
-    ),
-    "occupation": (
-        "employed",
-        "unemployed",
-        "job_loss",
-        "studying",
-        "sick_leave",
-        "work_stress",
-    ),
-    "legal": ("legal_proceedings", "legal_none"),
-    "healthcare_access": (
-        "treatment_engaged",
-        "treatment_dropout",
-        "medication_access_problem",
-        "appointment_barrier",
-    ),
-    "stigma": ("stigma_experienced", "disclosure_fear"),
-    "loss_event": ("bereavement", "breakup", "relationship_loss", "pet_loss", "other_loss"),
-    "connectedness": (
-        "meaningful_activity",
-        "community_belonging",
-        "future_plans",
-        "loss_of_routine",
-    ),
-    "means_access": ("means_access_reported", "means_restricted"),
-    "substance_environment": ("using_environment_exposure", "environment_protective"),
-}
+# Domains and their allowed categories come from the canonical catalogue, so
+# the enum the model may emit, the deterministic weights, the risk-engine
+# domain sets and the therapist labels are one source of truth by
+# construction rather than by convention.
+AGENT4_DOMAIN_CATEGORIES: dict[str, tuple[str, ...]] = dict(psychosocial_catalog.DOMAIN_CATEGORIES)
 
-AGENT4_DOMAINS = tuple(AGENT4_DOMAIN_CATEGORIES)
-AGENT4_CATEGORIES = tuple(
-    category for categories in AGENT4_DOMAIN_CATEGORIES.values() for category in categories
-)
+AGENT4_DOMAINS = psychosocial_catalog.DOMAIN_KEYS
+AGENT4_CATEGORIES = psychosocial_catalog.CATEGORY_KEYS
 
 AGENT4_TOOL_SCHEMA = {
     "name": "record_psychosocial_context",
