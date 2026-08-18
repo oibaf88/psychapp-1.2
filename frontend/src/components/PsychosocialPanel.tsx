@@ -16,6 +16,7 @@ import { useState } from "react";
 import {
   PsychosocialDomainOut,
   PsychosocialExplanationOut,
+  PsychosocialIndexReadingOut,
   api,
   formatDateTime,
 } from "../api";
@@ -48,6 +49,43 @@ function IndexGauge({ index, band }: { index?: number | null; band: string }) {
   );
 }
 
+/**
+ * The four deterministic indices.
+ *
+ * Deliberately four numbers rather than one: losing your flat and feeling
+ * like a burden to your family are both "adversity", but they call for
+ * different responses, and a single blended figure lets one mask the other.
+ * Each is rendered with the threshold it is compared against, because a
+ * number a therapist cannot locate on a scale is a number they cannot argue
+ * with. "Sin datos" is a reading in its own right — it is not "bien".
+ */
+function IndexReadings({ readings }: { readings: PsychosocialIndexReadingOut[] }) {
+  if (readings.length === 0) return null;
+  return (
+    <div className="psy-index-grid">
+      {readings.map((reading) => (
+        <div key={reading.key} className={`psy-index-tile psy-index-${reading.state}`}>
+          <div className="psy-index-head">
+            <span className="psy-index-label">{reading.label}</span>
+            <span className="psy-index-value">
+              {reading.value == null ? "sin datos" : reading.value.toFixed(2)}
+            </span>
+          </div>
+          {reading.value != null && (
+            <div className="psy-index-track" aria-hidden="true">
+              <div className="psy-index-fill" style={{ width: `${Math.round(reading.value * 100)}%` }} />
+              <div className="psy-index-mark" style={{ left: `${Math.round(reading.threshold * 100)}%` }} />
+            </div>
+          )}
+          <div className="psy-index-threshold">{reading.threshold_label}</div>
+          <p className="psy-index-meaning">{reading.meaning}</p>
+          <p className="psy-index-note">{reading.note}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DomainCard({
   domain,
   onAdjudicate,
@@ -69,6 +107,21 @@ function DomainCard({
         <div className="psy-tags">
           <span className={`psy-pill psy-pill-${domain.valence}`}>{VALENCE_LABEL[domain.valence]}</span>
           {domain.is_change && <span className="psy-pill psy-pill-change">Cambio reciente</span>}
+          {!domain.counts_for_scoring && (
+            <span className="psy-pill psy-pill-unscored" title="Confianza por debajo del umbral de puntuación">
+              No puntúa
+            </span>
+          )}
+          {domain.is_stale && (
+            <span className="psy-pill psy-pill-stale" title="Sin novedades desde hace meses">
+              Antigua
+            </span>
+          )}
+          {domain.has_pending_update && (
+            <span className="psy-pill psy-pill-pending" title="Lectura nueva sin revisar">
+              Actualización pendiente
+            </span>
+          )}
           {domain.status !== "inferred" && (
             <span className={`psy-pill psy-pill-${domain.status}`}>{STATUS_LABEL[domain.status]}</span>
           )}
@@ -103,6 +156,14 @@ function DomainCard({
           <dd>{domain.contribution.toFixed(2)}</dd>
         </div>
       </dl>
+
+      {domain.session_question && domain.valence === "risk" && (
+        <p className="psy-question">
+          <span className="meta">Para preguntar en sesión</span>
+          <br />
+          {domain.session_question}
+        </p>
+      )}
 
       {canAdjudicate && (
         <div className="psy-actions">
@@ -194,6 +255,60 @@ export default function PsychosocialPanel({
           </ul>
         )}
       </section>
+
+      {explanation.leave_taking && (
+        <section className="psy-leavetaking" role="note">
+          <h3>⚠ Señal de despedida</h3>
+          <p className="explain-headline">
+            {explanation.leave_taking.category_label ?? explanation.leave_taking.category}
+            {explanation.leave_taking.observed_at && (
+              <span className="meta"> · {formatDateTime(explanation.leave_taking.observed_at)}</span>
+            )}
+          </p>
+          {explanation.leave_taking.summary && <p>{explanation.leave_taking.summary}</p>}
+          {explanation.leave_taking.quote && (
+            <blockquote className="evidence-quote">
+              <span className="meta">Sus palabras</span>
+              <br />
+              {explanation.leave_taking.quote}
+            </blockquote>
+          )}
+          {explanation.leave_taking_note && <p className="meta">{explanation.leave_taking_note}</p>}
+        </section>
+      )}
+
+      <section className="explain-card">
+        <h3>Índices deterministas</h3>
+        <p className="meta">
+          Cuatro números, no uno: aritmética ordinaria sobre las observaciones registradas, sin ningún
+          modelo en el cálculo. Un índice «sin datos» significa exactamente eso, no que no haya problema.
+        </p>
+        <IndexReadings readings={explanation.index_readings} />
+        {explanation.interpersonal_recent_evidence.length > 0 && (
+          <p className="explain-direction">
+            Riesgo interpersonal expresado en los últimos 14 días:{" "}
+            {explanation.interpersonal_recent_evidence.join(", ")}.
+          </p>
+        )}
+      </section>
+
+      {explanation.session_questions.length > 0 && (
+        <section className="psy-questions">
+          <h3>Preguntas para la próxima sesión</h3>
+          <p className="meta">
+            Generadas a partir de lo que se está moviendo ahora mismo, no de una plantilla fija.
+          </p>
+          <ol className="plain-list">
+            {explanation.session_questions.map((item) => (
+              <li key={item.domain}>
+                <strong>{item.domain_label}</strong> <span className="meta">· {item.reason}</span>
+                <div>{item.question}</div>
+                {item.quote && <blockquote className="evidence-quote">{item.quote}</blockquote>}
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {explanation.has_acute_change && (
         <section className="psy-acute">

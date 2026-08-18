@@ -339,6 +339,51 @@ export interface PsychosocialDomainOut {
   weight: number;
   contribution: number;
   is_change: boolean;
+  group?: string | null;
+  group_label?: string | null;
+  risk_value?: number | null;
+  counts_for_scoring: boolean;
+  is_stale: boolean;
+  has_pending_update: boolean;
+  session_question?: string | null;
+}
+
+/** One of the four deterministic indices, with the threshold it is read against. */
+export interface PsychosocialIndexReadingOut {
+  key: string;
+  label: string;
+  value?: number | null;
+  state: "ok" | "alerta" | "sin_datos";
+  threshold: number;
+  threshold_label: string;
+  meaning: string;
+  note: string;
+}
+
+export interface PsychosocialIndicesOut {
+  support_index?: number | null;
+  material_adversity_index?: number | null;
+  interpersonal_risk_index?: number | null;
+  relapse_context_index?: number | null;
+}
+
+export interface PsychosocialLeaveTakingOut {
+  domain: string;
+  label?: string | null;
+  category: string;
+  category_label?: string | null;
+  summary?: string | null;
+  quote?: string | null;
+  observed_at?: string | null;
+  observation_id?: string | null;
+}
+
+export interface PsychosocialSessionQuestionOut {
+  domain: string;
+  domain_label: string;
+  question: string;
+  reason: string;
+  quote?: string | null;
 }
 
 export interface PsychosocialAcuteChangeOut {
@@ -365,6 +410,14 @@ export interface PsychosocialExplanationOut {
   has_acute_change: boolean;
   acute_note?: string | null;
   caveats: string[];
+  indices: PsychosocialIndicesOut;
+  index_readings: PsychosocialIndexReadingOut[];
+  leave_taking?: PsychosocialLeaveTakingOut | null;
+  leave_taking_note?: string | null;
+  interpersonal_recent_evidence: string[];
+  pending_update_domains: string[];
+  stale_domains: string[];
+  session_questions: PsychosocialSessionQuestionOut[];
   observation_count: number;
   active_count: number;
   confirmed_count: number;

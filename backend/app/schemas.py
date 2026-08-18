@@ -501,6 +501,54 @@ class PsychosocialDomainOut(BaseModel):
     weight: float
     contribution: float
     is_change: bool
+    group: Optional[str] = None
+    group_label: Optional[str] = None
+    risk_value: Optional[float] = None
+    counts_for_scoring: bool = True
+    is_stale: bool = False
+    has_pending_update: bool = False
+    session_question: Optional[str] = None
+
+
+class PsychosocialIndexReadingOut(BaseModel):
+    """One of the four indices, with the threshold it is read against."""
+
+    key: str
+    label: str
+    value: Optional[float] = None
+    state: str  # ok | alerta | sin_datos
+    threshold: float
+    threshold_label: str
+    meaning: str
+    note: str
+
+
+class PsychosocialIndicesOut(BaseModel):
+    """None, never 0.0: absence of data is not evidence of safety."""
+
+    support_index: Optional[float] = None
+    material_adversity_index: Optional[float] = None
+    interpersonal_risk_index: Optional[float] = None
+    relapse_context_index: Optional[float] = None
+
+
+class PsychosocialLeaveTakingOut(BaseModel):
+    domain: str
+    label: Optional[str] = None
+    category: str
+    category_label: Optional[str] = None
+    summary: Optional[str] = None
+    quote: Optional[str] = None
+    observed_at: Optional[str] = None
+    observation_id: Optional[str] = None
+
+
+class PsychosocialSessionQuestionOut(BaseModel):
+    domain: str
+    domain_label: str
+    question: str
+    reason: str
+    quote: Optional[str] = None
 
 
 class PsychosocialAcuteChangeOut(BaseModel):
@@ -529,6 +577,14 @@ class PsychosocialExplanationOut(BaseModel):
     has_acute_change: bool = False
     acute_note: Optional[str] = None
     caveats: list[str] = []
+    indices: PsychosocialIndicesOut = PsychosocialIndicesOut()
+    index_readings: list[PsychosocialIndexReadingOut] = []
+    leave_taking: Optional[PsychosocialLeaveTakingOut] = None
+    leave_taking_note: Optional[str] = None
+    interpersonal_recent_evidence: list[str] = []
+    pending_update_domains: list[str] = []
+    stale_domains: list[str] = []
+    session_questions: list[PsychosocialSessionQuestionOut] = []
     observation_count: int = 0
     active_count: int = 0
     confirmed_count: int = 0

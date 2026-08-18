@@ -2190,3 +2190,158 @@ tr.row-highlight {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- psychosocial: the four deterministic indices ---------------------
+   Four tiles rather than one gauge, because the four numbers answer
+   different clinical questions and a blended figure lets one mask another.
+   Each tile draws the threshold it is read against as a mark on the track,
+   so the number is always visible against the line it has to cross. */
+.psy-index-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.psy-index-tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--card-bg);
+}
+
+.psy-index-alerta {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.psy-index-sin_datos {
+  border-style: dashed;
+  background: var(--sand-100);
+}
+
+.psy-index-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.psy-index-label {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.psy-index-value {
+  font-family: var(--font-mono);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.psy-index-alerta .psy-index-value {
+  color: var(--danger);
+}
+
+.psy-index-sin_datos .psy-index-value {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+.psy-index-track {
+  position: relative;
+  height: 8px;
+  margin: 10px 0 6px;
+  border-radius: 999px;
+  background: var(--sand-300);
+  overflow: hidden;
+}
+
+.psy-index-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-blue);
+}
+
+.psy-index-alerta .psy-index-fill {
+  background: var(--danger);
+}
+
+/* The threshold line. Kept inside the track so it reads as part of the
+   same scale rather than as decoration. */
+.psy-index-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+.psy-index-threshold,
+.psy-index-note {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.psy-index-meaning {
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+  margin: 6px 0 4px;
+}
+
+/* --- leave-taking: the one signal that leads the panel ---------------- */
+.psy-leavetaking {
+  border: 2px solid var(--danger-border);
+  border-left-width: 6px;
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  padding: 14px 18px;
+  margin: 16px 0;
+}
+
+.psy-leavetaking h3 {
+  color: var(--danger-strong);
+  margin-top: 0;
+}
+
+.psy-questions {
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--accent-bg);
+  padding: 14px 18px;
+  margin: 16px 0;
+}
+
+.psy-questions ol {
+  padding-left: 20px;
+}
+
+.psy-questions li + li {
+  margin-top: 12px;
+}
+
+.psy-question {
+  border-left: 3px solid var(--brand-blue);
+  padding-left: 10px;
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+
+.psy-pill-unscored {
+  background: var(--sand-200);
+  color: var(--ink-muted);
+}
+
+.psy-pill-stale {
+  background: var(--sand-300);
+  color: var(--ink-soft);
+}
+
+.psy-pill-pending {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
