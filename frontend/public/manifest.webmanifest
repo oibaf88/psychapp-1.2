@@ -4,8 +4,8 @@
   "description": "Acompañamiento y autorregulación (uso local)",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f6f8fb",
-  "theme_color": "#3a6ea5",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
   "orientation": "portrait-primary",
   "lang": "es",
   "icons": [

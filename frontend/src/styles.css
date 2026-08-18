@@ -1,107 +1,117 @@
 @import "./fonts.css";
 
 /* =====================================================================
- * Claude design language — style layer only.
+ * PsychDeep design system — style layer only.
  *
- * This file carries the brand's colour and type system. It deliberately
- * changes nothing about the app's structure or behaviour: no markup, no
- * routes, no logic, no copy. Where the design language and the product's
- * needs disagree, the product wins — the three places that happens are
- * marked SEMANTIC, PRODUCT or A11Y below and explained where they sit.
+ * This file carries the PsychDeep colour and type system exported from
+ * Claude Design. It deliberately changes nothing about the app's
+ * structure or behaviour: no markup, no routes, no logic, no copy. Where
+ * the design system and the product's needs disagree, the product wins —
+ * the places that happens are marked SEMANTIC, PRODUCT or A11Y below.
  *
- * Palette (Anthropic brand):
- *   dark #141413 · light #faf9f5 · mid gray #b0aea5 · light gray #e8e6dc
- *   accents: orange #d97757 · blue #6a9bcc · green #788c5d
- * Type: Poppins (headings and UI chrome), Lora (prose).
+ * Palette (PsychDeep tokens):
+ *   page #0f1419 · surface #1a2332 · raised #202c3d · border #2d3a4f
+ *   text #e7ecf3 · muted #9aa8bc
+ *   accent #6c98f4 · danger #e36a6a · success #55bd91 · warning #e5b75f
+ * Type: Inter throughout (the system defines a single sans face).
+ * Depth: flat fills and hairline borders only — the system uses no shadow.
  *
- * A11Y note on the orange. White text on #d97757 measures 3.12:1, which
- * fails WCAG AA for body text, so the brand orange is never used as a
- * background behind white text here. It appears as a surface under DARK
- * ink (5.90:1) and, deepened to #b4552f, as text on light (4.66:1). The
- * top chrome uses brand dark under light text (17.5:1) instead — which is
- * also how Claude's own surfaces read.
+ * A11Y note. The accent #6c98f4 measures 6.0:1 on the page surface, so it
+ * is safe as text and as a border; white on accent measures 3.1:1, so
+ * accent-as-a-background always carries dark ink, never white. Full-bleed
+ * danger surfaces (the crisis screen) use --danger-strong, a deepened red
+ * that clears AA under white text; the --danger token itself is tuned for
+ * text and hairlines on dark, where it reads 6.4:1.
  * ===================================================================== */
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 
-  /* --- brand core ---------------------------------------------------- */
-  --brand-ink: #141413;
-  --brand-light: #faf9f5;
-  --brand-gray: #b0aea5;
-  --brand-gray-light: #e8e6dc;
-  --brand-orange: #d97757;
-  --brand-blue: #6a9bcc;
-  --brand-green: #788c5d;
-
-  /* Text-safe deepenings of the accents, for use as ink on light
-     surfaces where the brand tones alone fall below 4.5:1. */
-  --brand-orange-ink: #b4552f;
-  --brand-blue-ink: #3f6f9f;
-  --brand-green-ink: #54663d;
-
-  /* --- warm neutral ramp, derived from the two brand neutrals -------- */
-  --sand-50: #faf9f5;
-  --sand-100: #f5f3ec;
-  --sand-200: #efece2;
-  --sand-300: #e8e6dc;
-  --sand-400: #d8d5c9;
-  --sand-500: #b0aea5;
-  --sand-600: #8a887f;
-  --sand-700: #6b6961;
-  --sand-800: #45443f;
+  /* --- PsychDeep base palette ---------------------------------------- */
+  --pd-bg: #0f1419;
+  --pd-surface: #1a2332;
+  --pd-surface-2: #202c3d;
+  --pd-border: #2d3a4f;
+  --pd-text: #e7ecf3;
+  --pd-muted: #9aa8bc;
+  --pd-accent: #6c98f4;
+  --pd-danger: #e36a6a;
+  --pd-success: #55bd91;
+  --pd-warning: #e5b75f;
 
   /* --- roles the components actually use ----------------------------- */
-  --primary: var(--brand-orange);
-  --primary-ink: var(--brand-orange-ink);
-  --bg: var(--sand-50);
-  --card-bg: #ffffff;
-  --border: var(--sand-300);
-  --ink: var(--brand-ink);
-  --ink-soft: #45443f;
-  --ink-muted: #6b6961;
-  --ink-faint: #8a887f;
-  --chrome-bg: var(--brand-ink);
-  --chrome-ink: var(--brand-light);
+  --primary: var(--pd-accent);
+  --primary-ink: var(--pd-accent);
+  --bg: var(--pd-bg);
+  --card-bg: var(--pd-surface);
+  --surface-2: var(--pd-surface-2);
+  --border: var(--pd-border);
+  --ink: var(--pd-text);
+  --ink-soft: #c8d2e0;
+  --ink-muted: var(--pd-muted);
+  /* Lightened from the obvious #7b8a9f step, which measured 4.49:1 on the
+     card surface and missed AA by a hair. */
+  --ink-faint: #8593a8;
+
+  /* The top chrome reads as a lift off the page rather than a slab of
+     colour — the design system builds its header the same way, with a
+     fade into the page and a hairline underneath. */
+  --chrome-bg: linear-gradient(180deg, rgba(26, 35, 50, 0.9), rgba(15, 20, 25, 0));
+  --chrome-ink: var(--pd-text);
+
+  /* A11Y: the system's Button paints white on the accent, but that pair is
+     3.1:1 and the app's buttons run at 0.95rem — under the large-text
+     threshold, so AA wants 4.5:1. Accent-as-a-surface therefore carries
+     the page's dark ink (6.55:1) and the accent stays untouched. */
+  --ink-on-accent: var(--pd-bg);
+
+  /* Kept from the previous brand layer so no rule has to change. */
+  --brand-orange-ink: var(--pd-accent);
 
   /* --- status. SEMANTIC: these encode clinical meaning, not brand ----
      Alert levels are colour-coded across the whole panel and a therapist
      reads them at a glance, so they stay unmistakably red/amber/green.
-     They are warmed to sit on the sand surfaces, never neutralised. */
-  --danger: #b3261e;
-  --danger-strong: #8f1d17;
-  --danger-bg: #fbeae7;
-  --danger-border: #eec4bd;
-  --warning: #9a6700;
-  --warning-bg: #fbf3de;
-  --warning-border: #ecdcb4;
-  --success: #4f7a52;
-  --success-ink: #3d6340;
-  --success-bg: #eaf1e6;
-  --success-border: #cddcc6;
-  --accent-bg: #f6efe7;
-  --accent-border: #e6d7c7;
+     These are the design system's own semantic tokens, so honouring the
+     system and honouring the clinical meaning agree here. */
+  --danger: var(--pd-danger);
+  --danger-strong: #b23a3a;
+  --danger-bg: rgba(227, 106, 106, 0.1);
+  --danger-border: rgba(227, 106, 106, 0.55);
+  --warning: var(--pd-warning);
+  --warning-bg: rgba(229, 183, 95, 0.1);
+  --warning-border: rgba(229, 183, 95, 0.5);
+  --warning-ink: #f0d19e;
+  --success: var(--pd-success);
+  --success-ink: #9ce2c5;
+  --success-bg: rgba(85, 189, 145, 0.1);
+  --success-border: rgba(85, 189, 145, 0.5);
+  --accent-bg: rgba(108, 152, 244, 0.1);
+  --accent-border: rgba(108, 152, 244, 0.5);
+  --purple-bg: rgba(185, 163, 227, 0.1);
+  --purple-ink: #d9cdf2;
 
-  /* --- type --------------------------------------------------------- */
-  --font-heading: "Poppins", "Segoe UI", Arial, sans-serif;
-  --font-body: "Lora", Georgia, "Times New Roman", serif;
-  --font-ui: "Poppins", "Segoe UI", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* --- type. The system defines one sans face for the whole UI. ------ */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-body: var(--font-sans);
+  --font-ui: var(--font-sans);
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
+  /* --- radii, from the system's effects tokens ----------------------- */
+  --radius-control: 8px;
+  --radius-note: 9px;
+  --radius-card: 14px;
+  --radius-pill: 999px;
 
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Headings and UI chrome wear Poppins; running prose wears Lora.
-   Controls, tables and dense clinical data stay in the sans face —
-   PRODUCT: a serif in a data table costs scannability, and the panel is
-   read under time pressure. */
+/* The system specifies a single face, Inter, for everything — headings,
+   prose, controls and dense clinical tables alike. Hierarchy is carried by
+   weight, size and tracking rather than by a second family. */
 h1,
 h2,
 h3,
@@ -165,9 +175,9 @@ body {
 }
 
 /* The app never styled links, so they were rendering in the browser's
-   default blue and violet — which read as a bug against a warm palette.
-   `--primary-ink` is the text-safe deepening of the brand orange (4.66:1
-   on the page surface); the chrome overrides it with its own colour. */
+   default blue and violet. They take the system's accent, which reads
+   6.55:1 on the page surface and is the colour the system already uses to
+   mark something you can act on. */
 a {
   color: var(--primary-ink);
   text-decoration-thickness: 1px;
@@ -175,7 +185,7 @@ a {
 }
 
 a:hover {
-  color: var(--brand-ink);
+  color: var(--ink);
 }
 
 main {
@@ -206,13 +216,21 @@ main {
   flex-wrap: wrap;
 }
 
+/* The system's NavLink: accent for a link you can go to, no underline, and
+   the resting weight — it reserves text-primary and 600 for the active
+   item. This nav renders plain links with no active state, so they all
+   take the resting treatment and resolve on hover. */
 .navbar-links a {
-  color: white;
+  color: var(--primary-ink);
+  font-size: 0.88rem;
+  font-weight: 500;
   text-decoration: none;
+  transition: color 0.2s ease;
 }
 
 .navbar-links a:hover {
-  text-decoration: underline;
+  color: var(--ink);
+  text-decoration: none;
 }
 
 .navbar-user {
@@ -222,12 +240,15 @@ main {
   font-size: 0.9rem;
 }
 
+/* The system's secondary button: a surface fill with a hairline, not a
+   translucent film — the chrome behind it is now a fade, so a white veil
+   would sit on nothing at the bottom edge. */
 .navbar-user button {
-  background: rgba(255, 255, 255, 0.2);
-  border: none;
-  color: white;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--ink);
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   cursor: pointer;
 }
 
@@ -236,14 +257,14 @@ main {
 }
 
 .subtitle {
-  color: #6b6961;
+  color: var(--ink-muted);
   margin-top: 0;
 }
 
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 16px 20px;
   margin: 16px 0;
 }
@@ -269,8 +290,14 @@ select,
 textarea {
   width: 100%;
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border);
+  /* The system's Input fills with the PAGE colour, not the card's, so a
+     field reads as a well cut into the surface it sits on. These have to be
+     stated: with only a border set, the dark UA control fill won through
+     and the fields came out a warm grey that belongs to no palette. */
+  background: var(--bg);
+  color: var(--ink);
   font-family: inherit;
   font-size: 1rem;
   margin-top: 4px;
@@ -278,13 +305,20 @@ textarea {
 
 button {
   background: var(--primary);
-  color: var(--brand-ink);
+  color: var(--ink-on-accent);
   border: none;
   padding: 10px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+/* The UA's default placeholder grey sits too close to the field fill on
+   dark; --ink-faint is the system's dimmest ink that still clears AA. */
+::placeholder {
+  color: var(--ink-faint);
+  opacity: 1;
 }
 
 button:disabled {
@@ -297,8 +331,8 @@ button:disabled {
 }
 
 .info {
-  background: #f6efe7;
-  border-radius: 6px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-control);
   padding: 8px 12px;
   font-size: 0.9rem;
 }
@@ -315,7 +349,7 @@ button:disabled {
 
 .demo-hint {
   font-size: 0.75rem;
-  color: #8a887f;
+  color: var(--ink-muted);
 }
 
 .crisis-bar {
@@ -323,7 +357,11 @@ button:disabled {
   bottom: 0;
   left: 0;
   right: 0;
-  background: var(--danger);
+  /* A11Y: --danger is tuned for text and hairlines on dark; white on it is
+     only 3.21:1. This bar is a solid fill under white text, and it is the
+     one control a patient in crisis must never fail to read, so it takes
+     the deepened red (5.90:1). */
+  background: var(--danger-strong);
   display: flex;
   justify-content: center;
   gap: 20px;
@@ -339,7 +377,7 @@ button:disabled {
 .crisis-fullscreen {
   position: fixed;
   inset: 0;
-  background: #8f1d17;
+  background: var(--danger-strong);
   color: white;
   display: flex;
   flex-direction: column;
@@ -360,10 +398,10 @@ button:disabled {
 
 .crisis-cta {
   background: white;
-  color: #8f1d17;
+  color: var(--danger-strong);
   font-weight: 700;
   padding: 16px 24px;
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   text-decoration: none;
   font-size: 1.1rem;
 }
@@ -388,14 +426,20 @@ button:disabled {
   height: 132px;
   border-radius: 50%;
   margin: 20px auto 14px;
+  /* PRODUCT: the breathing orb and the wave below stay water-coloured.
+     They are a therapeutic metaphor the patient is taught to recognise,
+     not decoration, so they keep their own hues rather than becoming
+     accent-blue furniture. What changes is the calibration: the ramp now
+     runs along the system's own blue-to-teal axis (accent #6c98f4 toward
+     #7fd8c2, the tone the grounding surface resolves to) and is pitched to
+     read against the dark page instead of a white one. */
   background:
-    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.95) 0 9%, rgba(255, 255, 255, 0) 25%),
-    radial-gradient(circle at 62% 72%, rgba(41, 178, 221, 0.62) 0 16%, rgba(41, 178, 221, 0) 36%),
-    conic-gradient(from 210deg, #d9f5ff, #73d2de, #2f8fbd, #183c75, #64c6da, #d9f5ff);
-  box-shadow:
-    0 0 0 10px rgba(115, 210, 222, 0.1),
-    0 20px 40px rgba(24, 60, 117, 0.24),
-    inset 0 -18px 38px rgba(9, 45, 88, 0.28);
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.9) 0 9%, rgba(255, 255, 255, 0) 25%),
+    radial-gradient(circle at 62% 72%, rgba(127, 216, 194, 0.55) 0 16%, rgba(127, 216, 194, 0) 36%),
+    conic-gradient(from 210deg, #d6e6ff, #7fd8c2, #6c98f4, #2f4f9e, #8fb0f7, #d6e6ff);
+  /* The system uses flat fills for depth, so the orb's lift comes from a
+     single soft halo rather than the previous drop-shadow stack. */
+  box-shadow: 0 0 0 10px rgba(108, 152, 244, 0.08);
   transform: scale(0.72);
   transition: transform 4000ms cubic-bezier(0.22, 0.9, 0.36, 1), filter 1200ms ease;
   overflow: hidden;
@@ -438,24 +482,26 @@ button:disabled {
 }
 
 .breathing-ratio {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.9rem;
   margin-top: -4px;
 }
 
 .disclaimer {
   font-size: 0.8rem;
-  color: #8a887f;
+  color: var(--ink-muted);
 }
 
 .wave-visual {
   height: 190px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   overflow: hidden;
+  /* PRODUCT, as above: still water, now sitting in a night sky rather than
+     a white one, so the wave's own blues stay the brightest thing in it. */
   background:
-    linear-gradient(180deg, rgba(236, 249, 255, 0.96), rgba(216, 239, 250, 0.7) 46%, rgba(255, 255, 255, 0.9)),
-    radial-gradient(circle at 20% 24%, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0) 30%);
+    linear-gradient(180deg, rgba(32, 44, 61, 0.9), rgba(18, 30, 40, 0.85) 46%, var(--bg)),
+    radial-gradient(circle at 20% 24%, rgba(108, 152, 244, 0.18), rgba(108, 152, 244, 0) 30%);
   margin-top: 12px;
 }
 
@@ -478,7 +524,7 @@ button:disabled {
 
 .wave-foam {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.78);
+  stroke: rgba(214, 230, 255, 0.72);
   stroke-width: 2.8;
   stroke-linecap: round;
   animation: wave-drift var(--wave-duration, 9s) linear infinite;
@@ -513,26 +559,26 @@ button:disabled {
   overflow-y: auto;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: white;
+  border-radius: var(--radius-card);
+  background: var(--card-bg);
   margin-bottom: 12px;
 }
 
 .chat-bubble {
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   max-width: 80%;
 }
 
 .chat-user {
   align-self: flex-end;
   background: var(--primary);
-  color: var(--brand-ink);
+  color: var(--ink-on-accent);
 }
 
 .chat-assistant {
   align-self: flex-start;
-  background: #f5f3ec;
+  background: var(--surface-2);
   white-space: pre-wrap;
 }
 
@@ -567,7 +613,7 @@ button:disabled {
 }
 
 .alert-level-3 {
-  border-left: 6px solid #9a6700;
+  border-left: 6px solid var(--warning);
 }
 
 .alert-actions {
@@ -579,7 +625,7 @@ button:disabled {
 
 .meta {
   font-size: 0.8rem;
-  color: #45443f;
+  color: var(--ink-soft);
 }
 
 .loading {
@@ -623,8 +669,13 @@ button:disabled {
   margin: 0;
 }
 
+/* The system's secondary button: a surface fill behind a hairline, so it
+   reads as the quieter sibling of the accent button rather than as a
+   second, competing solid. */
 .btn-secondary {
-  background: #6b6961;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--ink);
 }
 
 .btn-danger {
@@ -641,11 +692,11 @@ button:disabled {
 }
 
 .badge-ok {
-  color: #4f7a52;
+  color: var(--success);
 }
 
 .badge-off {
-  color: #8a887f;
+  color: var(--ink-muted);
 }
 
 .role-hint ul {
@@ -655,8 +706,8 @@ button:disabled {
 .alert-snippet {
   padding: 8px 10px;
   margin: 8px 0;
-  border-radius: 6px;
-  background: #faf9f5;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
   border-left: 4px solid var(--border);
 }
 
@@ -688,17 +739,17 @@ button.linkish {
 }
 
 .tab {
-  background: #f5f3ec;
-  color: #141413;
+  background: var(--surface-2);
+  color: var(--ink);
   border: 1px solid var(--border);
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.85rem;
 }
 
 .tab.active {
   background: var(--primary);
-  color: var(--brand-ink);
+  color: var(--ink-on-accent);
   border-color: var(--primary);
 }
 
@@ -726,25 +777,25 @@ button.linkish {
 }
 
 .risk-banner.level-2 {
-  border-left: 6px solid #9a6700;
+  border-left: 6px solid var(--warning);
 }
 
 .risk-banner.level-0,
 .risk-banner.level-1 {
-  border-left: 6px solid #4f7a52;
+  border-left: 6px solid var(--success);
 }
 
 .level-pill {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
-  background: #f5f3ec;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
   font-size: 0.85rem;
 }
 
 .level-pill.level-3,
 .level-pill.level-4 {
-  background: #fbeae7;
+  background: var(--danger-bg);
   color: var(--danger);
 }
 
@@ -763,10 +814,10 @@ button.linkish {
 }
 
 .protocol-box {
-  background: #141413;
-  color: #e8e6dc;
+  background: var(--bg);
+  color: var(--ink);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   white-space: pre-wrap;
   font-size: 0.85rem;
   overflow-x: auto;
@@ -777,16 +828,16 @@ button.linkish {
 .trace-integrity-note,
 .trace-legacy-note {
   border-left: 4px solid var(--primary);
-  background: #faf9f5;
+  background: var(--surface-2);
   border-radius: 0 8px 8px 0;
   padding: 10px 12px;
   font-size: 0.9rem;
 }
 
 .trace-legacy-note {
-  border-left-color: #9a6700;
-  background: #fbf3de;
-  color: #704800;
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning-ink);
 }
 
 .trace-list {
@@ -799,18 +850,18 @@ button.linkish {
 .trace-card,
 .agent2-card {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--radius-card);
+  background: var(--card-bg);
   overflow: hidden;
 }
 
 .trace-card.level-0,
 .trace-card.level-1 {
-  border-left: 5px solid #4f7a52;
+  border-left: 5px solid var(--success);
 }
 
 .trace-card.level-2 {
-  border-left: 5px solid #9a6700;
+  border-left: 5px solid var(--warning);
 }
 
 .trace-card.level-3,
@@ -826,18 +877,20 @@ button.linkish {
   gap: 12px;
   padding: 14px 16px;
   cursor: pointer;
-  background: #faf9f5;
+  background: var(--surface-2);
 }
 
 .trace-card-summary:hover,
 .agent2-summary:hover {
-  background: #faf9f5;
+  background: var(--surface-2);
 }
 
 .trace-card-summary:focus-visible,
 .agent2-summary:focus-visible,
 .json-disclosure summary:focus-visible {
-  outline: 3px solid rgba(58, 110, 165, 0.35);
+  /* Was a translucent wash of the old brand blue, which on the dark
+     surface disappeared into the card. */
+  outline: 3px solid var(--accent-border);
   outline-offset: -3px;
 }
 
@@ -847,26 +900,26 @@ button.linkish {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: #f5f3ec;
-  color: #45443f;
+  background: var(--surface-2);
+  color: var(--ink-soft);
   font-weight: 750;
 }
 
 .risk-orb.level-0,
 .risk-orb.level-1 {
-  background: #eaf1e6;
-  color: #3d6340;
+  background: var(--success-bg);
+  color: var(--success-ink);
 }
 
 .risk-orb.level-2 {
-  background: #fbf3de;
-  color: #704800;
+  background: var(--warning-bg);
+  color: var(--warning-ink);
 }
 
 .risk-orb.level-3,
 .risk-orb.level-4 {
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
 }
 
 .trace-summary-copy,
@@ -877,7 +930,7 @@ button.linkish {
 }
 
 .trace-summary-copy > span {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.88rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -885,7 +938,7 @@ button.linkish {
 }
 
 .trace-summary-meta {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.78rem;
   text-align: right;
 }
@@ -900,9 +953,9 @@ button.linkish {
   grid-template-columns: minmax(220px, 1.4fr) minmax(150px, 0.7fr) minmax(180px, 0.9fr);
   gap: 14px;
   padding: 14px;
-  border: 1px solid #e8e6dc;
-  border-radius: 10px;
-  background: #faf9f5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
 }
 
 .decision-result,
@@ -944,7 +997,7 @@ button.linkish {
 .trace-identifiers dt,
 .trace-run-metadata dt,
 .trace-field-list dt {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.78rem;
 }
 
@@ -983,9 +1036,9 @@ button.linkish {
   grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(110px, 0.6fr));
   gap: 10px;
   margin-top: 10px;
-  border: 1px solid #e8e6dc;
-  border-radius: 9px;
-  background: #faf9f5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-note);
+  background: var(--surface-2);
   padding: 11px;
 }
 
@@ -1021,7 +1074,7 @@ button.linkish {
   top: 30px;
   bottom: -1px;
   width: 2px;
-  background: #e8e6dc;
+  background: var(--border);
 }
 
 .decision-marker {
@@ -1031,23 +1084,23 @@ button.linkish {
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 2px solid #b0aea5;
+  border: 2px solid var(--ink-muted);
   border-radius: 50%;
-  background: white;
-  color: #45443f;
+  background: var(--card-bg);
+  color: var(--ink-soft);
   font-weight: 750;
 }
 
 .decision-step.matched .decision-marker,
 .decision-step.selected .decision-marker {
-  border-color: #4f7a52;
-  background: #eaf1e6;
-  color: #3d6340;
+  border-color: var(--success);
+  background: var(--success-bg);
+  color: var(--success-ink);
 }
 
 .decision-step.not-matched .decision-marker {
-  border-color: #8a887f;
-  background: #f5f3ec;
+  border-color: var(--ink-muted);
+  background: var(--surface-2);
 }
 
 .decision-content {
@@ -1070,10 +1123,10 @@ button.linkish {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 3px 8px;
-  background: #f5f3ec;
-  color: #45443f;
+  background: var(--surface-2);
+  color: var(--ink-soft);
   font-size: 0.75rem;
   font-weight: 650;
   white-space: nowrap;
@@ -1082,19 +1135,19 @@ button.linkish {
 .trace-status.matched,
 .trace-status.selected,
 .trace-status.success {
-  background: #eaf1e6;
-  color: #3d6340;
+  background: var(--success-bg);
+  color: var(--success-ink);
 }
 
 .trace-status.not-matched,
 .trace-status.pending {
-  background: #f5f3ec;
-  color: #45443f;
+  background: var(--surface-2);
+  color: var(--ink-soft);
 }
 
 .trace-status.failure {
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
 }
 
 .observed-grid {
@@ -1108,8 +1161,8 @@ button.linkish {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-radius: 6px;
-  background: #faf9f5;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
   padding: 7px 9px;
   overflow-wrap: anywhere;
 }
@@ -1132,10 +1185,10 @@ button.linkish {
   flex-direction: column;
   gap: 5px;
   min-width: 0;
-  border: 1px solid #e8e6dc;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
   padding: 9px 10px;
-  background: #faf9f5;
+  background: var(--surface-2);
   font-size: 0.86rem;
 }
 
@@ -1155,11 +1208,11 @@ button.linkish {
 }
 
 .boolean-yes {
-  color: #8f1d17;
+  color: var(--danger-strong);
 }
 
 .boolean-no {
-  color: #3d6340;
+  color: var(--success-ink);
 }
 
 .trace-field-list {
@@ -1170,7 +1223,7 @@ button.linkish {
 }
 
 .trace-field-list > div {
-  border-bottom: 1px solid #f5f3ec;
+  border-bottom: 1px solid var(--surface-2);
   padding: 6px 0;
   min-width: 0;
 }
@@ -1188,8 +1241,8 @@ button.linkish {
 
 .json-disclosure {
   border: 1px solid var(--border);
-  border-radius: 7px;
-  background: #faf9f5;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
 }
 
 .json-disclosure summary {
@@ -1204,8 +1257,8 @@ button.linkish {
   margin: 0;
   border-top: 1px solid var(--border);
   padding: 12px;
-  background: #141413;
-  color: #f5f3ec;
+  background: var(--bg);
+  color: var(--ink);
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1213,11 +1266,11 @@ button.linkish {
 }
 
 .agent2-card.success {
-  border-left: 5px solid #4f7a52;
+  border-left: 5px solid var(--success);
 }
 
 .agent2-card.pending {
-  border-left: 5px solid #6b6961;
+  border-left: 5px solid var(--ink-muted);
 }
 
 .agent2-card.failure {
@@ -1236,13 +1289,13 @@ button.linkish {
   flex-direction: column;
   gap: 3px;
   min-width: 0;
-  border-radius: 7px;
-  background: #f5f3ec;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
   padding: 8px 9px;
 }
 
 .agent2-linkage span {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.75rem;
 }
 
@@ -1260,34 +1313,34 @@ button.linkish {
 .agent2-panel {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-note);
   padding: 13px;
 }
 
 .agent2-input {
-  background: #faf9f5;
+  background: var(--surface-2);
 }
 
 .agent2-output {
-  background: #eaf1e6;
+  background: var(--success-bg);
 }
 
 .agent2-panel blockquote {
   margin: 12px 0 0;
-  border-left: 4px solid #8a887f;
+  border-left: 4px solid var(--ink-muted);
   padding: 6px 0 6px 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .trace-empty {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-style: italic;
 }
 
 .trace-error {
   border-left: 4px solid var(--danger);
-  background: #fbeae7;
+  background: var(--danger-bg);
   border-radius: 0 6px 6px 0;
   padding: 8px 10px;
 }
@@ -1301,7 +1354,7 @@ button.linkish {
 
 .trace-run-metadata > div {
   min-width: 0;
-  border-bottom: 1px solid #f5f3ec;
+  border-bottom: 1px solid var(--surface-2);
   padding-bottom: 5px;
 }
 
@@ -1310,8 +1363,8 @@ button.linkish {
   grid-template-columns: minmax(220px, 1fr) minmax(170px, 0.45fr) auto;
   align-items: end;
   gap: 10px;
-  border-radius: 9px;
-  background: #f5f3ec;
+  border-radius: var(--radius-note);
+  background: var(--surface-2);
   padding: 12px;
   margin-top: 14px;
 }
@@ -1322,7 +1375,7 @@ button.linkish {
 
 .trace-filter-count {
   padding: 9px 4px;
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.85rem;
   white-space: nowrap;
 }
@@ -1389,27 +1442,27 @@ button.linkish {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-left: 6px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 18px 20px;
   margin-bottom: 18px;
 }
 
 .explain-card.level-0,
 .explain-card.level-1 {
-  border-left-color: #4f7a52;
+  border-left-color: var(--success);
 }
 .explain-card.level-2 {
-  border-left-color: #9a6700;
+  border-left-color: var(--warning);
 }
 .explain-card.level-3 {
-  border-left-color: #b4552f;
+  border-left-color: var(--primary-ink);
 }
 .explain-card.level-4 {
   border-left-color: var(--danger);
-  background: #fbeae7;
+  background: var(--danger-bg);
 }
 .explain-card.level-na {
-  border-left-color: #8a887f;
+  border-left-color: var(--ink-muted);
 }
 
 .explain-head {
@@ -1461,7 +1514,7 @@ button.linkish {
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: #6b6961;
+  color: var(--ink-muted);
   margin-bottom: 2px;
 }
 
@@ -1473,7 +1526,7 @@ button.linkish {
 .explain-reconcile {
   margin: 16px 0 0;
   padding: 12px 14px;
-  background: #f6efe7;
+  background: var(--accent-bg);
   border-left: 4px solid var(--primary);
   border-radius: 4px;
   line-height: 1.5;
@@ -1482,8 +1535,8 @@ button.linkish {
 .explain-scale {
   margin: 4px 0 10px;
   padding: 10px 12px;
-  background: #f5f3ec;
-  border-radius: 6px;
+  background: var(--surface-2);
+  border-radius: var(--radius-control);
   line-height: 1.5;
 }
 
@@ -1499,7 +1552,7 @@ button.linkish {
 .explain-caveats {
   margin: 14px 0 0;
   padding-left: 20px;
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.9rem;
   line-height: 1.5;
 }
@@ -1511,26 +1564,26 @@ button.linkish {
 .direction-pill {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.8rem;
   white-space: nowrap;
 }
 .direction-pill.direction-peor {
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
 }
 .direction-pill.direction-mejor {
-  background: #eaf1e6;
-  color: #3d6340;
+  background: var(--success-bg);
+  color: var(--success-ink);
 }
 .direction-pill.direction-igual,
 .direction-pill.direction-sin_datos {
-  background: #f5f3ec;
-  color: #6b6961;
+  background: var(--surface-2);
+  color: var(--ink-muted);
 }
 
 tr.direction-peor td:first-child {
-  border-left: 3px solid #b4552f;
+  border-left: 3px solid var(--primary-ink);
 }
 
 /* --- charts ---------------------------------------------------------- */
@@ -1542,7 +1595,7 @@ tr.direction-peor td:first-child {
 
 .chart-card {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 14px 14px 10px;
   background: var(--card-bg);
   min-width: 0;
@@ -1555,7 +1608,7 @@ tr.direction-peor td:first-child {
 
 .chart-question {
   margin: 0 0 10px;
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.9rem;
 }
 
@@ -1568,15 +1621,15 @@ tr.direction-peor td:first-child {
   margin: 8px 0 0;
   font-size: 0.85rem;
   line-height: 1.5;
-  color: #45443f;
+  color: var(--ink-soft);
 }
 
 .chart-empty {
   padding: 28px 8px;
   text-align: center;
-  color: #6b6961;
-  background: #faf9f5;
-  border-radius: 8px;
+  color: var(--ink-muted);
+  background: var(--surface-2);
+  border-radius: var(--radius-control);
 }
 
 /* --- event timeline -------------------------------------------------- */
@@ -1597,23 +1650,23 @@ tr.direction-peor td:first-child {
 
 .event-date {
   min-width: 100px;
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.88rem;
 }
 
 .event-tag {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.78rem;
   font-weight: 600;
 }
 .event-tag-alert {
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
 }
 .event-tag-fact {
-  background: #f6efe7;
-  color: #b4552f;
+  background: var(--accent-bg);
+  color: var(--primary-ink);
 }
 
 /* --- evidence feed --------------------------------------------------- */
@@ -1625,14 +1678,14 @@ tr.direction-peor td:first-child {
 
 .evidence-item {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 14px;
   background: var(--card-bg);
 }
 
 .evidence-item.evidence-flagged {
-  border-color: #eec4bd;
-  background: #fbeae7;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 
 .evidence-item.evidence-highlight {
@@ -1650,32 +1703,32 @@ tr.direction-peor td:first-child {
 
 .source-pill {
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.8rem;
   font-weight: 600;
 }
 .source-pill.source-chat_message {
-  background: #f6efe7;
-  color: #b4552f;
+  background: var(--accent-bg);
+  color: var(--primary-ink);
 }
 .source-pill.source-diary_entry {
-  background: #f0edf6;
-  color: #574a8a;
+  background: var(--purple-bg);
+  color: var(--purple-ink);
 }
 
 .evidence-alert-tag {
   padding: 2px 8px;
   border-radius: 4px;
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
   font-size: 0.8rem;
   font-weight: 600;
 }
 
 .evidence-status {
   font-size: 0.8rem;
-  color: #9a6700;
-  background: #fbf3de;
+  color: var(--warning);
+  background: var(--warning-bg);
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -1684,7 +1737,7 @@ tr.direction-peor td:first-child {
   margin: 8px 0;
   padding: 10px 14px;
   border-left: 4px solid var(--primary);
-  background: #faf9f5;
+  background: var(--surface-2);
   border-radius: 0 6px 6px 0;
   white-space: pre-wrap;
   line-height: 1.55;
@@ -1705,9 +1758,12 @@ tr.direction-peor td:first-child {
 
 .evidence-flag {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
+  /* A11Y, as with the crisis bar: white on --danger is 3.21:1, and this
+     pill runs at 0.78rem. Dark ink on the same red is 5.76:1 and keeps the
+     flag's colour, so the ink flips rather than the fill. */
   background: var(--danger);
-  color: #fff;
+  color: var(--bg);
   font-size: 0.78rem;
   font-weight: 600;
 }
@@ -1715,13 +1771,13 @@ tr.direction-peor td:first-child {
 .evidence-block {
   margin-top: 14px;
   padding: 12px 14px;
-  border-radius: 8px;
-  background: #faf9f5;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
   border: 1px solid var(--border);
 }
 
 .evidence-block.evidence-fact {
-  background: #eaf1e6;
+  background: var(--success-bg);
 }
 
 .evidence-head {
@@ -1740,7 +1796,7 @@ tr.direction-peor td:first-child {
 .alert-raw {
   margin: 10px 0;
   font-size: 0.9rem;
-  color: #6b6961;
+  color: var(--ink-muted);
 }
 
 .alert-raw summary {
@@ -1756,7 +1812,7 @@ tr.direction-peor td:first-child {
 
 .transcript-turn {
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   max-width: 78ch;
 }
 
@@ -1766,12 +1822,12 @@ tr.direction-peor td:first-child {
 }
 
 .transcript-user {
-  background: #f6efe7;
+  background: var(--accent-bg);
   align-self: flex-start;
 }
 
 .transcript-assistant {
-  background: #f5f3ec;
+  background: var(--surface-2);
   align-self: flex-end;
 }
 
@@ -1793,55 +1849,55 @@ tr.direction-peor td:first-child {
 
 .copilot-disclaimer {
   padding: 10px 12px;
-  background: #f5f3ec;
-  border-radius: 6px;
+  background: var(--surface-2);
+  border-radius: var(--radius-control);
   font-size: 0.88rem;
   line-height: 1.5;
 }
 
 .copilot-window-box {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 12px;
   min-height: 220px;
   max-height: 60vh;
   overflow-y: auto;
-  background: #faf9f5;
+  background: var(--surface-2);
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
 .copilot-empty {
-  color: #6b6961;
+  color: var(--ink-muted);
   text-align: center;
   padding: 24px 8px;
 }
 
 .copilot-bubble {
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   max-width: 80ch;
 }
 
 .copilot-user {
-  background: #f6efe7;
+  background: var(--accent-bg);
   align-self: flex-end;
 }
 
 .copilot-assistant {
-  background: #ffffff;
+  background: var(--card-bg);
   border: 1px solid var(--border);
   align-self: flex-start;
 }
 
 .copilot-bubble.copilot-error {
-  background: #fbeae7;
-  border-color: #eec4bd;
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
 }
 
 .copilot-pending {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-style: italic;
 }
 
@@ -1863,12 +1919,12 @@ tr.direction-peor td:first-child {
 
 .chip {
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--card-bg);
   font-size: 0.85rem;
   cursor: pointer;
-  color: #141413;
+  color: var(--ink);
 }
 
 .chip:hover:not(:disabled) {
@@ -1896,7 +1952,7 @@ tr.direction-peor td:first-child {
 .manual-callout {
   padding: 14px 16px;
   border-left: 5px solid var(--danger);
-  background: #fbeae7;
+  background: var(--danger-bg);
   border-radius: 0 8px 8px 0;
   line-height: 1.55;
   margin-bottom: 18px;
@@ -1925,16 +1981,16 @@ tr.direction-peor td:first-child {
   padding: 8px 10px;
   border-radius: 0 6px 6px 0;
   cursor: pointer;
-  color: #141413;
+  color: var(--ink);
   font-size: 0.92rem;
 }
 
 .manual-nav-item:hover {
-  background: #f5f3ec;
+  background: var(--surface-2);
 }
 
 .manual-nav-item.active {
-  background: #f6efe7;
+  background: var(--accent-bg);
   border-left-color: var(--primary);
   font-weight: 600;
   color: var(--primary-ink);
@@ -1955,18 +2011,18 @@ tr.direction-peor td:first-child {
 
 .manual-key {
   padding: 12px 14px;
-  background: #f6efe7;
+  background: var(--accent-bg);
   border-left: 4px solid var(--primary);
   border-radius: 0 6px 6px 0;
   line-height: 1.55;
 }
 
 .manual-wrong {
-  color: #8f1d17;
+  color: var(--danger-strong);
 }
 
 tr.row-highlight {
-  background: #faf9f5;
+  background: var(--surface-2);
 }
 
 @media (max-width: 900px) {
@@ -2020,19 +2076,19 @@ tr.row-highlight {
   color: var(--danger);
 }
 .psy-band-moderada .psy-gauge-value {
-  color: #9a6700;
+  color: var(--warning);
 }
 .psy-band-baja .psy-gauge-value {
-  color: #3d6340;
+  color: var(--success-ink);
 }
 .psy-band-sin_datos .psy-gauge-value {
-  color: #6b6961;
+  color: var(--ink-muted);
 }
 
 .psy-gauge-track {
   height: 10px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #eaf1e6 0%, #fbf3de 45%, #fbeae7 100%);
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--success-bg) 0%, var(--warning-bg) 45%, var(--danger-bg) 100%);
   border: 1px solid var(--border);
   overflow: hidden;
   margin: 6px 0 4px;
@@ -2048,7 +2104,7 @@ tr.row-highlight {
   display: flex;
   justify-content: space-between;
   font-size: 0.78rem;
-  color: #6b6961;
+  color: var(--ink-muted);
 }
 
 .psy-grid {
@@ -2061,19 +2117,19 @@ tr.row-highlight {
 .psy-card {
   border: 1px solid var(--border);
   border-left: 5px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 14px;
   background: var(--card-bg);
 }
 
 .psy-card.psy-risk {
-  border-left-color: #b4552f;
+  border-left-color: var(--primary-ink);
 }
 .psy-card.psy-protective {
-  border-left-color: #4f7a52;
+  border-left-color: var(--success);
 }
 .psy-card.psy-neutral {
-  border-left-color: #8a887f;
+  border-left-color: var(--ink-muted);
 }
 
 .psy-card.psy-status-refuted {
@@ -2083,7 +2139,7 @@ tr.row-highlight {
   text-decoration: line-through;
 }
 .psy-card.psy-status-confirmed {
-  box-shadow: inset 3px 0 0 #b4552f;
+  box-shadow: inset 3px 0 0 var(--primary-ink);
 }
 
 .psy-card-head {
@@ -2095,7 +2151,7 @@ tr.row-highlight {
 }
 
 .psy-category {
-  color: #6b6961;
+  color: var(--ink-muted);
   font-size: 0.9rem;
 }
 
@@ -2107,34 +2163,34 @@ tr.row-highlight {
 
 .psy-pill {
   padding: 2px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.76rem;
   font-weight: 600;
   white-space: nowrap;
 }
 .psy-pill-risk {
-  background: #fbeae7;
-  color: #8f1d17;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
 }
 .psy-pill-protective {
-  background: #eaf1e6;
-  color: #3d6340;
+  background: var(--success-bg);
+  color: var(--success-ink);
 }
 .psy-pill-neutral {
-  background: #f5f3ec;
-  color: #6b6961;
+  background: var(--surface-2);
+  color: var(--ink-muted);
 }
 .psy-pill-change {
-  background: #fbf3de;
-  color: #9a6700;
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 .psy-pill-confirmed {
-  background: #f6efe7;
-  color: #b4552f;
+  background: var(--accent-bg);
+  color: var(--primary-ink);
 }
 .psy-pill-refuted {
-  background: #f5f3ec;
-  color: #6b6961;
+  background: var(--surface-2);
+  color: var(--ink-muted);
 }
 
 .psy-summary {
@@ -2153,7 +2209,7 @@ tr.row-highlight {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: #6b6961;
+  color: var(--ink-muted);
 }
 
 .psy-numbers dd {
@@ -2170,9 +2226,9 @@ tr.row-highlight {
 }
 
 .psy-acute {
-  border: 1px solid #ecdcb4;
-  background: #fbf3de;
-  border-radius: 10px;
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
+  border-radius: var(--radius-card);
   padding: 14px 16px;
   margin-bottom: 18px;
 }
@@ -2205,7 +2261,7 @@ tr.row-highlight {
 
 .psy-index-tile {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   padding: 12px 14px;
   background: var(--card-bg);
 }
@@ -2217,7 +2273,7 @@ tr.row-highlight {
 
 .psy-index-sin_datos {
   border-style: dashed;
-  background: var(--sand-100);
+  background: var(--surface-2);
 }
 
 .psy-index-head {
@@ -2254,14 +2310,14 @@ tr.row-highlight {
   height: 8px;
   margin: 10px 0 6px;
   border-radius: 999px;
-  background: var(--sand-300);
+  background: var(--border);
   overflow: hidden;
 }
 
 .psy-index-fill {
   height: 100%;
   border-radius: 999px;
-  background: var(--brand-blue);
+  background: var(--primary);
 }
 
 .psy-index-alerta .psy-index-fill {
@@ -2296,7 +2352,7 @@ tr.row-highlight {
 .psy-leavetaking {
   border: 2px solid var(--danger-border);
   border-left-width: 6px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   background: var(--danger-bg);
   padding: 14px 18px;
   margin: 16px 0;
@@ -2309,7 +2365,7 @@ tr.row-highlight {
 
 .psy-questions {
   border: 1px solid var(--accent-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   background: var(--accent-bg);
   padding: 14px 18px;
   margin: 16px 0;
@@ -2324,19 +2380,19 @@ tr.row-highlight {
 }
 
 .psy-question {
-  border-left: 3px solid var(--brand-blue);
+  border-left: 3px solid var(--accent-border);
   padding-left: 10px;
   margin: 10px 0 0;
   font-size: 0.9rem;
 }
 
 .psy-pill-unscored {
-  background: var(--sand-200);
+  background: var(--surface-2);
   color: var(--ink-muted);
 }
 
 .psy-pill-stale {
-  background: var(--sand-300);
+  background: var(--border);
   color: var(--ink-soft);
 }
 
@@ -2357,7 +2413,7 @@ tr.row-highlight {
   border-radius: 8px;
   padding: 12px 14px;
   margin: 12px 0 16px;
-  background: var(--sand-50);
+  background: var(--surface-2);
 }
 
 .llm-active-label {
@@ -2494,4 +2550,44 @@ tr.row-highlight {
 
 .model-stamp.is-local {
   color: var(--warning);
+}
+
+/* =====================================================================
+ * Recharts chrome.
+ *
+ * Recharts inlines its own greys for axes, grid, legend and tooltip, all
+ * of them picked for a white page. They are the one part of the charts
+ * that CSS has to reach into: the series colours are set in the component,
+ * but this furniture is only reachable from here.
+ * ===================================================================== */
+.recharts-cartesian-axis-tick text,
+.recharts-legend-item-text,
+.recharts-label,
+.recharts-text {
+  fill: var(--ink-muted) !important;
+}
+
+/* Recessive grid and axes — present enough to read a value against, never
+   competing with the data. */
+.recharts-cartesian-grid line,
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--border);
+}
+
+.recharts-default-tooltip {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-control);
+  color: var(--ink) !important;
+}
+
+/* Text wears text tokens, never the series colour; the swatch beside it
+   carries identity. */
+.recharts-tooltip-item {
+  color: var(--ink) !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--ink-muted) !important;
 }

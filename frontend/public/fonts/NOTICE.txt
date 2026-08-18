@@ -1,0 +1,15 @@
+Inter
+=====
+
+The files inter-latin.woff2 and inter-latin-ext.woff2 are subsets of the
+Inter variable font (weight axis 100-900).
+
+Inter is Copyright (c) 2016 The Inter Project Authors, and is licensed
+under the SIL Open Font License, Version 1.1.
+
+The full licence text is published with the upstream project:
+https://github.com/rsms/inter/blob/master/LICENSE.txt
+
+Under the OFL these files may be redistributed and embedded, including in
+this application, provided they are not sold on their own and this notice
+is kept alongside them.
