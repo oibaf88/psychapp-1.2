@@ -1,42 +1,71 @@
 """
-Agent 4 — psychosocial context extraction, and the deterministic index
+Agent 4 — psychosocial context extraction, and the deterministic indices
 built from it.
 
 Why this exists
 ---------------
-Emotional deterioration is usually the *last* thing to change. What changes
-first is the person's situation: they move in with someone "for a while",
-they stop seeing the gym crowd, a benefit is withdrawn, a grandmother dies,
-they go back to a flat where people use. Each of those sentences reads as
-small talk, and the previous pipeline threw all of them away: Agent 2 scores
-rumination and ideation, and the structural score only reads four daily
-numbers. Nothing in the system could see a person's life narrowing.
+A patient tells Agent 1, in passing, that their sister moved out, that the
+landlord gave them a month, and that they gave their guitar to their nephew.
+Nothing there is a suicidal statement, so Agent 2's linguistic flags stay
+false and the structural score — which only ever reads check-ins — does not
+move. The message scrolls away and the therapist never sees it. Read
+together, those three sentences are the constellation that precedes a
+crisis.
 
 Two clearly separated halves
 ----------------------------
-1. **Extraction (this file, top half).** An LLM reads the patient's text and
-   returns structured social determinants with a literal supporting quote.
-   Like every model output in this codebase it is an *inference*, validated
+1. **Extraction (top half).** An LLM reads the patient's text and returns
+   structured social determinants with a literal supporting quote. Like
+   every model output in this codebase it is an *inference*, validated
    against a strict schema and stored as such; invalid output is discarded
-   whole.
-2. **Scoring (this file, bottom half).** A deterministic, inspectable
-   function turns those stored observations into a vulnerability index and
-   an acute-destabilisation flag. **No model is in this path.** The risk
-   engine consumes only these numbers, so a hallucinated observation can
-   move an index the clinician can see and audit, but it can never "decide"
-   a level on its own — every new rule requires convergence with an
-   independent signal.
+   whole, and a quote that does not literally appear in the source text is
+   dropped rather than shown.
+2. **Scoring (bottom half).** Deterministic, inspectable arithmetic turns
+   those stored observations into four indices and a set of flags. **No
+   model is in this path.** The risk engine consumes only these numbers, so
+   a hallucinated observation can move an index the clinician can see and
+   audit, but it can never "decide" a level on its own — every rule that
+   reads them requires convergence with an independent signal.
+
+Four indices, not one
+---------------------
+An earlier version blended everything into a single vulnerability number.
+That number was clinically unreadable: losing your flat and feeling like a
+burden to your family are both "adversity", but they call for different
+responses, and averaging them lets one mask the other. The four indices are
+kept apart:
+
+* ``support_index`` — how much real support is available (high is good).
+* ``material_adversity_index`` — housing, money, work, access to care.
+* ``interpersonal_risk_index`` — the two Interpersonal Theory of Suicide
+  constructs (perceived burdensomeness, thwarted belongingness) plus
+  withdrawal. Their *convergence* is what the level-4 rule looks for.
+* ``relapse_context_index`` — the social environment around using.
+
+Absence of data is not evidence of safety
+-----------------------------------------
+Every index is ``None``, never ``0.0``, when nothing is known, and the risk
+engine records the rules that read it as *not evaluable* rather than *not
+met*. A patient with no psychosocial data is assessed exactly as before this
+module existed.
+
+Observations do not expire; changes do
+--------------------------------------
+Losing your flat is still true next week, so the newest observation per
+domain stays the current picture however old it is, flagged stale after
+``STALE_AFTER_DAYS`` so nobody mistakes it for fresh. What *is* time-boxed is
+acute change, the leave-taking signal, and "live" interpersonal risk — that
+last window is what stops chronic adversity from re-raising the same alarm
+every single day.
 
 Clinical grounding of the weights
 ---------------------------------
-The domain weights below rank the determinants that the suicide-prevention
-and addiction-relapse literature consistently associates with proximal risk:
-housing instability, loss of social support and connectedness, interpersonal
-loss events, economic shock, disengagement from care, and exposure to using
-environments. They are deliberately coarse and are exposed to the therapist
-in the panel and the manual, because a weight nobody can see is a weight
-nobody can challenge. They are NOT a validated instrument and must not be
-read as one.
+The weights in ``app/content/psychosocial_catalog.py`` rank the determinants
+that the suicide-prevention and addiction-relapse literature consistently
+associates with proximal risk. They are deliberately coarse and are exposed
+to the therapist in the panel and the manual, because a weight nobody can
+see is a weight nobody can challenge. They are NOT a validated instrument
+and must not be read as one.
 """
 from __future__ import annotations
 
@@ -44,15 +73,26 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.content.prompts import (
-    AGENT4_DOMAIN_CATEGORIES,
-    AGENT4_SYSTEM_PROMPT,
-    AGENT4_TOOL_SCHEMA,
+from app.content.prompts import AGENT4_SYSTEM_PROMPT, AGENT4_TOOL_SCHEMA
+from app.content.psychosocial_catalog import (
+    ACUTE_CHANGE_CATEGORIES,
+    CATEGORY_DOMAIN,
+    CATEGORY_LABELS,
+    DOMAIN_BY_KEY,
+    DOMAIN_CATEGORIES,
+    DOMAIN_KEYS,
+    DOMAIN_LABELS,
+    DOMAIN_WEIGHTS,
+    GROUP_LABELS,
+    INTERPERSONAL_DOMAINS,
+    LEAVE_TAKING_DOMAIN,
+    Domain,
+    risk_value,
 )
 from app.models import PsychosocialObservation
 from app.services import agent2_trace
@@ -63,141 +103,61 @@ logger = logging.getLogger("psychapp.psychosocial")
 AGENT_ROLE = "agent4_psychosocial"
 MAX_QUOTE_CHARS = 300
 MAX_SUMMARY_CHARS = 400
+MAX_OBSERVATIONS_PER_TEXT = 8
 
-# How long an observation keeps counting toward the live index. Social
-# circumstances persist far longer than a linguistic marker, so this window is
-# generous; a therapist can always refute a stale one.
+# Kept for the therapist panel and for historic comparability: how far back a
+# reading is still treated as describing the present.
 ACTIVE_WINDOW_DAYS = 90
 # A "change" is only acute for a fortnight. This is the window in which the
 # apparently-innocuous signals matter most.
 ACUTE_CHANGE_WINDOW_DAYS = 14
+# Past this the newest reading is still the current picture, but it is shown
+# as stale: nobody has said anything about this domain in four months.
+STALE_AFTER_DAYS = 120
 
-# Relative weight of each domain in the vulnerability index (0-1).
-DOMAIN_WEIGHTS: dict[str, float] = {
-    "housing": 1.00,
-    "social_support": 1.00,
-    "loss_event": 0.90,
-    "connectedness": 0.85,
-    "substance_environment": 0.85,
-    "healthcare_access": 0.80,
-    "economic": 0.80,
-    "family": 0.75,
-    "cohabitation": 0.70,
-    "occupation": 0.60,
-    "means_access": 0.95,
-    "stigma": 0.55,
-    "legal": 0.50,
-}
+# Below this an observation is displayed to the therapist but never scored.
+# A hedged, ironic or third-hand mention should not move a threshold. This
+# replaces the older behaviour of multiplying intensity by confidence, under
+# which a 0.1-confidence guess still nudged every index it touched.
+MIN_CONFIDENCE_FOR_SCORING = 0.50
 
-# Categories that constitute an acute adverse change when freshly reported.
-# These are the "small" sentences that precede crises.
-ACUTE_CHANGE_CATEGORIES = {
-    "housing_homeless",
-    "housing_eviction_risk",
-    "housing_temporary",
-    "housing_precarious",
-    "lives_with_people_who_use",
-    "cohabitation_conflict",
-    "support_absent",
-    "isolation_increasing",
-    "family_conflict",
-    "family_estranged",
-    "benefit_loss",
-    "food_insecurity",
-    "debt",
-    "job_loss",
-    "bereavement",
-    "breakup",
-    "relationship_loss",
-    "pet_loss",
-    "other_loss",
-    "loss_of_routine",
-    "treatment_dropout",
-    "medication_access_problem",
-    "using_environment_exposure",
-    "means_access_reported",
-}
+# Agent 4 costs one extra provider call per patient message. Very short texts
+# ("ok", "gracias") cannot carry social context worth the round trip.
+MIN_TEXT_CHARS_FOR_EXTRACTION = 15
 
-DOMAIN_LABELS = {
-    "housing": "Vivienda",
-    "cohabitation": "Convivencia",
-    "social_support": "Apoyo social",
-    "family": "Familia",
-    "economic": "Situación económica",
-    "occupation": "Ocupación",
-    "legal": "Situación legal",
-    "healthcare_access": "Acceso a tratamiento",
-    "stigma": "Estigma",
-    "loss_event": "Pérdidas y rupturas",
-    "connectedness": "Vínculos y rutina",
-    "means_access": "Acceso a medios lesivos",
-    "substance_environment": "Entorno de consumo",
-}
+# Index thresholds. Named here, consumed by the risk engine, rendered in the
+# panel, so a therapist reading "apoyo bajo" can find the number behind it.
+SUPPORT_LOW_MAX = 0.34
+SUPPORT_MODERATE_MAX = 0.60
+MATERIAL_ADVERSITY_HIGH_MIN = 0.50
+INTERPERSONAL_RISK_HIGH_MIN = 0.66
+RELAPSE_CONTEXT_HIGH_MIN = 0.60
 
-CATEGORY_LABELS = {
-    "housing_stable": "Vivienda estable",
-    "housing_precarious": "Vivienda precaria",
-    "housing_temporary": "Alojamiento temporal",
-    "housing_homeless": "Sin hogar",
-    "housing_eviction_risk": "Riesgo de perder la vivienda",
-    "housing_institution": "Recurso residencial / institución",
-    "lives_alone": "Vive solo/a",
-    "lives_with_family": "Vive con familia",
-    "lives_with_partner": "Vive en pareja",
-    "lives_shared": "Vivienda compartida",
-    "lives_with_people_who_use": "Convive con personas que consumen",
-    "cohabitation_conflict": "Conflicto de convivencia",
-    "support_strong": "Apoyo social sólido",
-    "support_limited": "Apoyo social limitado",
-    "support_absent": "Sin apoyo social",
-    "isolation_increasing": "Aislamiento creciente",
-    "new_supportive_relationship": "Nuevo vínculo de apoyo",
-    "family_supportive": "Familia que apoya",
-    "family_conflict": "Conflicto familiar",
-    "family_estranged": "Ruptura familiar",
-    "family_caregiving_burden": "Sobrecarga de cuidados",
-    "family_unaware": "Familia no informada",
-    "income_stable": "Ingresos estables",
-    "income_precarious": "Ingresos precarios",
-    "debt": "Deudas",
-    "food_insecurity": "Inseguridad alimentaria",
-    "benefit_loss": "Pérdida de ayuda o prestación",
-    "financial_dependence": "Dependencia económica",
-    "employed": "Con empleo",
-    "unemployed": "Sin empleo",
-    "job_loss": "Pérdida de empleo",
-    "studying": "Estudiando",
-    "sick_leave": "Baja laboral",
-    "work_stress": "Estrés laboral",
-    "legal_proceedings": "Procedimiento legal abierto",
-    "legal_none": "Sin asuntos legales",
-    "treatment_engaged": "Vinculado al tratamiento",
-    "treatment_dropout": "Abandono de tratamiento",
-    "medication_access_problem": "Problema de acceso a medicación",
-    "appointment_barrier": "Barrera para acudir a citas",
-    "stigma_experienced": "Estigma vivido",
-    "disclosure_fear": "Miedo a revelar su situación",
-    "bereavement": "Duelo",
-    "breakup": "Ruptura de pareja",
-    "relationship_loss": "Pérdida de una relación",
-    "pet_loss": "Pérdida de un animal de compañía",
-    "other_loss": "Otra pérdida",
-    "meaningful_activity": "Actividad con sentido",
-    "community_belonging": "Pertenencia a un grupo",
-    "future_plans": "Planes de futuro",
-    "loss_of_routine": "Pérdida de rutina",
-    "means_access_reported": "Acceso referido a medios lesivos",
-    "means_restricted": "Medios restringidos",
-    "using_environment_exposure": "Exposición a entorno de consumo",
-    "environment_protective": "Entorno protector",
-}
+# Re-exported so existing callers keep working and so there is exactly one
+# place these can be edited.
+AGENT4_DOMAIN_CATEGORIES = DOMAIN_CATEGORIES
 
-# Reverse lookup so a category can be validated against the domain it claims.
-CATEGORY_DOMAIN = {
-    category: domain
-    for domain, categories in AGENT4_DOMAIN_CATEGORIES.items()
-    for category in categories
-}
+__all__ = [
+    "ACTIVE_WINDOW_DAYS",
+    "ACUTE_CHANGE_CATEGORIES",
+    "ACUTE_CHANGE_WINDOW_DAYS",
+    "CATEGORY_DOMAIN",
+    "CATEGORY_LABELS",
+    "DOMAIN_LABELS",
+    "DOMAIN_WEIGHTS",
+    "GROUP_LABELS",
+    "INTERPERSONAL_RISK_HIGH_MIN",
+    "MATERIAL_ADVERSITY_HIGH_MIN",
+    "MIN_CONFIDENCE_FOR_SCORING",
+    "RELAPSE_CONTEXT_HIGH_MIN",
+    "STALE_AFTER_DAYS",
+    "SUPPORT_LOW_MAX",
+    "DomainState",
+    "PsychosocialAssessment",
+    "adjudicate",
+    "assess",
+    "extract_and_store",
+]
 
 
 # ----------------------------------------------------------- extraction ----
@@ -254,6 +214,22 @@ def _quote_is_grounded(quote: str, source_text: str) -> bool:
     return normalised_quote in " ".join(source_text.split()).casefold()
 
 
+def _deduplicate(observations: list[PsychosocialObservationIn]) -> list[PsychosocialObservationIn]:
+    """One observation per domain, highest confidence wins.
+
+    The prompt asks for this; this enforces it, because two rows for one
+    domain in a single extraction would make "the current reading" ambiguous
+    for every reader downstream.
+    """
+    best: dict[str, PsychosocialObservationIn] = {}
+    for item in observations:
+        incumbent = best.get(item.domain)
+        if incumbent is None or item.confidence > incumbent.confidence:
+            best[item.domain] = item
+    ordered = sorted(best.values(), key=lambda item: item.confidence, reverse=True)
+    return ordered[:MAX_OBSERVATIONS_PER_TEXT]
+
+
 def extract_and_store(
     db: Session,
     user_id,
@@ -270,6 +246,11 @@ def extract_and_store(
     trace not committing, the provider erroring, invalid output — leaves the
     conversation and the deterministic risk engine untouched.
     """
+    if not text or len(text.strip()) < MIN_TEXT_CHARS_FOR_EXTRACTION:
+        # Not worth a provider round trip, and nothing is lost: a text this
+        # short cannot carry social context the next message will not repeat.
+        return ExtractionOutcome(None, "skipped_short_text")
+
     try:
         trace = agent2_trace.start(
             db,
@@ -284,7 +265,7 @@ def extract_and_store(
         return ExtractionOutcome(None, "trace_persistence_error")
 
     try:
-        provider_result = get_llm_provider().analyze_structured(
+        provider_result = get_llm_provider(db).analyze_structured(
             AGENT4_SYSTEM_PROMPT,
             text,
             AGENT4_TOOL_SCHEMA,
@@ -297,7 +278,7 @@ def extract_and_store(
 
     when = observed_at or datetime.utcnow()
     rows: list[PsychosocialObservation] = []
-    for item in extraction.observations:
+    for item in _deduplicate(extraction.observations):
         if not _coherent(item):
             logger.warning("Agent 4 returned %s outside domain %s; dropped", item.category, item.domain)
             continue
@@ -352,6 +333,8 @@ def extract_and_store(
 class DomainState:
     domain: str
     label: str
+    group: str
+    group_label: str
     category: str
     category_label: str
     valence: str
@@ -365,6 +348,40 @@ class DomainState:
     weight: float
     contribution: float
     is_change: bool
+    age_days: float
+    risk_value: float
+    counts_for_scoring: bool
+    is_stale: bool
+    is_recent_change: bool
+    has_pending_update: bool
+    session_question: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "label": self.label,
+            "group": self.group,
+            "group_label": self.group_label,
+            "category": self.category,
+            "category_label": self.category_label,
+            "valence": self.valence,
+            "intensity": self.intensity,
+            "confidence": self.confidence,
+            "status": self.status,
+            "summary": self.summary,
+            "quote": self.quote,
+            "observation_id": str(self.observation_id),
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "age_days": self.age_days,
+            "weight": self.weight,
+            "contribution": self.contribution,
+            "risk_value": self.risk_value,
+            "is_change": self.is_change,
+            "is_recent_change": self.is_recent_change,
+            "is_stale": self.is_stale,
+            "counts_for_scoring": self.counts_for_scoring,
+            "has_pending_update": self.has_pending_update,
+        }
 
 
 @dataclass
@@ -383,21 +400,106 @@ class PsychosocialAssessment:
     confirmed_count: int
     refuted_count: int
     computed_at: datetime
+    # --- the four separate indices ---------------------------------------
+    support_index: float | None = None
+    material_adversity_index: float | None = None
+    interpersonal_risk_index: float | None = None
+    relapse_context_index: float | None = None
+    scored_count: int = 0
+    stale_domains: list[str] = field(default_factory=list)
+    pending_update_domains: list[str] = field(default_factory=list)
+    interpersonal_recent_evidence: list[str] = field(default_factory=list)
+    leave_taking: DomainState | None = None
+
+    # ---- predicates the risk engine asks for, so thresholds live here ----
+    @property
+    def available(self) -> bool:
+        return bool(self.domains)
+
+    @property
+    def support_is_low(self) -> bool | None:
+        if self.support_index is None:
+            return None
+        return self.support_index <= SUPPORT_LOW_MAX
+
+    @property
+    def material_adversity_is_high(self) -> bool | None:
+        if self.material_adversity_index is None:
+            return None
+        return self.material_adversity_index >= MATERIAL_ADVERSITY_HIGH_MIN
+
+    @property
+    def interpersonal_risk_is_high(self) -> bool | None:
+        if self.interpersonal_risk_index is None:
+            return None
+        return self.interpersonal_risk_index >= INTERPERSONAL_RISK_HIGH_MIN
+
+    @property
+    def relapse_context_is_high(self) -> bool | None:
+        if self.relapse_context_index is None:
+            return None
+        return self.relapse_context_index >= RELAPSE_CONTEXT_HIGH_MIN
+
+    @property
+    def interpersonal_risk_is_live(self) -> bool:
+        """High interpersonal risk the patient has voiced recently.
+
+        Without this, a chronic "nobody needs me" recorded months ago would
+        re-raise the same alarm every time an earlier alert was closed. The
+        rules that use it therefore ask for both: a high index AND something
+        said in the last two weeks.
+        """
+        return bool(self.interpersonal_risk_is_high) and bool(self.interpersonal_recent_evidence)
+
+    @property
+    def has_leave_taking_signal(self) -> bool:
+        return self.leave_taking is not None
 
     def as_dict(self) -> dict[str, Any]:
+        """Snapshot stored verbatim inside the risk engine's calculation trace."""
         return {
             "index": self.index,
             "band": self.band,
+            "available": self.available,
+            "indices": {
+                "support_index": self.support_index,
+                "material_adversity_index": self.material_adversity_index,
+                "interpersonal_risk_index": self.interpersonal_risk_index,
+                "relapse_context_index": self.relapse_context_index,
+            },
+            "thresholds": {
+                "min_confidence_for_scoring": MIN_CONFIDENCE_FOR_SCORING,
+                "support_low_max": SUPPORT_LOW_MAX,
+                "material_adversity_high_min": MATERIAL_ADVERSITY_HIGH_MIN,
+                "interpersonal_risk_high_min": INTERPERSONAL_RISK_HIGH_MIN,
+                "relapse_context_high_min": RELAPSE_CONTEXT_HIGH_MIN,
+                "acute_change_window_days": ACUTE_CHANGE_WINDOW_DAYS,
+                "stale_after_days": STALE_AFTER_DAYS,
+            },
+            "formulas": {
+                "support_index": "1 - weighted_mean(risk_value, support_weight)",
+                "material_adversity_index": "weighted_mean(risk_value, material_weight)",
+                "interpersonal_risk_index": "weighted_mean(risk_value, interpersonal_weight)",
+                "relapse_context_index": "weighted_mean(risk_value, relapse_weight)",
+                "risk_value_scale": "protective=0.0, neutral=0.25, risk=intensity",
+            },
             "risk_domains": self.risk_domains,
             "protective_domains": self.protective_domains,
             "has_acute_change": self.has_acute_change,
             "acute_change_categories": [state.category for state in self.acute_changes],
+            "acute_change_domains": [state.domain for state in self.acute_changes],
+            "interpersonal_recent_evidence": self.interpersonal_recent_evidence,
+            "leave_taking": self.leave_taking.as_dict() if self.leave_taking else None,
+            "stale_domains": self.stale_domains,
+            "pending_update_domains": self.pending_update_domains,
             "observation_count": self.observation_count,
             "active_count": self.active_count,
+            "scored_count": self.scored_count,
             "confirmed_count": self.confirmed_count,
             "refuted_count": self.refuted_count,
             "active_window_days": ACTIVE_WINDOW_DAYS,
             "acute_change_window_days": ACUTE_CHANGE_WINDOW_DAYS,
+            "domains": [state.as_dict() for state in self.domains],
         }
 
 
@@ -416,40 +518,65 @@ def _band(index: float | None) -> str:
 STATUS_MULTIPLIER = {"confirmed": 1.0, "inferred": None, "refuted": 0.0}
 
 
-def _effective_confidence(row: PsychosocialObservation) -> float:
+def _effective_confidence(row) -> float:
     multiplier = STATUS_MULTIPLIER.get(row.status)
     if multiplier is not None:
         return multiplier
     return float(row.confidence)
 
 
+def _weighted_index(
+    states: list[DomainState],
+    weight_of: Callable[[Domain], float],
+) -> float | None:
+    """Weighted mean of risk values over the domains that carry a weight.
+
+    Returns None — not 0.0 — when nothing is known, so "no data" can never be
+    mistaken for "no adversity" by a threshold comparison.
+    """
+    total_weight = 0.0
+    accumulated = 0.0
+    for state in states:
+        if not state.counts_for_scoring:
+            continue
+        domain = DOMAIN_BY_KEY.get(state.domain)
+        if domain is None:
+            continue
+        weight = weight_of(domain)
+        if weight <= 0:
+            continue
+        total_weight += weight
+        accumulated += weight * state.risk_value
+    if total_weight == 0:
+        return None
+    return round(accumulated / total_weight, 3)
+
+
 def assess(db: Session, user_id, *, now: datetime | None = None) -> PsychosocialAssessment:
-    """Fold stored observations into one inspectable vulnerability index.
+    """Fold stored observations into inspectable indices.
 
     Per domain only the most recent non-refuted observation counts, so a
-    situation that improved is not still being scored on its old state. The
-    index is the weighted mean of adverse contributions minus the weighted
-    mean of protective ones, clamped to 0..1.
+    situation that improved is not still scored on its old state — with one
+    exception that is the whole point of the fact/inference wall: a domain a
+    professional has *confirmed* is not silently overwritten by a later model
+    reading. The newer inference is kept and reported as a pending update for
+    the professional to accept or reject.
     """
     now = now or datetime.utcnow()
-    since = now - timedelta(days=ACTIVE_WINDOW_DAYS)
 
     rows = (
         db.query(PsychosocialObservation)
-        .filter(
-            PsychosocialObservation.user_id == user_id,
-            PsychosocialObservation.observed_at >= since,
-        )
+        .filter(PsychosocialObservation.user_id == user_id)
         .order_by(PsychosocialObservation.observed_at.desc())
         .all()
     )
-    total = (
-        db.query(PsychosocialObservation)
-        .filter(PsychosocialObservation.user_id == user_id)
-        .count()
-    )
+    total = len(rows)
 
-    latest_by_domain: dict[str, PsychosocialObservation] = {}
+    # Rows arrive newest first. Per domain the winner is the newest
+    # non-refuted row, except that a confirmed row outranks any inference,
+    # however recent.
+    current: dict[str, Any] = {}
+    pending_updates: set[str] = set()
     confirmed = 0
     refuted = 0
     for row in rows:
@@ -458,7 +585,24 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
         if row.status == "refuted":
             refuted += 1
             continue
-        latest_by_domain.setdefault(row.domain, row)
+        if row.domain not in DOMAIN_BY_KEY:
+            # A domain retired from the catalogue: keep it out of the index
+            # rather than scoring it with a guessed weight.
+            continue
+        incumbent = current.get(row.domain)
+        if incumbent is None:
+            current[row.domain] = row
+            continue
+        if incumbent.status == "confirmed" and row.status != "confirmed":
+            continue
+        if row.status == "confirmed" and incumbent.status != "confirmed":
+            # The confirmed row is older (rows are newest first), so the
+            # inference we already saw is a newer, unreviewed reading.
+            pending_updates.add(row.domain)
+            current[row.domain] = row
+
+    acute_cutoff = now - timedelta(days=ACUTE_CHANGE_WINDOW_DAYS)
+    stale_cutoff = now - timedelta(days=STALE_AFTER_DAYS)
 
     domains: list[DomainState] = []
     risk_numerator = 0.0
@@ -466,20 +610,30 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
     protective_numerator = 0.0
     protective_denominator = 0.0
 
-    for row in latest_by_domain.values():
+    for row in current.values():
+        catalog_domain = DOMAIN_BY_KEY[row.domain]
         weight = DOMAIN_WEIGHTS.get(row.domain, 0.5)
-        effective = _effective_confidence(row) * float(row.intensity)
-        contribution = round(weight * effective, 4)
+        effective_confidence = _effective_confidence(row)
+        # A human declaration always scores; a model reading has to clear the
+        # confidence floor before it may move any threshold.
+        counts = row.status == "confirmed" or float(row.confidence) >= MIN_CONFIDENCE_FOR_SCORING
+        value = risk_value(row.valence, float(row.intensity))
+        legacy_effective = effective_confidence * float(row.intensity)
+        contribution = round(weight * legacy_effective, 4)
         if row.valence == "risk":
-            risk_numerator += weight * effective
+            risk_numerator += weight * legacy_effective
             risk_denominator += weight
         elif row.valence == "protective":
-            protective_numerator += weight * effective
+            protective_numerator += weight * legacy_effective
             protective_denominator += weight
+        observed_at = row.observed_at
+        age_days = round((now - observed_at).total_seconds() / 86400.0, 2) if observed_at else 0.0
         domains.append(
             DomainState(
                 domain=row.domain,
                 label=DOMAIN_LABELS.get(row.domain, row.domain),
+                group=catalog_domain.group,
+                group_label=GROUP_LABELS.get(catalog_domain.group, catalog_domain.group),
                 category=row.category,
                 category_label=CATEGORY_LABELS.get(row.category, row.category),
                 valence=row.valence,
@@ -488,11 +642,18 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
                 status=row.status,
                 summary=row.summary,
                 quote=row.evidence_quote,
-                observed_at=row.observed_at,
+                observed_at=observed_at,
                 observation_id=row.id,
                 weight=weight,
                 contribution=contribution,
                 is_change=bool(row.is_change),
+                age_days=age_days,
+                risk_value=value,
+                counts_for_scoring=counts,
+                is_stale=bool(observed_at and observed_at < stale_cutoff),
+                is_recent_change=bool(row.is_change and observed_at and observed_at >= acute_cutoff),
+                has_pending_update=row.domain in pending_updates,
+                session_question=catalog_domain.session_question,
             )
         )
 
@@ -506,7 +667,9 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
         index = max(0.0, min(1.0, adverse - 0.35 * protective))
         index = round(index, 3)
 
-    acute_cutoff = now - timedelta(days=ACUTE_CHANGE_WINDOW_DAYS)
+    support_risk = _weighted_index(domains, lambda d: d.support_weight)
+    support_index = None if support_risk is None else round(1.0 - support_risk, 3)
+
     acute = [
         state
         for state in domains
@@ -514,13 +677,36 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
         and state.valence == "risk"
         and state.category in ACUTE_CHANGE_CATEGORIES
         and state.observed_at >= acute_cutoff
-        and _effective_confidence_for(state) >= 0.5
+        and state.counts_for_scoring
     ]
     # Most recent first, and within the same moment the heaviest contributor
     # first. A single message often yields several changes at once, and the
     # panel leads with whichever one carries the most clinical weight rather
     # than whichever the model happened to list first.
     acute.sort(key=lambda state: (state.observed_at, state.contribution), reverse=True)
+
+    # The leave-taking signal is only "live" while it is recent: giving a
+    # guitar away three months ago is history, not a warning.
+    leave_taking = next(
+        (
+            state
+            for state in domains
+            if state.domain == LEAVE_TAKING_DOMAIN
+            and state.valence == "risk"
+            and state.counts_for_scoring
+            and state.observed_at >= acute_cutoff
+        ),
+        None,
+    )
+
+    interpersonal_recent = sorted(
+        state.domain
+        for state in domains
+        if state.domain in INTERPERSONAL_DOMAINS
+        and state.valence == "risk"
+        and state.counts_for_scoring
+        and state.observed_at >= acute_cutoff
+    )
 
     domains.sort(key=lambda state: (state.valence != "risk", -state.contribution))
 
@@ -537,12 +723,56 @@ def assess(db: Session, user_id, *, now: datetime | None = None) -> Psychosocial
         confirmed_count=confirmed,
         refuted_count=refuted,
         computed_at=now,
+        support_index=support_index,
+        material_adversity_index=_weighted_index(domains, lambda d: d.material_weight),
+        interpersonal_risk_index=_weighted_index(domains, lambda d: d.interpersonal_weight),
+        relapse_context_index=_weighted_index(domains, lambda d: d.relapse_weight),
+        scored_count=sum(1 for state in domains if state.counts_for_scoring),
+        stale_domains=sorted(state.domain for state in domains if state.is_stale),
+        pending_update_domains=sorted(pending_updates),
+        interpersonal_recent_evidence=interpersonal_recent,
+        leave_taking=leave_taking,
     )
 
 
-def _effective_confidence_for(state: DomainState) -> float:
-    multiplier = STATUS_MULTIPLIER.get(state.status)
-    return multiplier if multiplier is not None else state.confidence
+def suggested_session_questions(assessment: PsychosocialAssessment, *, limit: int = 5) -> list[dict[str, str]]:
+    """Questions to bring to the next session, from what is actually moving.
+
+    Ordered by what the deterministic layer is currently weighting most:
+    leave-taking first because it is the one that cannot wait, then the
+    interpersonal constructs, then whatever changed in the last fortnight.
+    """
+    questions: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(state: DomainState, reason: str) -> None:
+        if state.domain in seen or not state.session_question:
+            return
+        seen.add(state.domain)
+        questions.append(
+            {
+                "domain": state.domain,
+                "domain_label": state.label,
+                "question": state.session_question,
+                "reason": reason,
+                "quote": state.quote,
+            }
+        )
+
+    if assessment.leave_taking is not None:
+        add(assessment.leave_taking, "Señal de despedida registrada en los últimos 14 días")
+    for state in assessment.domains:
+        if state.domain in INTERPERSONAL_DOMAINS and state.valence == "risk" and state.counts_for_scoring:
+            add(state, "Constructo de riesgo interpersonal activo")
+    for state in assessment.acute_changes:
+        add(state, "Cambio adverso reciente")
+    for state in assessment.domains:
+        if len(questions) >= limit:
+            break
+        if state.valence == "risk" and state.counts_for_scoring:
+            add(state, "Dominio en adversidad")
+
+    return questions[:limit]
 
 
 def adjudicate(
@@ -556,8 +786,9 @@ def adjudicate(
     """Record a human judgement on an inferred observation.
 
     Confirming makes it count at full weight regardless of what the model's
-    confidence was; refuting removes it from the index entirely. Only this
-    function may change ``status`` — the extractor always writes ``inferred``.
+    confidence was, and pins the domain against later inferences; refuting
+    removes it from the indices entirely. Only this function may change
+    ``status`` — the extractor always writes ``inferred``.
     """
     if status not in ("confirmed", "refuted", "inferred"):
         raise ValueError("Unsupported adjudication status")

@@ -1,12 +1,24 @@
 """LLM provider factory.
 
-Both PsychApp agents run on the Anthropic API — Agent 1 (conversational)
-and Agent 2 (linguistic analyst) — each with its own configurable model.
-See app/services/llm/anthropic_provider.py.
+PsychApp's two inference agents — Agent 1 (conversational), Agent 2
+(linguistic analyst) and Agent 4 (psychosocial extractor) — run on whichever
+provider is configured. Two are supported:
+
+  * ``anthropic`` — Claude over the Anthropic API. The default, and what the
+    clinical prompts were tuned against.
+  * ``openai_compatible`` — a model you host yourself, reached over the
+    OpenAI chat-completions API that llama.cpp, Ollama, LM Studio, vLLM and
+    LocalAI all expose.
+
+The choice comes from ``app/services/llm_config.py``: the environment by
+default, overridden at runtime by the active row in ``llm_endpoint_configs``
+when the deployment allows it. Callers do not pass it — they ask for a
+provider and get whichever one is in force, with the metadata to prove which
+one answered.
 """
-from app.config import get_settings
 from app.services.llm.anthropic_provider import AnthropicProvider, RefusalError
 from app.services.llm.base import LLMProvider, ProviderMetadata, StructuredAnalysisError, StructuredAnalysisResult
+from app.services.llm.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
     "LLMProvider",
@@ -14,19 +26,40 @@ __all__ = [
     "StructuredAnalysisError",
     "StructuredAnalysisResult",
     "AnthropicProvider",
+    "OpenAICompatibleProvider",
     "RefusalError",
     "get_llm_provider",
+    "build_provider",
 ]
 
-_settings = get_settings()
 
+def build_provider(config) -> LLMProvider:
+    """Construct the provider one resolved configuration describes."""
+    from app.services import llm_config
 
-def get_llm_provider() -> LLMProvider:
-    if _settings.llm_provider != "anthropic":
-        raise ValueError(
-            f"Unsupported LLM_PROVIDER '{_settings.llm_provider}'. PsychApp runs both "
-            "agents on the Anthropic API; the only accepted value is 'anthropic'. "
-            "Choose the per-agent models with ANTHROPIC_CHAT_MODEL and "
-            "ANTHROPIC_ANALYSIS_MODEL instead."
+    if config.provider == llm_config.PROVIDER_LOCAL:
+        return OpenAICompatibleProvider(
+            base_url=config.base_url,
+            chat_model=config.chat_model,
+            analysis_model=config.analysis_model,
+            api_key=config.api_key,
+            max_tokens=config.max_tokens,
+            timeout_seconds=float(config.timeout_seconds),
         )
-    return AnthropicProvider()
+    return AnthropicProvider(
+        chat_model=config.chat_model,
+        analysis_model=config.analysis_model,
+        max_tokens=config.max_tokens,
+    )
+
+
+def get_llm_provider(db=None) -> LLMProvider:
+    """The provider currently in force.
+
+    ``db`` is optional so existing call sites keep working; passing it lets
+    the resolver see a configuration change made on another worker without
+    waiting for the cache to expire.
+    """
+    from app.services import llm_config
+
+    return build_provider(llm_config.resolve(db))

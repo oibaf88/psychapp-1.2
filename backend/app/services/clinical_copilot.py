@@ -50,7 +50,8 @@ from app.models import (
     User,
 )
 from app.services import clinical_view, psychosocial
-from app.services.llm import get_llm_provider
+from app.services import llm_config
+from app.services.llm import build_provider
 
 logger = logging.getLogger("psychapp.copilot")
 
@@ -390,9 +391,13 @@ def ask(
         + "Responde solo con lo que sostenga este expediente. Si algo no está aquí, dilo."
     )
 
+    # Resolved once, so the row records the model that actually answered
+    # rather than whatever the environment happens to say today.
+    active = llm_config.resolve(db)
+
     error_kind: str | None = None
     try:
-        content = get_llm_provider().chat(
+        content = build_provider(active).chat(
             system_prompt,
             _recent_turns(db, professional.id, patient.id),
             max_tokens=MAX_ANSWER_TOKENS,
@@ -407,7 +412,11 @@ def ask(
             f"(error del proveedor: {error_kind}). "
             "El expediente del paciente sigue disponible en las pestañas de esta ficha: "
             "check-ins, diario, chat, hechos, evidencia y motor de riesgo. "
-            "Si esto se repite, revisa que ANTHROPIC_API_KEY esté configurada en el servidor."
+            + (
+                "Si esto se repite, revisa que el servidor del modelo esté accesible desde el backend."
+                if active.is_local
+                else "Si esto se repite, revisa que ANTHROPIC_API_KEY esté configurada en el servidor."
+            )
         )
 
     answer = TherapistCopilotMessage(
@@ -417,8 +426,8 @@ def ask(
         role="assistant",
         content=content,
         kind="summary" if kind == "summary" else "answer",
-        provider=settings.llm_provider,
-        requested_model=settings.anthropic_chat_model,
+        provider=active.provider,
+        requested_model=active.chat_model,
         context_window_days=window_days,
         context_counts={**counts, "prompt_version": AGENT3_PROMPT_VERSION},
         error_kind=error_kind,

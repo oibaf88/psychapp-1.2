@@ -42,7 +42,7 @@ from app.content.safety_resources import (
     LEVEL4_PATIENT_MESSAGE_SECONDARY,
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
-from app.services import psychosocial, risk_engine
+from app.services import llm_config, psychosocial, risk_engine
 from app.services import agent2_trace
 from app.services.llm import StructuredAnalysisError, get_llm_provider
 
@@ -104,7 +104,7 @@ def analyze_text_and_store(
         return AnalysisOutcome(correlation_id, None, None, "trace_persistence_error", None)
 
     try:
-        provider_result = get_llm_provider().analyze_structured(
+        provider_result = get_llm_provider(db).analyze_structured(
             AGENT2_SYSTEM_PROMPT,
             text,
             AGENT2_TOOL_SCHEMA,
@@ -167,6 +167,23 @@ def _recent_messages(db: Session, user_id) -> list[dict[str, str]]:
     ]
 
 
+def _reply_provenance(db: Session, *, from_model: bool) -> dict:
+    """Which model produced an assistant turn, for the stored message.
+
+    A turn built entirely from the server-owned safety templates has no
+    model behind it, and says so by storing nothing — that distinction is
+    exactly what someone re-reading a crisis conversation needs.
+    """
+    if not from_model:
+        return {}
+    active = llm_config.resolve(db)
+    return {
+        "provider": active.provider,
+        "model": active.chat_model,
+        "provider_base_url": active.base_url,
+    }
+
+
 def _agent1_crisis_accompaniment(db: Session, user_id, context_block: str) -> str | None:
     """Agent 1's turn during an alert-level 3/4 conversation.
 
@@ -178,7 +195,7 @@ def _agent1_crisis_accompaniment(db: Session, user_id, context_block: str) -> st
     user nothing but the accompanying sentences.
     """
     try:
-        provider = get_llm_provider()
+        provider = get_llm_provider(db)
         reply = provider.chat(
             AGENT1_SYSTEM_PROMPT + "\n\n" + context_block + AGENT1_CRISIS_INSTRUCTION,
             _recent_messages(db, user_id),
@@ -285,6 +302,7 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
         reply_text = (accompaniment + "\n\n" if accompaniment else "") + LEVEL4_PATIENT_MESSAGE
         ui_mode = "crisis"
         resources = CRISIS_RESOURCES
+        reply_from_model = accompaniment is not None
     elif level == 3:
         has_prof = _has_active_professional(db, user.id)
         fixed = LEVEL3_PATIENT_MESSAGE_WITH_PROFESSIONAL if has_prof else LEVEL3_PATIENT_MESSAGE
@@ -292,16 +310,19 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
         reply_text = (accompaniment + "\n\n" if accompaniment else "") + fixed
         ui_mode = "support"
         resources = None
+        reply_from_model = accompaniment is not None
     else:
         # Levels 0-2: normal, open conversation via Agent 1, with the risk
         # context injected as READ-ONLY structured context (never the raw
         # number, per doc 8: "Nunca presentes esa información como un
         # diagnóstico").
         messages = _recent_messages(db, user.id)
+        failed = False
         try:
-            provider = get_llm_provider()
+            provider = get_llm_provider(db)
             reply_text = provider.chat(AGENT1_SYSTEM_PROMPT + "\n\n" + context_block, messages)
         except Exception as exc:  # noqa: BLE001
+            failed = True
             logger.warning("Agent1 chat failed safely: %s", type(exc).__name__)
             error_type = type(exc).__name__.lower()
             if "authentication" in error_type:
@@ -325,8 +346,17 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
                 )
         ui_mode = "normal"
         resources = None
+        reply_from_model = not failed
 
-    db.add(ChatMessage(user_id=user.id, role="assistant", content=reply_text, ui_mode=ui_mode))
+    db.add(
+        ChatMessage(
+            user_id=user.id,
+            role="assistant",
+            content=reply_text,
+            ui_mode=ui_mode,
+            **_reply_provenance(db, from_model=reply_from_model),
+        )
+    )
     db.commit()
 
     return {

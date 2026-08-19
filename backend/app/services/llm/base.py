@@ -21,6 +21,10 @@ class ProviderMetadata:
     provider: str
     requested_model: str
     response_model: str | None = None
+    # Where the call actually went. Recorded because "which model" is not
+    # answerable without it once the endpoint is configurable: two
+    # deployments can both report "llama-3.1-8b" and mean different weights.
+    base_url: str | None = None
     message_id: str | None = None
     request_id: str | None = None
     stop_reason: str | None = None

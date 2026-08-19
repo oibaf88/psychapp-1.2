@@ -651,6 +651,89 @@ PSYCHOSOCIAL_SCALE_NOTE = (
 )
 
 
+# Each index is rendered with the threshold it is compared against, because a
+# number a therapist cannot locate on a scale is a number they cannot argue
+# with. "Sin datos" is a first-class reading: it is not the same as "bien".
+PSYCHOSOCIAL_INDEX_META: tuple[dict[str, Any], ...] = (
+    {
+        "key": "support_index",
+        "label": "Apoyo disponible",
+        "direction": "higher_is_better",
+        "threshold": psychosocial_service.SUPPORT_LOW_MAX,
+        "threshold_label": "bajo si ≤ {value:.2f}",
+        "meaning": (
+            "Personas a las que podría recurrir de verdad, ponderando red de apoyo, familia, "
+            "vínculos, pareja y estigma."
+        ),
+        "empty": "Todavía no ha hablado de con quién cuenta. Ausencia de dato, no ausencia de apoyo.",
+    },
+    {
+        "key": "material_adversity_index",
+        "label": "Adversidad material",
+        "direction": "lower_is_better",
+        "threshold": psychosocial_service.MATERIAL_ADVERSITY_HIGH_MIN,
+        "threshold_label": "alta si ≥ {value:.2f}",
+        "meaning": "Vivienda, dinero, empleo, necesidades básicas, trámites y acceso a tratamiento.",
+        "empty": "No ha contado nada de su situación material.",
+    },
+    {
+        "key": "interpersonal_risk_index",
+        "label": "Riesgo interpersonal",
+        "direction": "lower_is_better",
+        "threshold": psychosocial_service.INTERPERSONAL_RISK_HIGH_MIN,
+        "threshold_label": "alto si ≥ {value:.2f}",
+        "meaning": (
+            "Sentirse una carga y no pertenecer, los dos constructos de la teoría interpersonal "
+            "del suicidio, más la retirada del contacto. Su convergencia es lo que se vigila."
+        ),
+        "empty": "No hay material sobre cómo se sitúa respecto a los demás.",
+    },
+    {
+        "key": "relapse_context_index",
+        "label": "Contexto de recaída",
+        "direction": "lower_is_better",
+        "threshold": psychosocial_service.RELAPSE_CONTEXT_HIGH_MIN,
+        "threshold_label": "alto si ≥ {value:.2f}",
+        "meaning": "Entorno social que sostiene o dispara el consumo, convivencia y estructura diaria.",
+        "empty": "No hay material sobre el entorno de consumo.",
+    },
+)
+
+
+def _psychosocial_index_readings(indices: dict[str, float | None]) -> list[dict[str, Any]]:
+    """Turn the four numbers into something a clinician can read and challenge."""
+    readings: list[dict[str, Any]] = []
+    for meta in PSYCHOSOCIAL_INDEX_META:
+        value = indices.get(meta["key"])
+        if value is None:
+            state, note = "sin_datos", meta["empty"]
+        elif meta["direction"] == "higher_is_better":
+            crossed = value <= meta["threshold"]
+            state = "alerta" if crossed else "ok"
+            note = (
+                "Por debajo del umbral de apoyo bajo."
+                if crossed
+                else "Por encima del umbral de apoyo bajo."
+            )
+        else:
+            crossed = value >= meta["threshold"]
+            state = "alerta" if crossed else "ok"
+            note = "Cruza el umbral." if crossed else "Por debajo del umbral."
+        readings.append(
+            {
+                "key": meta["key"],
+                "label": meta["label"],
+                "value": value,
+                "state": state,
+                "threshold": meta["threshold"],
+                "threshold_label": meta["threshold_label"].format(value=meta["threshold"]),
+                "meaning": meta["meaning"],
+                "note": note,
+            }
+        )
+    return readings
+
+
 def psychosocial_explanation(
     assessment_snapshot: dict | None,
     live: Any | None = None,
@@ -674,6 +757,18 @@ def psychosocial_explanation(
             "confirmed_count": snapshot.get("confirmed_count") or 0,
             "refuted_count": snapshot.get("refuted_count") or 0,
         }
+        snapshot_indices = _as_dict(snapshot.get("indices"))
+        indices = {
+            "support_index": _number(snapshot_indices.get("support_index")),
+            "material_adversity_index": _number(snapshot_indices.get("material_adversity_index")),
+            "interpersonal_risk_index": _number(snapshot_indices.get("interpersonal_risk_index")),
+            "relapse_context_index": _number(snapshot_indices.get("relapse_context_index")),
+        }
+        leave_taking = _as_dict(snapshot.get("leave_taking")) or None
+        interpersonal_recent = list(snapshot.get("interpersonal_recent_evidence") or [])
+        pending_updates = list(snapshot.get("pending_update_domains") or [])
+        stale_domains = list(snapshot.get("stale_domains") or [])
+        session_questions: list[dict[str, Any]] = []
     else:
         index = live.index
         band = live.band
@@ -694,6 +789,13 @@ def psychosocial_explanation(
                 "weight": state.weight,
                 "contribution": state.contribution,
                 "is_change": state.is_change,
+                "group": state.group,
+                "group_label": state.group_label,
+                "risk_value": state.risk_value,
+                "counts_for_scoring": state.counts_for_scoring,
+                "is_stale": state.is_stale,
+                "has_pending_update": state.has_pending_update,
+                "session_question": state.session_question,
             }
             for state in live.domains
         ]
@@ -716,6 +818,30 @@ def psychosocial_explanation(
             "confirmed_count": live.confirmed_count,
             "refuted_count": live.refuted_count,
         }
+        indices = {
+            "support_index": live.support_index,
+            "material_adversity_index": live.material_adversity_index,
+            "interpersonal_risk_index": live.interpersonal_risk_index,
+            "relapse_context_index": live.relapse_context_index,
+        }
+        leave_taking = (
+            {
+                "domain": live.leave_taking.domain,
+                "label": live.leave_taking.label,
+                "category": live.leave_taking.category,
+                "category_label": live.leave_taking.category_label,
+                "summary": live.leave_taking.summary,
+                "quote": live.leave_taking.quote,
+                "observed_at": _utc_iso(live.leave_taking.observed_at),
+                "observation_id": str(live.leave_taking.observation_id),
+            }
+            if live.leave_taking
+            else None
+        )
+        interpersonal_recent = list(live.interpersonal_recent_evidence)
+        pending_updates = list(live.pending_update_domains)
+        stale_domains = list(live.stale_domains)
+        session_questions = psychosocial_service.suggested_session_questions(live)
 
     if index is None:
         summary = (
@@ -758,11 +884,36 @@ def psychosocial_explanation(
         "observación lleva la frase literal que la sostiene: léela antes de actuar.",
         "Puedes confirmar o refutar cada observación. Confirmada cuenta al 100 % de su intensidad; "
         "refutada deja de contar por completo.",
-        "Solo cuenta la observación más reciente de cada dominio, y solo si tiene menos de 90 días.",
+        "Solo cuenta la observación más reciente de cada dominio. No caducan — perder el piso sigue "
+        "siendo cierto la semana que viene — pero se marcan como antiguas a los "
+        f"{psychosocial_service.STALE_AFTER_DAYS} días.",
+        f"Una observación con confianza por debajo de {psychosocial_service.MIN_CONFIDENCE_FOR_SCORING:.2f} se muestra pero no puntúa: "
+        "una mención de pasada o irónica no debe mover un umbral.",
         "El índice por sí solo nunca genera alerta profesional: para llegar a nivel 3 tiene que converger "
         "con inestabilidad estructural, sueño empeorando o rumiación alta.",
         "Los pesos por dominio son un criterio de diseño explícito, no un instrumento psicométrico validado.",
     ]
+    index_readings = _psychosocial_index_readings(indices)
+    if leave_taking:
+        caveats.insert(
+            0,
+            "Hay una señal de despedida registrada en los últimos 14 días. Mírala antes que ningún número.",
+        )
+    if pending_updates:
+        caveats.append(
+            "Hay "
+            + str(len(pending_updates))
+            + " dominio(s) confirmados por un profesional sobre los que el Agente 4 ha leído algo "
+            "distinto después. La lectura nueva NO se ha aplicado: revísala y acéptala o descártala."
+        )
+    if stale_domains:
+        caveats.append(
+            "Dominios sin novedades desde hace más de "
+            + str(psychosocial_service.STALE_AFTER_DAYS)
+            + " días: "
+            + ", ".join(stale_domains)
+            + ". Siguen siendo lo último que se sabe, pero conviene preguntar si siguen igual."
+        )
     if index is not None and counts["active_count"] < 3:
         caveats.append(
             f"Solo {counts['active_count']} dominio(s) activo(s): el índice es muy sensible a cada nueva "
@@ -786,6 +937,19 @@ def psychosocial_explanation(
             "un grupo que se deja, una cita a la que se falta."
         ),
         "caveats": caveats,
+        "indices": indices,
+        "index_readings": index_readings,
+        "leave_taking": leave_taking,
+        "leave_taking_note": (
+            "Señal de despedida vigente. Cada marcador por separado es inofensivo — regalar algo, dar "
+            "las gracias, ordenar papeles, una calma repentina —; se registra precisamente porque "
+            "juntos, y junto a otras señales, dejan de serlo. No es una conclusión: es una pregunta "
+            "que hacer en la próxima sesión."
+        ),
+        "interpersonal_recent_evidence": interpersonal_recent,
+        "pending_update_domains": pending_updates,
+        "stale_domains": stale_domains,
+        "session_questions": session_questions,
         **counts,
     }
 

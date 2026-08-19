@@ -253,7 +253,7 @@ class ExtractionTests(unittest.TestCase):
             outcome = psychosocial.extract_and_store(
                 db,
                 uuid.uuid4(),
-                "texto",
+                "Me he ido a casa de un colega esta semana.",
                 source_type="chat_message",
                 source_id=uuid.uuid4(),
                 correlation_id=uuid.uuid4(),
@@ -272,7 +272,7 @@ class ExtractionTests(unittest.TestCase):
             outcome = psychosocial.extract_and_store(
                 db,
                 uuid.uuid4(),
-                "texto",
+                "Me he ido a casa de un colega esta semana.",
                 source_type="chat_message",
                 source_id=uuid.uuid4(),
                 correlation_id=uuid.uuid4(),

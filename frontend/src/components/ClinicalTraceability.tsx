@@ -623,6 +623,13 @@ function Agent2TraceCard({ trace, assessment }: { trace: Agent2TraceOut; assessm
 
         <dl className="trace-run-metadata">
           <div><dt>Proveedor</dt><dd>{trace.provider || "—"}</dd></div>
+          {/* Only meaningful for a self-hosted endpoint, and then essential:
+              two installs can both report "llama-3.1-8b" and mean different
+              weights on different machines. */}
+          <div>
+            <dt>Endpoint</dt>
+            <dd>{trace.provider_base_url ? <code>{trace.provider_base_url}</code> : "API oficial"}</dd>
+          </div>
           <div><dt>Modelo solicitado</dt><dd>{trace.requested_model || "—"}</dd></div>
           <div><dt>Modelo respondido</dt><dd>{agent2ResponseModel(trace) || "—"}</dd></div>
           <div><dt>Esfuerzo</dt><dd>{trace.effort || "—"}</dd></div>

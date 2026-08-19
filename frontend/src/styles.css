@@ -2247,6 +2247,311 @@ tr.row-highlight {
   }
 }
 
+/* --- psychosocial: the four deterministic indices ---------------------
+   Four tiles rather than one gauge, because the four numbers answer
+   different clinical questions and a blended figure lets one mask another.
+   Each tile draws the threshold it is read against as a mark on the track,
+   so the number is always visible against the line it has to cross. */
+.psy-index-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.psy-index-tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  background: var(--card-bg);
+}
+
+.psy-index-alerta {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.psy-index-sin_datos {
+  border-style: dashed;
+  background: var(--surface-2);
+}
+
+.psy-index-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.psy-index-label {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.psy-index-value {
+  font-family: var(--font-mono);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.psy-index-alerta .psy-index-value {
+  color: var(--danger);
+}
+
+.psy-index-sin_datos .psy-index-value {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+.psy-index-track {
+  position: relative;
+  height: 8px;
+  margin: 10px 0 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.psy-index-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.psy-index-alerta .psy-index-fill {
+  background: var(--danger);
+}
+
+/* The threshold line. Kept inside the track so it reads as part of the
+   same scale rather than as decoration. */
+.psy-index-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+.psy-index-threshold,
+.psy-index-note {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.psy-index-meaning {
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+  margin: 6px 0 4px;
+}
+
+/* --- leave-taking: the one signal that leads the panel ---------------- */
+.psy-leavetaking {
+  border: 2px solid var(--danger-border);
+  border-left-width: 6px;
+  border-radius: var(--radius-card);
+  background: var(--danger-bg);
+  padding: 14px 18px;
+  margin: 16px 0;
+}
+
+.psy-leavetaking h3 {
+  color: var(--danger-strong);
+  margin-top: 0;
+}
+
+.psy-questions {
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-card);
+  background: var(--accent-bg);
+  padding: 14px 18px;
+  margin: 16px 0;
+}
+
+.psy-questions ol {
+  padding-left: 20px;
+}
+
+.psy-questions li + li {
+  margin-top: 12px;
+}
+
+.psy-question {
+  border-left: 3px solid var(--accent-border);
+  padding-left: 10px;
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+
+.psy-pill-unscored {
+  background: var(--surface-2);
+  color: var(--ink-muted);
+}
+
+.psy-pill-stale {
+  background: var(--border);
+  color: var(--ink-soft);
+}
+
+.psy-pill-pending {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
+
+/* ------------------------------------------- runtime LLM endpoint (Ajustes) */
+/* The Settings screen is the one place a person chooses which model serves
+   the app, so the active endpoint is stated as a fact before the form that
+   changes it — you should be able to answer "what is running right now?"
+   without reading a single input. */
+
+.llm-active {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0 16px;
+  background: var(--surface-2);
+}
+
+.llm-active-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.llm-active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  margin: 12px 0 0;
+}
+
+.llm-active-grid dt {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.llm-active-grid dd {
+  margin: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.llm-provider-choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.llm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.llm-option.is-selected {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.llm-option input {
+  width: auto;
+  margin: 3px 0 0;
+  flex: 0 0 auto;
+}
+
+.llm-option span {
+  display: block;
+}
+
+.llm-option strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.llm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.btn-chip {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.btn-chip:hover {
+  border-color: var(--primary);
+}
+
+/* The form fields carry their own hint text, so they need a block wrapper
+   rather than the bare `label` rule the rest of the cards use. */
+.field {
+  display: block;
+  margin-bottom: 14px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field > span:first-child {
+  display: block;
+}
+
+.field .meta {
+  display: block;
+  margin-top: 4px;
+  font-weight: 400;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0 14px;
+}
+
+.warning {
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+/* Provenance stamp under an assistant turn or an analysis row. Deliberately
+   quiet: it matters when you go looking, and should not compete with the
+   clinical content when you are not. */
+.model-stamp {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin-top: 4px;
+}
+
+.model-stamp.is-local {
+  color: var(--warning);
+}
+
 /* =====================================================================
  * Recharts chrome.
  *

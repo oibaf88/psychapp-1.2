@@ -53,8 +53,9 @@ that was just the working filename. Core ideas from the docs:
 - **Backend**: FastAPI (Python 3.11), SQLAlchemy 2.0, PostgreSQL 16, JWT auth
   (python-jose) with `bcrypt` used directly for password hashing.
 - **Frontend**: React 18 + TypeScript + Vite, Recharts for timeline charts.
-- **LLM**: Anthropic Python SDK, calling Claude via the Messages API. Both
-  agents run on Claude, each with its own configurable model:
+- **LLM**: Anthropic Python SDK, calling Claude via the Messages API, or any
+  OpenAI-compatible server for a model you host yourself (see below). Each
+  agent has its own configurable model:
   `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation) and
   `ANTHROPIC_ANALYSIS_MODEL` for Agent 2 (linguistic analysis). Agent 2 uses
   **structured outputs** (`output_config.format`), so its result is always a
@@ -63,17 +64,36 @@ that was just the working filename. Core ideas from the docs:
   hosted deployment — Render for the services, Supabase for Postgres — see
   [DEPLOY.md](./DEPLOY.md).
 
-### Why Claude via API, not a fully offline model
+### Claude by default, your own model if you want one
 
-The docs (in an earlier iteration) explored running local/fine-tuned open models.
-Per the explicit brief for this build, Claude does not distribute downloadable
-model weights, so there is no way to run "the Claude model" fully offline — the
-only real integration is a local server calling the Anthropic API over the network.
-Everything else in this app (database, the risk engine, the UI, all patient/clinical
-data) runs entirely on your machine; only the chat and linguistic-analysis calls
-leave it, going to Anthropic's API. The LLM call is behind a small `LLMProvider`
-interface (`backend/app/services/llm/`) specifically so a future local-model
-provider could be swapped in without touching the rest of the app.
+Claude does not distribute downloadable model weights, so "the Claude model"
+cannot run offline: with the default configuration the chat and analysis calls
+go to Anthropic's API, and everything else in this app (database, the risk
+engine, the UI, all patient/clinical data) stays on your machine.
+
+The LLM call sits behind a small `LLMProvider` interface
+(`backend/app/services/llm/`), and there are now two implementations: Claude
+over the Anthropic API, and any server speaking the OpenAI chat-completions
+API — llama.cpp, Ollama, LM Studio, vLLM, LocalAI. **Ajustes → Modelo de
+lenguaje** switches between them at runtime, in every profile, so you can see
+how the app behaves on a model you host yourself without redeploying. Set
+`LLM_ALLOW_RUNTIME_OVERRIDE=false` to lock the choice to the environment.
+
+Three things are worth knowing before pointing it somewhere else:
+
+- **Every interaction records the model behind it.** Each assistant turn and
+  each analysis stores its provider, model and endpoint, so a patient's
+  history stays readable across a change of model: an analysis from March
+  under Claude and one from April under a local Llama are both legible, and
+  distinguishable. Rows written before this existed say "sin modelo
+  registrado" rather than being backfilled with a guess.
+- **The risk engine does not change.** Alert levels come from deterministic
+  rules over stored data. No model — Claude or otherwise — has ever decided
+  one, and none does now.
+- **Linguistic detection does change.** Agent 2's ability to spot a marker is
+  a property of the model reading the text. A weaker model can miss a signal
+  that would have raised a level; the signals it does emit go through exactly
+  the same cascade. That cost is real, and the Settings screen states it.
 
 ## 3. How it maps to the spec docs
 
@@ -280,13 +300,16 @@ Supabase changes live under `supabase/migrations/`; the API refuses to start if
 the required Agent 2/risk-explanation columns, owner, FORCE RLS and backend policy
 are missing.
 
-**(g) Both LLM agents run on Claude, not separate fine-tuned open models.** An
+**(g) Both LLM agents run on Claude by default, not separate fine-tuned open
+models** — though either can now be pointed at a model you host, from Ajustes. An
 earlier doc explored fine-tuning distinct open models per agent. Per the explicit
 brief for this build, both Agent 1 (conversation) and Agent 2 (linguistic
-analysis) call Claude via the Anthropic API, distinguished only by system prompt
-and (for Agent 2) forced tool-use schema. The `LLMProvider` abstraction in
-`app/services/llm/` is the intended seam if you want to swap in something else
-later (including a self-hosted model) without touching the rest of the app.
+analysis) call Claude via the Anthropic API by default, distinguished only by
+system prompt and (for Agent 2) forced tool-use schema. The `LLMProvider`
+abstraction in `app/services/llm/` is the seam that makes the alternative
+possible: a second implementation talks to any OpenAI-compatible server, and
+Ajustes switches between them at runtime. What has not changed is that both
+agents share one model per role — this is still not per-agent fine-tuning.
 
 **(h) MVP scope stops at Level A/B, deliberately excludes Level C/D.** One doc
 explicitly recommended *not* building clinical-prediction / medical-device-territory
@@ -351,7 +374,8 @@ psychapp/
 │   │   │   ├── prompts.py         # Agent 1 / 2 / 3 / 4 prompts + tool schemas
 │   │   │   └── safety_resources.py # static Spanish crisis copy + resources
 │   │   ├── services/
-│   │   │   ├── llm/                # swappable LLM provider (Anthropic implementation)
+│   │   │   ├── llm/                # swappable LLM provider (Anthropic + OpenAI-compatible)
+│   │   │   ├── llm_config.py       # which model serves the app, and since when
 │   │   │   ├── baseline.py         # local structural_score / confidence_band
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
 │   │   │   ├── psychosocial.py     # Agent 4 extraction + deterministic vulnerability index

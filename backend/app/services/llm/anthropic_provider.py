@@ -27,6 +27,10 @@ from app.services.llm.base import (
     StructuredAnalysisResult,
 )
 
+# Recorded on every trace so a historic analysis says where it was computed,
+# not merely which model name was requested.
+ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
+
 # Structured outputs reject the numeric/length constraint keywords that are
 # valid in a tool input_schema. Drop them on conversion; the prompt and the
 # risk engine already clamp the values.
@@ -80,13 +84,22 @@ class RefusalError(StructuredAnalysisError):
 
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        chat_model: str | None = None,
+        analysis_model: str | None = None,
+        max_tokens: int | None = None,
+    ):
+        # The models are overridable so a runtime configuration can pin them
+        # without a redeploy; everything else stays deployment-level, because
+        # the API key and the effort settings are not a user-facing choice.
         settings = get_settings()
-        self._chat_model = settings.anthropic_chat_model
-        self._analysis_model = settings.anthropic_analysis_model
+        self._chat_model = chat_model or settings.anthropic_chat_model
+        self._analysis_model = analysis_model or settings.anthropic_analysis_model
         self._chat_effort = settings.anthropic_chat_effort
         self._analysis_effort = settings.anthropic_analysis_effort
-        self._max_tokens = settings.anthropic_max_tokens
+        self._max_tokens = max_tokens or settings.anthropic_max_tokens
         self._api_key = settings.anthropic_api_key
         self._client: anthropic.Anthropic | None = None
         if self._api_key:
@@ -116,6 +129,7 @@ class AnthropicProvider(LLMProvider):
             provider="anthropic",
             requested_model=requested_model,
             response_model=getattr(response, "model", None),
+            base_url=ANTHROPIC_API_BASE_URL,
             message_id=getattr(response, "id", None),
             request_id=getattr(response, "_request_id", None),
             stop_reason=getattr(response, "stop_reason", None),
@@ -151,6 +165,7 @@ class AnthropicProvider(LLMProvider):
                 metadata=ProviderMetadata(
                     provider="anthropic",
                     requested_model=self._analysis_model,
+                    base_url=ANTHROPIC_API_BASE_URL,
                 ),
                 error_code="api_key_not_configured",
             ) from None
@@ -180,6 +195,7 @@ class AnthropicProvider(LLMProvider):
             metadata = ProviderMetadata(
                 provider="anthropic",
                 requested_model=self._analysis_model,
+                base_url=ANTHROPIC_API_BASE_URL,
                 request_id=getattr(exc, "request_id", None),
                 latency_ms=latency_ms,
             )

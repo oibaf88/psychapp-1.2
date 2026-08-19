@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, ChatMessageOut, ChatOut } from "../api";
+import ModelStamp from "../components/ModelStamp";
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessageOut[]>([]);
@@ -110,6 +111,13 @@ export default function ChatPage() {
         {messages.map((m) => (
           <div key={m.id} className={`chat-bubble chat-${m.role}`}>
             {m.content}
+            {/* Only shown when the reply came from a model the operator
+                pointed the app at, so the ordinary Claude-backed
+                conversation stays free of machinery the patient did not
+                ask about. */}
+            {m.role === "assistant" && m.provider === "openai_compatible" && (
+              <ModelStamp message={m} />
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
