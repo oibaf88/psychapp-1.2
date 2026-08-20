@@ -14,5 +14,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+    - name: Build the Backend Docker image
+      run: docker build ./backend --file backend/Dockerfile --tag psychapp-backend:$(date +%s)
+    - name: Build the Frontend Docker image
+      run: docker build ./frontend --file frontend/Dockerfile --tag psychapp-frontend:$(date +%s)
