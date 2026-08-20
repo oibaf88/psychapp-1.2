@@ -21,3 +21,10 @@ __pycache__/
 .DS_Store
 frontend/tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Testing / Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
