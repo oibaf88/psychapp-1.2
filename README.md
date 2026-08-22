@@ -223,16 +223,21 @@ or carry it in the URL, which is what a hosted deployment usually does:
 DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:5432/postgres?sslmode=require&options=-csearch_path%3Dpsychdeep_v12
 ```
 
-Use one or the other, not both. **The schema must already exist** —
-`create_all()` creates tables, not schemas:
+Use one or the other, not both. On Supabase the schema, the backend role and
+every table come from `supabase/migrations/`, applied with `supabase/deploy.sh`
+before the release that needs them — `create_all()` never runs in production.
+For a local Postgres, `create_all()` still creates the tables but not the
+schema, so create that first:
 
 ```sql
 create schema if not exists psychdeep_v12;
 ```
 
-Whichever you choose, `supabase/harden.sql` has a `TARGET_SCHEMA` at the top
-that must be edited to match, or it will report success against an empty
-`public` schema.
+`supabase/verify.sql` checks a Supabase deployment against the contract the API
+enforces at startup. `supabase/harden.sql` is the fallback for tables that did
+not come from these migrations; it has a `TARGET_SCHEMA` at the top that must
+be edited to match, or it will report success against an empty `public`
+schema.
 
 ## 5. Verification status
 
@@ -391,7 +396,7 @@ psychapp/
 │   │                            #   notifications, audit
 │   └── requirements.txt
 ├── docs/MANUAL_TERAPEUTA.md    # full therapist manual (also in-app at /professional/manual)
-├── supabase/migrations/        # explicit production schema changes
+├── supabase/                   # production schema (migrations/), deploy.sh, verify.sql
 └── frontend/
     └── src/
         ├── api.ts

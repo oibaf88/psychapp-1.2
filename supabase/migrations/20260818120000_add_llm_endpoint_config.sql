@@ -26,6 +26,8 @@
 -- owned by psychdeep_backend, FORCE RLS, a backend-only policy, and no
 -- privileges for public, anon, authenticated or service_role.
 
+begin;
+
 do $$
 declare
     membership_is_expected boolean;
@@ -164,17 +166,22 @@ begin
            and indexname = 'ux_llm_endpoint_single_active'
     ) into single_active_enforced;
 
+    -- pg_catalog, not information_schema: the latter only shows columns the
+    -- caller has privileges on, and postgres deliberately has none on these
+    -- backend-owned tables, so it would report a successful ALTER as missing.
     select count(*) into chat_columns
-      from information_schema.columns
-     where table_schema = 'psychdeep_v12'
-       and table_name = 'chat_messages'
-       and column_name in ('provider', 'model', 'provider_base_url');
+      from pg_attribute
+     where attrelid = 'psychdeep_v12.chat_messages'::regclass
+       and attname in ('provider', 'model', 'provider_base_url')
+       and attnum > 0
+       and not attisdropped;
 
     select exists (
-        select 1 from information_schema.columns
-         where table_schema = 'psychdeep_v12'
-           and table_name = 'agent2_analysis_traces'
-           and column_name = 'provider_base_url'
+        select 1 from pg_attribute
+         where attrelid = 'psychdeep_v12.agent2_analysis_traces'::regclass
+           and attname = 'provider_base_url'
+           and attnum > 0
+           and not attisdropped
     ) into trace_column_exists;
 
     if not coalesce(membership_is_restored, false) then
@@ -197,3 +204,5 @@ begin
     end if;
 end
 $$;
+
+commit;
