@@ -33,57 +33,86 @@ tracked file.
 
 ## 1. Supabase
 
-The `psychdeep` project already exists and is `ACTIVE_HEALTHY`. The
-production backend does **not** run SQLAlchemy `create_all()`: schema changes
-must be applied explicitly before a Render release. This prevents the API from
-creating an unhashed/unprotected trace table or starting against half-migrated
-columns.
+The `psychdeep` project (`ifwexmoltnybvmrsuwtu`, eu-north-1) is
+`ACTIVE_HEALTHY` and holds everything in one schema, `psychdeep_v12`.
 
-For the risk-explanation/Agent 2 tracking release, apply
-[`20260815120000_add_risk_explanations_agent2_tracking.sql`](./supabase/migrations/20260815120000_add_risk_explanations_agent2_tracking.sql)
-to project `ifwexmoltnybvmrsuwtu` **before merging/deploying the application**.
-It is an expand-only transaction: existing rows remain valid, the new trace
-table is owned by `psychdeep_backend`, FORCE RLS is enabled, and `public`,
-`anon`, `authenticated` and `service_role` receive no table privileges. The
-temporary role membership needed to alter the backend-owned tables is verified,
-scoped to the transaction and removed before commit.
+The production backend does **not** run SQLAlchemy `create_all()`. It checks
+the schema at startup and refuses to serve a half-migrated database, so the
+Supabase step always comes **before** the Render release — deploy Render first
+and the new release fails its startup check while Render keeps the old
+instance alive.
 
-For the therapist-panel redesign release, also apply
-[`20260815160000_add_therapist_copilot_messages.sql`](./supabase/migrations/20260815160000_add_therapist_copilot_messages.sql).
-It adds the single new table behind the clinical copilot
-(`therapist_copilot_messages`) with the same hardening: owned by
-`psychdeep_backend`, FORCE RLS on, a `backend_full_access` policy, and no
-privileges for `public`, `anon`, `authenticated` or `service_role`. Everything
-else in that release — the explanations, the metric series, the evidence feed
-and the patient chat transcript — is computed from existing tables and needs no
-schema change.
+### What is in `supabase/migrations/`
 
-For the psychosocial-context release, also apply
-[`20260815180000_add_psychosocial_observations.sql`](./supabase/migrations/20260815180000_add_psychosocial_observations.sql).
-It adds `agent2_analysis_traces.agent_role` (backfilled to
-`agent2_linguistic`, which is what existing rows are) and the
-`psychosocial_observations` table, hardened the same way. That table stores a
-bounded verbatim fragment of the patient's own text in `evidence_quote`, so it
-is at least as sensitive as `chat_messages` and is protected identically.
+Filename order is apply order, and the five files together are the whole
+schema:
 
-The API validates the required columns, owner, FORCE RLS and backend policy at
-startup and fails closed if any migration is missing (the startup check covers
-`therapist_copilot_messages`, `agent2_analysis_traces.agent_role` and
-`psychosocial_observations`). Local/dev environments may still use
-`create_all()` for disposable databases.
+| File | Adds |
+|---|---|
+| `00000000000000_bootstrap_psychdeep_schema.sql` | The `psychdeep_backend` role, the `psychdeep_v12` schema, the 17 base tables, and the hardening pass over every table in the schema. |
+| `20260815120000_add_risk_explanations_agent2_tracking.sql` | `agent2_analysis_traces` and the risk-assessment lineage columns. |
+| `20260815160000_add_therapist_copilot_messages.sql` | `therapist_copilot_messages`, behind the clinical copilot. |
+| `20260815180000_add_psychosocial_observations.sql` | `agent2_analysis_traces.agent_role` and `psychosocial_observations`, which stores a bounded verbatim fragment of the patient's own text. |
+| `20260818120000_add_llm_endpoint_config.sql` | `llm_endpoint_configs` and the provider/model provenance columns on chat turns and analysis traces. |
 
-> **Order matters.** Apply the migration *before* the Render deploy. The new
-> release fails its startup schema check without it, and Render will keep
-> serving the previous instance rather than a half-migrated one.
+Every file is idempotent and opens its own transaction: re-running is a no-op,
+and a failure rolls that file back instead of leaving the schema half applied.
+Applying all five to an empty database reproduces exactly the model graph in
+`backend/app/models.py`.
 
-Already applied for you — migration
-`lock_public_schema_from_postgrest_roles`: revokes the default privileges
-Supabase would otherwise grant `anon` and `authenticated` on new tables
-in `public`. Without it, anyone holding the publishable anon key could
-read every patient record over PostgREST.
+### Apply them
 
-**Get the connection string**: Supabase Dashboard → *Connect* → copy the
-**connection pooler** URI (Session mode).
+From the project root:
+
+```bash
+SUPABASE_DB_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?sslmode=require' \
+  supabase/deploy.sh
+```
+
+Connect as the project's **`postgres`** user, not as `psychdeep_backend`: the
+migrations take the backend role temporarily and hand it back before they
+commit, which postgres has the rights to do and the backend role does not.
+`supabase/deploy.sh --dry-run` lists the apply order without connecting to
+anything.
+
+Without `psql` to hand, paste each file into the Supabase **SQL Editor** in
+the same order. The editor already runs a statement batch in a transaction,
+so the files' own `begin`/`commit` are harmless there.
+
+### On a project that has never run this app
+
+Two things the migrations deliberately leave to you:
+
+1. **The backend role's password.** The bootstrap creates
+   `psychdeep_backend` without one, so no credential ever reaches a tracked
+   file. Set it in the SQL Editor before the first deploy:
+
+   ```sql
+   alter role psychdeep_backend with password '<generated>';
+   ```
+
+2. **`DATABASE_URL`.** Point it at that role and that schema (below).
+
+### Check before you deploy Render
+
+```bash
+psql "$SUPABASE_DB_URL" -f supabase/verify.sql
+```
+
+Ten rows, every one `ok`. It re-runs the API's own startup contract plus the
+hardening the migrations should have left: every table owned by
+`psychdeep_backend`, RLS enabled **and forced**, a `backend_full_access`
+policy, nothing readable by `anon`, `authenticated` or `service_role`, and no
+application table stranded in `public`. A `FAILED` row is a Render deploy that
+would refuse to start — cheaper to see here.
+
+FORCE RLS is what makes the policy mean anything: without it the owning role
+bypasses RLS entirely, and the backend owns every table.
+
+### The connection string
+
+Supabase Dashboard → *Connect* → copy the **connection pooler** URI (Session
+mode).
 
 > Use the pooler host, not `db.<ref>.supabase.co`. The direct host is
 > IPv6-only and Render cannot reach it.
@@ -105,17 +134,16 @@ Three parts matter:
 **Use a dedicated schema.** Supabase exposes `public` through PostgREST, so
 tables created there are reachable with the publishable anon key unless
 locked down. A schema like `psychdeep_v12` is not exposed at all, which is
-a stronger and simpler guarantee.
-
-**The schema must exist before the first boot** — `create_all()` creates
-tables, not schemas:
-
-```sql
-create schema if not exists psychdeep_v12;
-```
+a stronger and simpler guarantee. The bootstrap migration creates it, so
+there is nothing to create by hand any more.
 
 `DATABASE_SCHEMA=psychdeep_v12` is an equivalent alternative to the
 `options=` parameter. Set one or the other, not both.
+
+Already applied for you — migration `lock_public_schema_from_postgrest_roles`:
+revokes the default privileges Supabase would otherwise grant `anon` and
+`authenticated` on new tables in `public`. Without it, anyone holding the
+publishable anon key could read every patient record over PostgREST.
 
 ---
 
@@ -227,18 +255,18 @@ regexes.
    > not found`, because it looks for `docker-compose.yml` in the current
    > directory.
 
-3. Run [`supabase/harden.sql`](./supabase/harden.sql) (Supabase → SQL
-   Editor).
+3. Re-run [`supabase/verify.sql`](./supabase/verify.sql) — the same ten
+   checks you ran before the deploy, now against a database the live API has
+   connected to and written through.
 
-   **Edit `TARGET_SCHEMA` at the top first** so it matches the schema in
-   your `DATABASE_URL` (e.g. `psychdeep_v12`). Pointed at the wrong
-   schema, the script reports success against an empty one — `Success. No
-   rows returned` against `public` means it found nothing, not that
-   everything is fine.
-
-   The final `select` scans **every** schema for exactly this reason.
-   Each application table should show `rls_enabled = true` and both
-   `*_can_select` columns `false`.
+   [`supabase/harden.sql`](./supabase/harden.sql) is the fallback for a
+   deployment whose tables did *not* come from these migrations: it enables
+   RLS and strips the PostgREST roles across a whole schema, whoever created
+   the tables. **Edit `TARGET_SCHEMA` at the top first** so it matches the
+   schema in your `DATABASE_URL` — pointed at the wrong one it reports success
+   against an empty schema, and `Success. No rows returned` against `public`
+   means it found nothing, not that everything is fine. Its final `select`
+   scans every schema for exactly that reason.
 
 4. With synthetic accounts, verify the clinical UI as both an assigned
    therapist and a supervisor:
@@ -253,10 +281,11 @@ regexes.
    - An unassigned therapist, a patient and `admin_clinical` receive `403` for
      the clinical trace endpoints.
 
-5. Confirm `agent2_analysis_traces` has `relrowsecurity=true`,
-   `relforcerowsecurity=true`, owner `psychdeep_backend`, one
-   `backend_full_access` policy, and no privileges for PostgREST roles. Remove
-   every synthetic row/account used by the smoke test after verification.
+5. Remove every synthetic row and account used by the smoke test. The
+   per-table state that used to be checked by hand here — owner, RLS, FORCE
+   RLS, the `backend_full_access` policy, no privileges for the PostgREST
+   roles — is what `verify.sql` covers in step 3, for all 21 tables rather
+   than just `agent2_analysis_traces`.
 
 ---
 
