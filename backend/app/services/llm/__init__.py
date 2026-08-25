@@ -1,8 +1,8 @@
 """LLM provider factory.
 
-PsychApp's two inference agents — Agent 1 (conversational), Agent 2
-(linguistic analyst) and Agent 4 (psychosocial extractor) — run on whichever
-provider is configured. Two are supported:
+PsychApp's agents — Agent 1 (conversational), Agent 2 (linguistic analyst),
+Agent 3 (clinical copilot) and Agent 4 (psychosocial extractor) — run on
+whichever provider is configured. Two are supported:
 
   * ``anthropic`` — Claude over the Anthropic API. The default, and what the
     clinical prompts were tuned against.
@@ -17,10 +17,17 @@ provider and get whichever one is in force, with the metadata to prove which
 one answered.
 """
 from app.services.llm.anthropic_provider import AnthropicProvider, RefusalError
-from app.services.llm.base import LLMProvider, ProviderMetadata, StructuredAnalysisError, StructuredAnalysisResult
+from app.services.llm.base import (
+    ChatResult,
+    LLMProvider,
+    ProviderMetadata,
+    StructuredAnalysisError,
+    StructuredAnalysisResult,
+)
 from app.services.llm.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
+    "ChatResult",
     "LLMProvider",
     "ProviderMetadata",
     "StructuredAnalysisError",
@@ -42,6 +49,7 @@ def build_provider(config) -> LLMProvider:
             base_url=config.base_url,
             chat_model=config.chat_model,
             analysis_model=config.analysis_model,
+            copilot_model=config.copilot_model,
             api_key=config.api_key,
             max_tokens=config.max_tokens,
             timeout_seconds=float(config.timeout_seconds),
@@ -49,6 +57,7 @@ def build_provider(config) -> LLMProvider:
     return AnthropicProvider(
         chat_model=config.chat_model,
         analysis_model=config.analysis_model,
+        copilot_model=config.copilot_model,
         max_tokens=config.max_tokens,
     )
 

@@ -61,6 +61,10 @@ class ResolvedConfig:
     provider: str
     chat_model: str
     analysis_model: str
+    # Agent 3. Empty means "whatever the conversational agent uses", which is
+    # what it did before it had a setting; `_from_row` and `environment_config`
+    # both resolve it, so readers never have to apply the fallback themselves.
+    copilot_model: str = ""
     base_url: str | None = None
     api_key: str = ""
     max_tokens: int = 4096
@@ -85,6 +89,7 @@ class ResolvedConfig:
             "base_url": self.base_url,
             "chat_model": self.chat_model,
             "analysis_model": self.analysis_model,
+            "copilot_model": self.copilot_model or self.chat_model,
             "max_tokens": self.max_tokens,
             "timeout_seconds": self.timeout_seconds,
             "source": self.source,
@@ -116,6 +121,7 @@ def environment_config() -> ResolvedConfig:
         provider=PROVIDER_ANTHROPIC,
         chat_model=settings.anthropic_chat_model,
         analysis_model=settings.anthropic_analysis_model,
+        copilot_model=settings.copilot_model,
         max_tokens=settings.anthropic_max_tokens,
         label="Configuración del despliegue",
         source="environment",
@@ -127,6 +133,7 @@ def _from_row(row: LLMEndpointConfig) -> ResolvedConfig:
         provider=row.provider,
         chat_model=row.chat_model,
         analysis_model=row.analysis_model,
+        copilot_model=row.copilot_model or row.chat_model,
         base_url=row.base_url,
         api_key=row.api_key or "",
         max_tokens=row.max_tokens,
@@ -219,6 +226,7 @@ def validate(
     analysis_model: str,
     max_tokens: int,
     timeout_seconds: int,
+    copilot_model: str | None = None,
 ) -> dict:
     if provider not in PROVIDERS:
         raise LLMConfigError(f"Proveedor no soportado: {provider}")
@@ -238,6 +246,8 @@ def validate(
         "base_url": normalised,
         "chat_model": chat_model.strip(),
         "analysis_model": analysis_model.strip(),
+        # Left blank on purpose is a valid answer: it means "same as chat".
+        "copilot_model": (copilot_model or "").strip(),
         "max_tokens": max_tokens,
         "timeout_seconds": timeout_seconds,
     }
@@ -255,6 +265,7 @@ def set_active(
     max_tokens: int,
     timeout_seconds: int,
     label: str,
+    copilot_model: str | None = None,
     actor_id=None,
 ) -> ResolvedConfig:
     """Insert a new active configuration and retire the previous one.
@@ -267,6 +278,7 @@ def set_active(
         base_url=base_url,
         chat_model=chat_model,
         analysis_model=analysis_model,
+        copilot_model=copilot_model,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
     )
@@ -293,6 +305,7 @@ def set_active(
         base_url=fields["base_url"],
         chat_model=fields["chat_model"],
         analysis_model=fields["analysis_model"],
+        copilot_model=fields["copilot_model"] or None,
         api_key=effective_key or None,
         max_tokens=fields["max_tokens"],
         timeout_seconds=fields["timeout_seconds"],

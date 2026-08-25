@@ -31,6 +31,7 @@ interface FormState {
   baseUrl: string;
   chatModel: string;
   analysisModel: string;
+  copilotModel: string;
   apiKey: string;
   maxTokens: number;
   timeoutSeconds: number;
@@ -77,6 +78,7 @@ function formFromStatus(status: LLMEndpointStatusOut): FormState {
     baseUrl: active.base_url || "",
     chatModel: active.chat_model || "",
     analysisModel: active.analysis_model || "",
+    copilotModel: active.copilot_model || "",
     apiKey: "",
     maxTokens: active.max_tokens,
     timeoutSeconds: active.timeout_seconds,
@@ -151,6 +153,7 @@ export default function SettingsPage() {
       baseUrl: preset.baseUrl,
       chatModel: preset.model,
       analysisModel: preset.model,
+      copilotModel: preset.model,
       label: preset.name,
     });
     setTestResult(null);
@@ -162,6 +165,8 @@ export default function SettingsPage() {
       base_url: current.provider === "openai_compatible" ? current.baseUrl : null,
       chat_model: current.chatModel,
       analysis_model: current.analysisModel,
+      // Blank is a real answer: the backend reads it as "same as chat".
+      copilot_model: current.copilotModel,
       // An untouched field means "keep the stored key", never "clear it":
       // the current key is never sent to the browser, so a blank box here
       // carries no information about it.
@@ -183,6 +188,7 @@ export default function SettingsPage() {
         base_url: form.provider === "openai_compatible" ? form.baseUrl : null,
         chat_model: form.chatModel,
         analysis_model: form.analysisModel || form.chatModel,
+        copilot_model: form.copilotModel || form.chatModel,
         api_key: form.apiKey || null,
         timeout_seconds: Math.min(form.timeoutSeconds, 60),
       });
@@ -282,6 +288,10 @@ export default function SettingsPage() {
               <div>
                 <dt>Modelo de análisis</dt>
                 <dd>{active.analysis_model}</dd>
+              </div>
+              <div>
+                <dt>Modelo del copiloto</dt>
+                <dd>{active.copilot_model || active.chat_model}</dd>
               </div>
               <div>
                 <dt>Endpoint</dt>
@@ -386,6 +396,23 @@ export default function SettingsPage() {
                   value={form.analysisModel}
                   onChange={(e) => patch({ analysisModel: e.target.value })}
                 />
+              </label>
+            </div>
+
+            <div className="field-row">
+              <label className="field">
+                <span>Modelo del copiloto clínico (Agente 3)</span>
+                <input
+                  type="text"
+                  value={form.copilotModel}
+                  placeholder={form.chatModel || "Igual que el de conversación"}
+                  onChange={(e) => patch({ copilotModel: e.target.value })}
+                />
+                <span className="meta">
+                  Déjalo vacío para usar el mismo que la conversación. Lee expedientes largos para un
+                  profesional que no está esperando delante de la pantalla, así que admite un ajuste más
+                  lento y más a fondo.
+                </span>
               </label>
             </div>
 

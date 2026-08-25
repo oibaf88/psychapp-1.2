@@ -1,17 +1,20 @@
 """
 Claude (Anthropic API) implementation of LLMProvider.
 
-Both agents run on the Anthropic API:
+Every agent runs on the Anthropic API:
 
-  * Agent 1 (conversational)      -> settings.anthropic_chat_model
-  * Agent 2 (linguistic analyst)  -> settings.anthropic_analysis_model
+  * Agent 1 (conversational)  -> settings.anthropic_chat_model
+  * The analyst               -> settings.anthropic_analysis_model
+  * Agent 3 (clinical copilot)-> settings.anthropic_copilot_model
 
-They are separate settings so the analyst can be pinned to a
-higher-capability model than the chat agent (or vice versa) without
-touching code. There are no downloadable Claude weights, so these calls
-always go out over the network; everything else in PsychApp (database,
-deterministic risk engine, web server, frontend) runs on your own
-infrastructure.
+They are separate settings so each can be pinned to what its job needs
+without touching code. A caller may also pass ``model``/``effort`` for one
+call, which is how the copilot gets its own model without a second client
+and a second resolution of the active endpoint.
+
+There are no downloadable Claude weights, so these calls always go out over
+the network; everything else in PsychApp (database, deterministic risk
+engine, web server, frontend) runs on your own infrastructure.
 """
 import json
 import time
@@ -21,6 +24,7 @@ import anthropic
 
 from app.config import get_settings
 from app.services.llm.base import (
+    ChatResult,
     LLMProvider,
     ProviderMetadata,
     StructuredAnalysisError,
@@ -89,6 +93,7 @@ class AnthropicProvider(LLMProvider):
         *,
         chat_model: str | None = None,
         analysis_model: str | None = None,
+        copilot_model: str | None = None,
         max_tokens: int | None = None,
     ):
         # The models are overridable so a runtime configuration can pin them
@@ -97,13 +102,29 @@ class AnthropicProvider(LLMProvider):
         settings = get_settings()
         self._chat_model = chat_model or settings.anthropic_chat_model
         self._analysis_model = analysis_model or settings.anthropic_analysis_model
+        self._copilot_model = copilot_model or settings.copilot_model
         self._chat_effort = settings.anthropic_chat_effort
         self._analysis_effort = settings.anthropic_analysis_effort
-        self._max_tokens = max_tokens or settings.anthropic_max_tokens
+        self._copilot_effort = settings.copilot_effort
+        # A runtime configuration carries one token budget, so it stands in
+        # for both roles when set; otherwise each keeps its own.
+        self._max_tokens_chat = max_tokens or settings.max_tokens_chat
+        self._max_tokens_analysis = max_tokens or settings.max_tokens_analysis
         self._api_key = settings.anthropic_api_key
         self._client: anthropic.Anthropic | None = None
         if self._api_key:
             self._client = anthropic.Anthropic(api_key=self._api_key)
+
+    # The copilot's settings, exposed so its call site can ask for them
+    # without reaching into `get_settings()` itself — and so the same call
+    # site works against either provider.
+    @property
+    def copilot_model(self) -> str:
+        return self._copilot_model
+
+    @property
+    def copilot_effort(self) -> str:
+        return self._copilot_effort
 
     def _require_client(self) -> anthropic.Anthropic:
         if self._client is None:
@@ -140,23 +161,42 @@ class AnthropicProvider(LLMProvider):
             latency_ms=latency_ms,
         )
 
-    def chat(self, system_prompt: str, messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> ChatResult:
         client = self._require_client()
+        requested_model = model or self._chat_model
+        started = time.perf_counter()
         response = client.messages.create(
-            model=self._chat_model,
-            max_tokens=max_tokens or self._max_tokens,
-            output_config={"effort": self._chat_effort},
+            model=requested_model,
+            max_tokens=max_tokens or self._max_tokens_chat,
+            output_config={"effort": effort or self._chat_effort},
             system=system_prompt,
             messages=messages,
         )
-        return self._first_text(response)
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        # _first_text raises RefusalError before this returns, which callers
+        # already treat as "no reply" — unchanged.
+        text = self._first_text(response)
+        return ChatResult(text=text, metadata=self._metadata(response, requested_model, latency_ms))
 
     def analyze_structured(
         self,
         system_prompt: str,
         user_text: str,
         tool_schema: dict[str, Any],
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+        max_tokens: int | None = None,
     ) -> StructuredAnalysisResult:
+        requested_model = model or self._analysis_model
         try:
             client = self._require_client()
         except RuntimeError:
@@ -164,7 +204,7 @@ class AnthropicProvider(LLMProvider):
                 "configuration_error",
                 metadata=ProviderMetadata(
                     provider="anthropic",
-                    requested_model=self._analysis_model,
+                    requested_model=requested_model,
                     base_url=ANTHROPIC_API_BASE_URL,
                 ),
                 error_code="api_key_not_configured",
@@ -173,10 +213,10 @@ class AnthropicProvider(LLMProvider):
         started = time.perf_counter()
         try:
             response = client.messages.create(
-                model=self._analysis_model,
-                max_tokens=self._max_tokens,
+                model=requested_model,
+                max_tokens=max_tokens or self._max_tokens_analysis,
                 output_config={
-                    "effort": self._analysis_effort,
+                    "effort": effort or self._analysis_effort,
                     "format": {"type": "json_schema", "schema": schema},
                 },
                 system=system_prompt,
@@ -194,7 +234,7 @@ class AnthropicProvider(LLMProvider):
                 safe_kind = "provider_error"
             metadata = ProviderMetadata(
                 provider="anthropic",
-                requested_model=self._analysis_model,
+                requested_model=requested_model,
                 base_url=ANTHROPIC_API_BASE_URL,
                 request_id=getattr(exc, "request_id", None),
                 latency_ms=latency_ms,
@@ -213,7 +253,7 @@ class AnthropicProvider(LLMProvider):
             ) from None
 
         latency_ms = round((time.perf_counter() - started) * 1000)
-        metadata = self._metadata(response, self._analysis_model, latency_ms)
+        metadata = self._metadata(response, requested_model, latency_ms)
         if response.stop_reason == "refusal":
             raise RefusalError(metadata=metadata)
         text = self._first_text(response)

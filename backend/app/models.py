@@ -580,6 +580,10 @@ class LLMEndpointConfig(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     chat_model: Mapped[str] = mapped_column(String(160), nullable=False)
     analysis_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Agent 3, the clinical copilot. Nullable, and NULL means "same as
+    # chat_model" — the behaviour of every row written before this column
+    # existed, so old rows keep meaning exactly what they meant.
+    copilot_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
