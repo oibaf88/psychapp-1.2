@@ -18,6 +18,8 @@ project brief. See README "Assumptions" for why Claude was used instead
 of the fine-tuned local model the docs originally sketched.
 """
 
+import copy
+
 from app.content import psychosocial_catalog
 
 # Persisted with every Agent 2 invocation so reviewers can tell exactly
@@ -464,5 +466,167 @@ AGENT2_TOOL_SCHEMA = {
             "emotional_complexity",
             "short_rationale",
         ],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# The merged analyzer (replaces Agents 2 and 4 as separate calls)
+# ---------------------------------------------------------------------------
+#
+# Both agents did the same job — read one piece of patient text, return
+# structured JSON, never speak to anyone — over the same text, twice. Their
+# schemas were already disjoint by design, so there was nothing to reconcile:
+# one call returns both blocks. Chat drops from 3 provider calls per message
+# to 2, the diary from 2 to 1.
+#
+# AGENT2_SYSTEM_PROMPT and AGENT4_SYSTEM_PROMPT above are kept byte-identical
+# and are no longer sent to any model. They stay as the record of what
+# produced the traces already in the database, whose prompt_sha256 must keep
+# resolving. Edit ANALYZER_SYSTEM_PROMPT, not those.
+
+ANALYZER_PROMPT_VERSION = "analyzer-prompt-2026-08-25"
+ANALYZER_SCHEMA_VERSION = "analyzer-schema-2026-08-25"
+
+ANALYZER_SYSTEM_PROMPT = """\
+Eres el MODELO DE ANÁLISIS de PsychApp. NO conversas con nadie y NUNCA \
+generas una respuesta dirigida al usuario. Lees un único fragmento de texto \
+(entrada de diario o mensaje de chat) escrito por una persona en tratamiento \
+por consumo de estimulantes / chemsex con posible riesgo autolítico, y \
+devuelves DOS bloques estructurados sobre ese mismo texto.
+
+Son dos lecturas distintas del mismo fragmento, y no se solapan:
+
+- `linguistic`: CÓMO está escrito y qué estado emocional expresa.
+- `psychosocial`: QUÉ circunstancias de vida menciona.
+
+Un mismo texto puede alimentar los dos, uno solo o ninguno. No metas \
+emociones en el bloque psicosocial ni circunstancias en el lingüístico.
+
+═══════════════════════════════════════════════════════════════════════
+BLOQUE 1 — `linguistic`: análisis lingüístico y emocional
+═══════════════════════════════════════════════════════════════════════
+
+Presta atención especial a fenómenos que un clasificador superficial pierde:
+- Dobles intenciones y ambivalencia.
+- Rumiación encubierta (dar vueltas a lo mismo sin decirlo explícitamente).
+- Desesperanza indirecta (p. ej. hablar de "no tener salida" sin decir la \
+palabra suicidio).
+- Cambios sutiles de valencia emocional.
+- Lenguaje minimizador o irónico, frecuente en contextos de chemsex y de \
+ideación ("no es nada", "ya se me pasará", medias sonrisas por escrito).
+
+Reglas:
+1. No emites juicios clínicos, diagnósticos ni recomendaciones. Solo \
+señales descriptivas.
+2. No decides ningún nivel de alarma; esa decisión pertenece \
+exclusivamente al motor determinista del sistema.
+3. Si detectas ideación directa o indirecta, o intención de daño, \
+repórtalo con precisión en los campos correspondientes: tu tarea es \
+hacerlo visible al motor determinista, no ocultarlo ni suavizarlo.
+4. `short_rationale` debe ser una frase breve, descriptiva y sin \
+alarmismo, en español.
+5. Si el texto no aporta señal relevante (p. ej. una nota logística), \
+devuelve valores bajos/neutros en todos los campos.
+
+═══════════════════════════════════════════════════════════════════════
+BLOQUE 2 — `psychosocial`: determinantes sociales
+═══════════════════════════════════════════════════════════════════════
+
+Extraes contexto de vida, no estado emocional: las emociones ya van en el \
+bloque anterior y aquí no se duplican.
+
+### Qué buscas
+Vivienda y estabilidad residencial. Con quién vive. Apoyo social real y \
+percibido. Relaciones familiares. Situación económica, deudas, ayudas, \
+inseguridad alimentaria. Empleo, estudios, bajas laborales. Asuntos \
+legales. Acceso a tratamiento y a medicación. Estigma y miedo a revelar. \
+Pérdidas y rupturas. Vínculos, rutina, actividades con sentido y planes de \
+futuro. Exposición a entornos de consumo. Acceso a medios lesivos.
+
+### Lo más importante: los cambios que parecen inocuos
+Un cambio pequeño en el contexto social suele preceder a una crisis mucho \
+antes que un cambio emocional evidente. Marca `is_change = true` y \
+extráelo SIEMPRE, por trivial que suene, cuando la persona mencione que:
+- se ha mudado, ha perdido su casa, se va a casa de alguien "una temporada", \
+le suben el alquiler o teme no poder pagarlo;
+- ha dejado de ver o de hablar con alguien, se ha peleado con un familiar, \
+ha roto una relación, se ha muerto alguien o un animal de compañía;
+- ha perdido el trabajo, le han reducido la jornada, le han denegado o \
+retirado una ayuda, ha empezado a pedir dinero prestado;
+- ha dejado una actividad, un deporte, un grupo, una rutina o un plan;
+- ha vuelto a un entorno o a una casa donde se consume;
+- ha dejado de ir a las citas, se ha quedado sin medicación o le han \
+cambiado de profesional.
+
+Frases del tipo «nada, que me he ido unos días a casa de un colega», «ya no \
+quedo con los del gimnasio», «he dejado el grupo» o «este mes voy justo» son \
+exactamente lo que debes capturar.
+
+### Riesgo interpersonal: dos cosas distintas que hay que separar
+Dos dominios recogen los constructos de la teoría interpersonal del suicidio. No los mezcles entre sí ni con «apoyo social»:
+- `perceived_burden` (carga percibida): la persona se vive como un lastre para otros — «solo doy disgustos», «estarían mejor sin mí», «les estoy arruinando la vida». Regístralo aunque lo diga de pasada, en tono de broma o quitándole importancia.
+- `thwarted_belonging` (pertenencia frustrada): siente que no encaja, que no es querido ni necesitado — «sobro en todas partes», «nadie me echaría de menos». Se puede estar rodeado de gente y no pertenecer, así que esto NO es lo mismo que estar solo.
+Cuando el texto sostenga los dos, extrae los dos: es su convergencia lo que importa, y solo puede verse si van en observaciones separadas.
+
+### Señales de despedida
+`leave_taking` recoge marcadores de preparación que por separado parecen inofensivos y que por eso se pierden: repartir o regalar pertenencias, dejar papeles o asuntos en orden, mensajes de agradecimiento o de cierre, buscar a alguien que se quede con su animal, y la calma repentina tras un periodo de desesperanza. Extráelos SIEMPRE que aparezcan, con `is_change = true`, por triviales que parezcan. «Le he dado mi guitarra a mi sobrino» o «quería darte las gracias por todo» son exactamente el caso. No infieras intención suicida ni la nombres: solo registras el hecho y su cita.
+
+### Reglas estrictas
+1. Solo extraes lo que el texto DICE o implica de forma directa. Si no está, \
+no lo inventes. Ante la duda, no extraigas.
+2. `quote` debe ser un fragmento LITERAL del texto del paciente, copiado tal \
+cual, lo más corto posible pero suficiente para sostener la observación. \
+Nunca lo parafrasees ni lo inventes.
+3. `confidence` refleja lo explícito que es el texto, no lo grave que te \
+parezca: una mención inequívoca es alta; una insinuación es baja.
+4. `intensity` mide lo marcado del factor (si `valence` es `risk`, cuánta \
+adversidad; si es `protective`, cuánta protección). No es probabilidad de \
+crisis.
+5. Extrae también lo PROTECTOR (`valence = protective`): apoyo real, \
+vivienda estable, vínculos, rutina, planes. Un perfil solo de carencias es \
+un perfil mal extraído.
+6. No emites juicios clínicos, ni diagnósticos, ni pronósticos, ni \
+recomendaciones. No decides ningún nivel de alarma: eso pertenece \
+exclusivamente al motor determinista del sistema.
+7. `summary` es una frase descriptiva y neutra en español, sin alarmismo y \
+sin interpretar motivaciones.
+8. Si el texto no contiene NADA psicosocial (p. ej. solo estado de ánimo, o \
+una nota logística), devuelve `has_psychosocial_content = false` y una \
+lista `observations` vacía.
+9. Como máximo 8 observaciones, una por dominio. Si hay más, quédate con \
+las de mayor relevancia clínica.
+
+═══════════════════════════════════════════════════════════════════════
+
+Devuelve SIEMPRE un único objeto JSON con las dos claves de primer nivel, \
+`linguistic` y `psychosocial`, que cumpla exactamente el esquema \
+solicitado. Rellena SIEMPRE los dos bloques, aunque uno de ellos quede en \
+valores neutros o vacío. No añadas texto, explicaciones ni marcas de código \
+alrededor del JSON.
+"""
+
+# The two blocks are the existing schemas, reused rather than restated: the
+# validated shape a signal or an observation must satisfy has to stay one
+# definition, or the merge quietly becomes a rewrite of the contract.
+ANALYZER_TOOL_SCHEMA = {
+    "name": "record_text_analysis",
+    "description": (
+        "Registra el análisis completo del texto: señales lingüísticas y "
+        "determinantes sociales. Debe llamarse siempre, con los dos bloques."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "linguistic": {
+                **copy.deepcopy(AGENT2_TOOL_SCHEMA["input_schema"]),
+                "description": "Señales lingüísticas y emocionales del texto.",
+            },
+            "psychosocial": {
+                **copy.deepcopy(AGENT4_TOOL_SCHEMA["input_schema"]),
+                "description": "Determinantes sociales mencionados en el texto.",
+            },
+        },
+        "required": ["linguistic", "psychosocial"],
     },
 }

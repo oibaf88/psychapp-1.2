@@ -490,7 +490,9 @@ class Agent2AnalysisTrace(Base):
     agent_role: Mapped[str] = mapped_column(
         String(32), nullable=False, default="agent2_linguistic", index=True
     )
-    # agent2_linguistic | agent4_psychosocial
+    # analyzer_merged (current) | agent2_linguistic | agent4_psychosocial
+    # The two agent* values are retired. Rows carrying them stay, so the
+    # constraint keeps accepting them.
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -552,7 +554,8 @@ class Agent2AnalysisTrace(Base):
         CheckConstraint("output_tokens IS NULL OR output_tokens >= 0", name="ck_agent2_trace_output_tokens"),
         CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="ck_agent2_trace_latency"),
         CheckConstraint(
-            "agent_role IN ('agent2_linguistic','agent4_psychosocial')", name="ck_agent2_trace_agent_role"
+            "agent_role IN ('analyzer_merged','agent2_linguistic','agent4_psychosocial')",
+            name="ck_agent2_trace_agent_role",
         ),
         Index("ix_agent2_trace_user_started", "user_id", "started_at"),
         Index("ix_agent2_trace_status_started", "status", "started_at"),
