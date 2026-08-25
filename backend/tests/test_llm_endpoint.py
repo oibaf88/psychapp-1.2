@@ -116,7 +116,9 @@ class LocalProviderTests(unittest.TestCase):
         client = _FakeClient([_response(text="hola")])
         with patch("httpx.Client", return_value=client):
             reply = self._provider().chat("sistema", [{"role": "user", "content": "hola"}])
-        self.assertEqual(reply, "hola")
+        # chat() now carries provenance alongside the text.
+        self.assertEqual(reply.text, "hola")
+        self.assertEqual(reply.metadata.provider, "openai_compatible")
         self.assertEqual(client.requests[0]["url"], "http://localhost:1234/v1/chat/completions")
         self.assertEqual(client.requests[0]["json"]["messages"][0]["role"], "system")
 
@@ -294,6 +296,8 @@ class ProviderSelectionTests(unittest.TestCase):
             anthropic_chat_model="claude-opus-5",
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
+            copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
         with patch.object(llm_config, "get_settings", return_value=settings):
             resolved = llm_config.resolve(db=None)
@@ -312,6 +316,8 @@ class ProviderSelectionTests(unittest.TestCase):
             anthropic_chat_model="claude-opus-5",
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
+            copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
         with patch.object(llm_config, "get_settings", return_value=settings):
             resolved = llm_config.resolve(_ExplodingDb())
@@ -493,6 +499,8 @@ class OverrideGateTests(unittest.TestCase):
             anthropic_chat_model="claude-opus-5",
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
+            copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
 
     def test_the_shipped_default_is_off(self):
@@ -600,3 +608,311 @@ class OverrideGateTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 llm_settings.reset_llm_settings(db=None, user=self._user("admin_clinical"))
             self.assertEqual(caught.exception.status_code, 403)
+class PerCallModelTests(unittest.TestCase):
+    """Three agents, one endpoint, a different model per call.
+
+    Before this, the model was fixed in the provider constructor, so giving
+    Agent 3 its own model would have meant a second provider — a second
+    client, a second resolution of the active configuration, and two answers
+    to "which endpoint is in force".
+    """
+
+    def _provider(self, **kwargs):
+        return OpenAICompatibleProvider(
+            base_url="http://localhost:1234/v1",
+            chat_model="chat-model",
+            analysis_model="analysis-model",
+            **kwargs,
+        )
+
+    def _sent(self, client):
+        return client.requests[0]["json"]
+
+    def test_chat_uses_the_constructor_model_when_none_is_given(self):
+        client = _FakeClient([_response(text="hola")])
+        with patch("httpx.Client", return_value=client):
+            self._provider().chat("s", [{"role": "user", "content": "h"}])
+        self.assertEqual(self._sent(client)["model"], "chat-model")
+
+    def test_chat_honours_a_per_call_model(self):
+        client = _FakeClient([_response(text="hola")])
+        with patch("httpx.Client", return_value=client):
+            result = self._provider().chat(
+                "s", [{"role": "user", "content": "h"}], model="copilot-model"
+            )
+        self.assertEqual(self._sent(client)["model"], "copilot-model")
+        # And the provenance follows the model actually asked for.
+        self.assertEqual(result.metadata.requested_model, "copilot-model")
+
+    def test_analysis_honours_a_per_call_model(self):
+        client = _FakeClient([_response(text='{"a": 1}')])
+        with patch("httpx.Client", return_value=client):
+            result = self._provider().analyze_structured("s", "texto", SCHEMA, model="other-model")
+        self.assertEqual(self._sent(client)["model"], "other-model")
+        self.assertEqual(result.metadata.requested_model, "other-model")
+
+    def test_the_copilot_model_defaults_to_the_chat_model(self):
+        self.assertEqual(self._provider().copilot_model, "chat-model")
+
+    def test_the_copilot_model_is_used_when_configured(self):
+        self.assertEqual(self._provider(copilot_model="big-model").copilot_model, "big-model")
+
+    def test_a_per_call_max_tokens_is_respected(self):
+        client = _FakeClient([_response(text="hola")])
+        with patch("httpx.Client", return_value=client):
+            self._provider(max_tokens=4096).chat("s", [{"role": "user", "content": "h"}], 64)
+        self.assertEqual(self._sent(client)["max_tokens"], 64)
+
+    def test_an_omitted_max_tokens_falls_through_to_the_configured_one(self):
+        """The old truthy `max_tokens=1024` default shadowed this entirely."""
+        client = _FakeClient([_response(text="hola")])
+        with patch("httpx.Client", return_value=client):
+            self._provider(max_tokens=4096).chat("s", [{"role": "user", "content": "h"}])
+        self.assertEqual(self._sent(client)["max_tokens"], 4096)
+
+
+class RoleSettingsTests(unittest.TestCase):
+    """The three roles, and what each falls back to when left unset."""
+
+    def _settings(self, **overrides):
+        from app.config import Settings
+
+        return Settings(**overrides)
+
+    def test_an_unset_copilot_model_falls_back_to_chat(self):
+        s = self._settings(anthropic_chat_model="chat-x", anthropic_copilot_model="")
+        self.assertEqual(s.copilot_model, "chat-x")
+
+    def test_an_unset_copilot_effort_falls_back_to_chat(self):
+        s = self._settings(anthropic_chat_effort="medium", anthropic_copilot_effort="")
+        self.assertEqual(s.copilot_effort, "medium")
+
+    def test_a_configured_copilot_model_wins(self):
+        s = self._settings(anthropic_chat_model="chat-x", anthropic_copilot_model="copilot-y")
+        self.assertEqual(s.copilot_model, "copilot-y")
+
+    def test_whitespace_is_not_a_configured_model(self):
+        s = self._settings(anthropic_chat_model="chat-x", anthropic_copilot_model="   ")
+        self.assertEqual(s.copilot_model, "chat-x")
+
+    def test_the_shared_token_budget_still_serves_both_roles(self):
+        """Deployments that set only ANTHROPIC_MAX_TOKENS keep working."""
+        s = self._settings(anthropic_max_tokens=8192)
+        self.assertEqual(s.max_tokens_chat, 8192)
+        self.assertEqual(s.max_tokens_analysis, 8192)
+
+    def test_the_per_role_budgets_override_the_shared_one(self):
+        s = self._settings(
+            anthropic_max_tokens=8192,
+            anthropic_max_tokens_chat=1500,
+            anthropic_max_tokens_analysis=16000,
+        )
+        self.assertEqual(s.max_tokens_chat, 1500)
+        self.assertEqual(s.max_tokens_analysis, 16000)
+
+    def test_the_dead_provider_setting_is_gone(self):
+        """`llm_provider` was read by nothing; the resolver decides this."""
+        from app.config import Settings
+
+        self.assertNotIn("llm_provider", Settings.model_fields)
+
+
+class CopilotModelPlumbingTests(unittest.TestCase):
+    """copilot_model has to survive the whole round trip, or it is decoration."""
+
+    def test_the_environment_config_carries_the_copilot_model(self):
+        llm_config.invalidate_cache()
+        settings = SimpleNamespace(
+            llm_allow_runtime_override=False,
+            anthropic_chat_model="chat-x",
+            anthropic_analysis_model="analysis-x",
+            anthropic_max_tokens=8192,
+            copilot_model="copilot-x",
+            anthropic_copilot_model="copilot-x",
+        )
+        with patch.object(llm_config, "get_settings", return_value=settings):
+            resolved = llm_config.resolve(db=None)
+        self.assertEqual(resolved.copilot_model, "copilot-x")
+        self.assertEqual(resolved.public_dict()["copilot_model"], "copilot-x")
+
+    def test_a_stored_row_without_one_reads_as_the_chat_model(self):
+        """NULL in an old row means 'same as chat', not 'no model'."""
+        row = SimpleNamespace(
+            provider="openai_compatible",
+            chat_model="llama-chat",
+            analysis_model="llama-analysis",
+            copilot_model=None,
+            base_url="http://localhost:1234/v1",
+            api_key=None,
+            max_tokens=4096,
+            timeout_seconds=120,
+            label="local",
+            id="row-1",
+            created_at=None,
+        )
+        self.assertEqual(llm_config._from_row(row).copilot_model, "llama-chat")
+
+    def test_validate_treats_a_blank_copilot_model_as_unset(self):
+        fields = llm_config.validate(
+            provider="anthropic",
+            base_url=None,
+            chat_model="c",
+            analysis_model="a",
+            copilot_model="   ",
+            max_tokens=4096,
+            timeout_seconds=60,
+        )
+        self.assertEqual(fields["copilot_model"], "")
+
+    def test_the_written_row_records_the_copilot_model(self):
+        db = _RecordingSession([])
+        llm_config.set_active(
+            db,
+            provider="openai_compatible",
+            base_url="http://localhost:11434/v1",
+            chat_model="llama3.1:8b",
+            analysis_model="llama3.1:8b",
+            copilot_model="llama3.1:70b",
+            api_key=None,
+            max_tokens=4096,
+            timeout_seconds=120,
+            label="local",
+        )
+        self.assertEqual(db.added[0].copilot_model, "llama3.1:70b")
+
+    def test_the_orm_and_the_migration_agree_on_the_column(self):
+        import pathlib
+        import re
+
+        from app.models import LLMEndpointConfig
+
+        column = LLMEndpointConfig.__table__.columns["copilot_model"]
+        self.assertTrue(column.nullable, "NULL is how an old row says 'same as chat'")
+        self.assertEqual(column.type.length, 160)
+
+        migrations = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+        sql = "\n".join(p.read_text(encoding="utf-8") for p in migrations.glob("*.sql"))
+        self.assertTrue(
+            re.search(r"add column if not exists copilot_model varchar\(160\)", sql),
+            "the ORM column has no matching migration",
+        )
+
+
+class ReviewFindingTests(unittest.TestCase):
+    """Four defects a review caught in the per-agent-model change.
+
+    Each is pinned here because each was a case of shipping something that
+    reads as working: documented settings that did nothing, a schema check
+    that passed while the schema was wrong, a column narrower than what the
+    validator accepts, and a form that quietly changed what it was told.
+    """
+
+    def test_the_environment_does_not_pin_a_shared_token_budget(self):
+        """ANTHROPIC_MAX_TOKENS_CHAT/_ANALYSIS were documented but inert.
+
+        `environment_config()` always fills `max_tokens`, and passing that
+        into the provider made it shadow both per-role settings on every
+        ordinary call.
+        """
+        llm_config.invalidate_cache()
+        settings = SimpleNamespace(
+            llm_allow_runtime_override=False,
+            anthropic_chat_model="c",
+            anthropic_analysis_model="a",
+            anthropic_copilot_model="",
+            anthropic_max_tokens=8192,
+            copilot_model="c",
+        )
+        with patch.object(llm_config, "get_settings", return_value=settings):
+            self.assertIsNone(llm_config.environment_config().explicit_max_tokens)
+
+    def test_a_runtime_override_does_pin_one(self):
+        """A stored row carries one budget for both roles by design."""
+        config = llm_config.ResolvedConfig(
+            provider="openai_compatible", chat_model="m", analysis_model="m",
+            base_url="http://localhost:1234/v1", max_tokens=2048, source="runtime",
+        )
+        self.assertEqual(config.explicit_max_tokens, 2048)
+
+    def test_the_per_role_budgets_reach_the_anthropic_provider(self):
+        """The end-to-end version of the first test."""
+        from app.config import Settings
+        from app.services.llm import build_provider
+
+        settings = Settings(
+            anthropic_api_key="",
+            anthropic_max_tokens=8192,
+            anthropic_max_tokens_chat=1500,
+            anthropic_max_tokens_analysis=16000,
+        )
+        llm_config.invalidate_cache()
+        with patch("app.services.llm.anthropic_provider.get_settings", return_value=settings), \
+             patch.object(llm_config, "get_settings", return_value=settings):
+            provider = build_provider(llm_config.environment_config())
+        self.assertEqual(provider._max_tokens_chat, 1500)
+        self.assertEqual(provider._max_tokens_analysis, 16000)
+        llm_config.invalidate_cache()
+
+    def test_a_deployment_missing_the_migration_refuses_to_boot(self):
+        """Otherwise ORM reads fail and resolve() silently falls back to the
+        environment, ignoring a saved override."""
+        import inspect
+        import pathlib
+
+        from app import main
+
+        self.assertIn('("llm_endpoint_configs", "copilot_model")', inspect.getsource(main))
+        verify = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "verify.sql"
+        self.assertIn("('llm_endpoint_configs', 'copilot_model')", verify.read_text(encoding="utf-8"))
+
+    def test_provenance_columns_fit_the_model_names_the_config_accepts(self):
+        """A 140-character model name must not produce a reply the database
+        then refuses to record."""
+        from app.models import Agent2AnalysisTrace, LLMEndpointConfig, TherapistCopilotMessage
+
+        accepted = LLMEndpointConfig.__table__.columns["copilot_model"].type.length
+        for table, column in (
+            (TherapistCopilotMessage, "requested_model"),
+            (Agent2AnalysisTrace, "requested_model"),
+            (Agent2AnalysisTrace, "response_model"),
+        ):
+            self.assertGreaterEqual(
+                table.__table__.columns[column].type.length,
+                accepted,
+                f"{table.__tablename__}.{column} is narrower than a valid model name",
+            )
+
+    def test_an_inherited_copilot_model_is_reported_as_inherited(self):
+        """The UI needs the raw value: prefilling the form with the resolved
+        one turns "follows chat" into "pinned to whatever chat was"."""
+        inherited = llm_config.ResolvedConfig(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model="chat-x", copilot_model_explicit="",
+        )
+        pinned = llm_config.ResolvedConfig(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model="copilot-y", copilot_model_explicit="copilot-y",
+        )
+        self.assertTrue(inherited.copilot_model_is_inherited)
+        self.assertFalse(pinned.copilot_model_is_inherited)
+        # Resolved for display, raw for the form.
+        self.assertEqual(inherited.public_dict()["copilot_model"], "chat-x")
+        self.assertEqual(inherited.public_dict()["copilot_model_explicit"], "")
+
+    def test_a_stored_row_that_inherits_reports_it(self):
+        row = SimpleNamespace(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model=None, base_url=None, api_key=None, max_tokens=4096,
+            timeout_seconds=120, label="", id="r", created_at=None,
+        )
+        resolved = llm_config._from_row(row)
+        self.assertEqual(resolved.copilot_model, "chat-x")
+        self.assertTrue(resolved.copilot_model_is_inherited)
+
+    def test_the_settings_form_reads_the_explicit_value(self):
+        import pathlib
+
+        page = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "SettingsPage.tsx"
+        source = page.read_text(encoding="utf-8")
+        self.assertIn("active.copilot_model_explicit", source)
+        self.assertNotIn("copilotModel: active.copilot_model ", source)

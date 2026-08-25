@@ -26,6 +26,31 @@ from app.models import (
     TherapistCopilotMessage,
 )
 from app.services import clinical_copilot
+from app.services.llm.base import ChatResult, ProviderMetadata
+
+COPILOT_MODEL = "copilot-model"
+
+
+def _fake_provider(reply):
+    """A provider stub shaped like the real contract.
+
+    ``chat`` returns a ChatResult, and the copilot's own model/effort are
+    readable off the provider — that is how ``ask`` requests them.
+    """
+
+    def _chat(*_args, **kwargs):
+        if callable(reply):
+            return reply(*_args, **kwargs)
+        return ChatResult(
+            text=reply,
+            metadata=ProviderMetadata(
+                provider="anthropic",
+                requested_model=kwargs.get("model") or COPILOT_MODEL,
+                response_model=kwargs.get("model") or COPILOT_MODEL,
+            ),
+        )
+
+    return SimpleNamespace(chat=_chat, copilot_model=COPILOT_MODEL, copilot_effort="high")
 
 
 class _Query:
@@ -162,7 +187,7 @@ class DossierTests(unittest.TestCase):
 class AskTests(unittest.TestCase):
     def test_successful_answer_is_persisted_with_context_counts(self):
         db = _populated_db()
-        provider = SimpleNamespace(chat=lambda *_a, **_k: "Resumen del paciente.")
+        provider = _fake_provider("Resumen del paciente.")
         with patch.object(clinical_copilot, "build_provider", return_value=provider):
             answer = clinical_copilot.ask(
                 db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
@@ -179,7 +204,7 @@ class AskTests(unittest.TestCase):
             raise RuntimeError("provider down")
 
         with patch.object(
-            clinical_copilot, "build_provider", return_value=SimpleNamespace(chat=_boom)
+            clinical_copilot, "build_provider", return_value=_fake_provider(_boom)
         ):
             answer = clinical_copilot.ask(
                 db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
@@ -193,7 +218,7 @@ class AskTests(unittest.TestCase):
         with patch.object(
             clinical_copilot,
             "build_provider",
-            return_value=SimpleNamespace(chat=lambda *_a, **_k: "   "),
+            return_value=_fake_provider("   "),
         ):
             answer = clinical_copilot.ask(
                 db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
@@ -205,7 +230,7 @@ class AskTests(unittest.TestCase):
         with patch.object(
             clinical_copilot,
             "build_provider",
-            return_value=SimpleNamespace(chat=lambda *_a, **_k: "ok"),
+            return_value=_fake_provider("ok"),
         ):
             clinical_copilot.ask(db, professional=_professional(), patient=_patient(), question="hola")
         roles = [row.role for row in db.added if isinstance(row, TherapistCopilotMessage)]
@@ -216,7 +241,7 @@ class AskTests(unittest.TestCase):
         with patch.object(
             clinical_copilot,
             "build_provider",
-            return_value=SimpleNamespace(chat=lambda *_a, **_k: "resumen"),
+            return_value=_fake_provider("resumen"),
         ):
             answer = clinical_copilot.summarize(db, professional=_professional(), patient=_patient())
         self.assertEqual(answer.kind, "summary")
@@ -227,7 +252,7 @@ class AskTests(unittest.TestCase):
         with patch.object(
             clinical_copilot,
             "build_provider",
-            return_value=SimpleNamespace(chat=lambda *_a, **_k: "ok"),
+            return_value=_fake_provider("ok"),
         ):
             clinical_copilot.ask(db, professional=_professional(), patient=_patient(), question="hola")
         for row in db.added:
@@ -236,3 +261,61 @@ class AskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CopilotModelTests(unittest.TestCase):
+    """Agent 3 asks for its own model, and records what answered.
+
+    Before this it silently rode on Agent 1's setting, and the stored turn
+    named the model the app would request now rather than the one that
+    actually produced the text.
+    """
+
+    def _capture(self, response_model=None):
+        seen = {}
+
+        def _chat(*_args, **kwargs):
+            seen.update(kwargs)
+            return ChatResult(
+                text="Resumen.",
+                metadata=ProviderMetadata(
+                    provider="anthropic",
+                    requested_model=kwargs.get("model") or "unset",
+                    response_model=response_model,
+                ),
+            )
+
+        provider = SimpleNamespace(
+            chat=_chat, copilot_model="copilot-big", copilot_effort="xhigh"
+        )
+        return provider, seen
+
+    def test_the_call_requests_the_copilot_model_and_effort(self):
+        db = _populated_db()
+        provider, seen = self._capture()
+        with patch.object(clinical_copilot, "build_provider", return_value=provider):
+            clinical_copilot.ask(
+                db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
+            )
+        self.assertEqual(seen["model"], "copilot-big")
+        self.assertEqual(seen["effort"], "xhigh")
+
+    def test_the_stored_turn_records_the_copilot_model(self):
+        db = _populated_db()
+        provider, _ = self._capture()
+        with patch.object(clinical_copilot, "build_provider", return_value=provider):
+            answer = clinical_copilot.ask(
+                db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
+            )
+        self.assertEqual(answer.requested_model, "copilot-big")
+
+    def test_a_differing_response_model_is_recorded_separately(self):
+        """On a local runtime the loaded weights need not be the configured ones."""
+        db = _populated_db()
+        provider, _ = self._capture(response_model="actually-llama-8b")
+        with patch.object(clinical_copilot, "build_provider", return_value=provider):
+            answer = clinical_copilot.ask(
+                db, professional=_professional(), patient=_patient(), question="¿Cómo está?"
+            )
+        self.assertEqual(answer.requested_model, "copilot-big")
+        self.assertEqual(answer.context_counts["response_model"], "actually-llama-8b")

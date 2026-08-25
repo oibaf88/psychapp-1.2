@@ -199,6 +199,58 @@ class LinguisticBoundaryTests(unittest.TestCase):
         self.assertEqual(reply["ui_mode"], "normal")
         self.assertIn("ANTHROPIC_API_KEY", reply["reply"])
 
+    def test_the_stored_turn_names_the_model_that_actually_answered(self):
+        """Provenance comes from the call, not from re-reading the config.
+
+        Re-resolving names the model the app would ask for now; the call's
+        own metadata names the one the server said produced this text. On a
+        local runtime those differ whenever the loaded weights are not the
+        configured ones — which is the case the provenance exists for.
+        """
+        from app.services.llm.base import ChatResult, ProviderMetadata
+
+        patient_id = uuid.uuid4()
+        db = MagicMock()
+        db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        db.refresh.side_effect = lambda i: None
+
+        provider = SimpleNamespace(
+            chat=MagicMock(
+                return_value=ChatResult(
+                    text="Te leo.",
+                    metadata=ProviderMetadata(
+                        provider="openai_compatible",
+                        requested_model="llama-3.1-8b",
+                        response_model="llama-3.1-70b-actually-loaded",
+                        base_url="http://localhost:1234/v1",
+                    ),
+                )
+            )
+        )
+        assessment = SimpleNamespace(alert_level=0, assessment_reason="stable", input_signals={})
+        analysis = AnalysisOutcome(uuid.uuid4(), None, None, "succeeded", None)
+
+        with (
+            patch.object(conversation, "analyze_text_and_store", return_value=analysis),
+            patch.object(risk_engine, "run_and_persist", return_value=assessment),
+            patch.object(conversation, "get_llm_provider", return_value=provider),
+        ):
+            conversation.get_reply(db, SimpleNamespace(id=patient_id), "hola")
+
+        stored = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if getattr(call.args[0], "role", None) == "assistant"
+        ]
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0].model, "llama-3.1-70b-actually-loaded")
+        self.assertEqual(stored[0].provider, "openai_compatible")
+        self.assertEqual(stored[0].provider_base_url, "http://localhost:1234/v1")
+
+    def test_a_template_only_reply_still_records_no_model(self):
+        """A turn with no model behind it must keep saying so."""
+        self.assertEqual(conversation._reply_provenance(MagicMock(), from_model=False), {})
+
     def test_risk_assessment_timestamp_serializes_with_explicit_utc_offset(self):
         output = RiskAssessmentOut(
             id=uuid.uuid4(),

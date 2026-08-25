@@ -55,11 +55,15 @@ that was just the working filename. Core ideas from the docs:
 - **Frontend**: React 18 + TypeScript + Vite, Recharts for timeline charts.
 - **LLM**: Anthropic Python SDK, calling Claude via the Messages API, or any
   OpenAI-compatible server for a model you host yourself (see below). Each
-  agent has its own configurable model:
-  `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation) and
-  `ANTHROPIC_ANALYSIS_MODEL` for Agent 2 (linguistic analysis). Agent 2 uses
-  **structured outputs** (`output_config.format`), so its result is always a
-  JSON object matching a fixed schema, never free text.
+  role has its own configurable model and effort:
+  `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation),
+  `ANTHROPIC_ANALYSIS_MODEL` for the analyst, and
+  `ANTHROPIC_COPILOT_MODEL` for Agent 3 (the therapist's copilot — blank
+  reuses the Agent 1 values). One endpoint serves all three; the model is
+  chosen per call, so there is a single active configuration rather than
+  three that can drift apart. The analyst uses **structured outputs**
+  (`output_config.format`), so its result is always a JSON object matching a
+  fixed schema, never free text.
 - **Orchestration**: Docker Compose locally (db + backend + frontend). For a
   hosted deployment — Render for the services, Supabase for Postgres — see
   [DEPLOY.md](./DEPLOY.md).

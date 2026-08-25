@@ -129,6 +129,7 @@ def update_llm_settings(
             base_url=payload.base_url,
             chat_model=payload.chat_model,
             analysis_model=payload.analysis_model,
+            copilot_model=payload.copilot_model,
             api_key=payload.api_key,
             max_tokens=payload.max_tokens,
             timeout_seconds=payload.timeout_seconds,
@@ -151,6 +152,7 @@ def update_llm_settings(
             "base_url": config.base_url,
             "chat_model": config.chat_model,
             "analysis_model": config.analysis_model,
+            "copilot_model": config.copilot_model,
         },
     )
     return _status(db, user)
@@ -198,6 +200,7 @@ def test_llm_endpoint(
             base_url=payload.base_url,
             chat_model=payload.chat_model,
             analysis_model=payload.analysis_model or payload.chat_model,
+            copilot_model=payload.copilot_model,
             max_tokens=512,
             timeout_seconds=payload.timeout_seconds,
         )
@@ -208,6 +211,7 @@ def test_llm_endpoint(
         provider=fields["provider"],
         chat_model=fields["chat_model"],
         analysis_model=fields["analysis_model"],
+        copilot_model=fields["copilot_model"],
         base_url=fields["base_url"],
         api_key=payload.api_key or "",
         max_tokens=512,
@@ -229,7 +233,7 @@ def test_llm_endpoint(
             "Responde solamente con la palabra OK.",
             [{"role": "user", "content": "Responde OK."}],
             max_tokens=16,
-        )
+        ).text
     except StructuredAnalysisError as exc:
         return LLMEndpointTestOut(
             ok=False,

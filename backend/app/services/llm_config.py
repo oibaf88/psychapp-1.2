@@ -61,6 +61,15 @@ class ResolvedConfig:
     provider: str
     chat_model: str
     analysis_model: str
+    # Agent 3. Empty means "whatever the conversational agent uses", which is
+    # what it did before it had a setting; `_from_row` and `environment_config`
+    # both resolve it, so readers never have to apply the fallback themselves.
+    copilot_model: str = ""
+    # What was actually configured, before the "empty means chat" fallback.
+    # The UI needs this: prefilling the edit form with the resolved value
+    # turns "follows chat" into "pinned to whatever chat was", so changing
+    # the chat model afterwards silently leaves the copilot behind.
+    copilot_model_explicit: str = ""
     base_url: str | None = None
     api_key: str = ""
     max_tokens: int = 4096
@@ -74,6 +83,25 @@ class ResolvedConfig:
     def is_local(self) -> bool:
         return self.provider == PROVIDER_LOCAL
 
+    @property
+    def explicit_max_tokens(self) -> int | None:
+        """The token budget a runtime override actually asked for.
+
+        None for the environment default. `max_tokens` is always populated —
+        the environment fills it from ANTHROPIC_MAX_TOKENS — so passing it
+        into a provider unconditionally made that shared value shadow the
+        per-role settings on every ordinary call, and
+        ANTHROPIC_MAX_TOKENS_CHAT / _ANALYSIS did nothing at all. A stored
+        override carries one budget for both roles by design; the
+        environment does not, and must not pretend to.
+        """
+        return self.max_tokens if self.source == "runtime" else None
+
+    @property
+    def copilot_model_is_inherited(self) -> bool:
+        """True when the copilot follows chat rather than being pinned."""
+        return not self.copilot_model_explicit.strip()
+
     def public_dict(self) -> dict:
         """Everything the UI may see. Never the key."""
         return {
@@ -85,6 +113,9 @@ class ResolvedConfig:
             "base_url": self.base_url,
             "chat_model": self.chat_model,
             "analysis_model": self.analysis_model,
+            "copilot_model": self.copilot_model or self.chat_model,
+            "copilot_model_explicit": self.copilot_model_explicit,
+            "copilot_model_is_inherited": self.copilot_model_is_inherited,
             "max_tokens": self.max_tokens,
             "timeout_seconds": self.timeout_seconds,
             "source": self.source,
@@ -116,6 +147,8 @@ def environment_config() -> ResolvedConfig:
         provider=PROVIDER_ANTHROPIC,
         chat_model=settings.anthropic_chat_model,
         analysis_model=settings.anthropic_analysis_model,
+        copilot_model=settings.copilot_model,
+        copilot_model_explicit=settings.anthropic_copilot_model.strip(),
         max_tokens=settings.anthropic_max_tokens,
         label="Configuración del despliegue",
         source="environment",
@@ -127,6 +160,8 @@ def _from_row(row: LLMEndpointConfig) -> ResolvedConfig:
         provider=row.provider,
         chat_model=row.chat_model,
         analysis_model=row.analysis_model,
+        copilot_model=row.copilot_model or row.chat_model,
+        copilot_model_explicit=row.copilot_model or "",
         base_url=row.base_url,
         api_key=row.api_key or "",
         max_tokens=row.max_tokens,
@@ -219,6 +254,7 @@ def validate(
     analysis_model: str,
     max_tokens: int,
     timeout_seconds: int,
+    copilot_model: str | None = None,
 ) -> dict:
     if provider not in PROVIDERS:
         raise LLMConfigError(f"Proveedor no soportado: {provider}")
@@ -238,6 +274,8 @@ def validate(
         "base_url": normalised,
         "chat_model": chat_model.strip(),
         "analysis_model": analysis_model.strip(),
+        # Left blank on purpose is a valid answer: it means "same as chat".
+        "copilot_model": (copilot_model or "").strip(),
         "max_tokens": max_tokens,
         "timeout_seconds": timeout_seconds,
     }
@@ -255,6 +293,7 @@ def set_active(
     max_tokens: int,
     timeout_seconds: int,
     label: str,
+    copilot_model: str | None = None,
     actor_id=None,
 ) -> ResolvedConfig:
     """Insert a new active configuration and retire the previous one.
@@ -267,6 +306,7 @@ def set_active(
         base_url=base_url,
         chat_model=chat_model,
         analysis_model=analysis_model,
+        copilot_model=copilot_model,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
     )
@@ -293,6 +333,7 @@ def set_active(
         base_url=fields["base_url"],
         chat_model=fields["chat_model"],
         analysis_model=fields["analysis_model"],
+        copilot_model=fields["copilot_model"] or None,
         api_key=effective_key or None,
         max_tokens=fields["max_tokens"],
         timeout_seconds=fields["timeout_seconds"],

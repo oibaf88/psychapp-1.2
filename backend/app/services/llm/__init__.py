@@ -1,8 +1,8 @@
 """LLM provider factory.
 
-PsychApp's two inference agents — Agent 1 (conversational), Agent 2
-(linguistic analyst) and Agent 4 (psychosocial extractor) — run on whichever
-provider is configured. Two are supported:
+PsychApp's agents — Agent 1 (conversational), Agent 2 (linguistic analyst),
+Agent 3 (clinical copilot) and Agent 4 (psychosocial extractor) — run on
+whichever provider is configured. Two are supported:
 
   * ``anthropic`` — Claude over the Anthropic API. The default, and what the
     clinical prompts were tuned against.
@@ -17,10 +17,17 @@ provider and get whichever one is in force, with the metadata to prove which
 one answered.
 """
 from app.services.llm.anthropic_provider import AnthropicProvider, RefusalError
-from app.services.llm.base import LLMProvider, ProviderMetadata, StructuredAnalysisError, StructuredAnalysisResult
+from app.services.llm.base import (
+    ChatResult,
+    LLMProvider,
+    ProviderMetadata,
+    StructuredAnalysisError,
+    StructuredAnalysisResult,
+)
 from app.services.llm.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
+    "ChatResult",
     "LLMProvider",
     "ProviderMetadata",
     "StructuredAnalysisError",
@@ -42,14 +49,23 @@ def build_provider(config) -> LLMProvider:
             base_url=config.base_url,
             chat_model=config.chat_model,
             analysis_model=config.analysis_model,
+            copilot_model=config.copilot_model,
             api_key=config.api_key,
+            # A local endpoint has one budget for everything it serves, so
+            # the resolved value applies whether it came from a stored row
+            # or the environment.
             max_tokens=config.max_tokens,
             timeout_seconds=float(config.timeout_seconds),
         )
     return AnthropicProvider(
         chat_model=config.chat_model,
         analysis_model=config.analysis_model,
-        max_tokens=config.max_tokens,
+        copilot_model=config.copilot_model,
+        # Only a runtime override pins one budget across both roles. Passing
+        # the environment's shared value here would shadow the per-role
+        # settings, which is how ANTHROPIC_MAX_TOKENS_CHAT / _ANALYSIS came
+        # to be documented while doing nothing.
+        max_tokens=config.explicit_max_tokens,
     )
 
 

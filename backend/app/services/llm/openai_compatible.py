@@ -49,6 +49,7 @@ from typing import Any
 import httpx
 
 from app.services.llm.base import (
+    ChatResult,
     LLMProvider,
     ProviderMetadata,
     StructuredAnalysisError,
@@ -154,6 +155,7 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str,
         chat_model: str,
         analysis_model: str,
+        copilot_model: str = "",
         api_key: str = "",
         max_tokens: int = 4096,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -161,6 +163,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._base_url = base_url.rstrip("/")
         self._chat_model = chat_model
         self._analysis_model = analysis_model
+        self._copilot_model = copilot_model or chat_model
         self._api_key = api_key
         self._max_tokens = max_tokens
         self._timeout = httpx.Timeout(timeout_seconds, connect=CONNECT_TIMEOUT_SECONDS)
@@ -169,6 +172,19 @@ class OpenAICompatibleProvider(LLMProvider):
     @property
     def base_url(self) -> str:
         return self._base_url
+
+    @property
+    def copilot_model(self) -> str:
+        return self._copilot_model
+
+    @property
+    def copilot_effort(self) -> str:
+        """No local runtime implements Anthropic's effort control.
+
+        Returned empty rather than guessed at, so the call site can pass it
+        through unconditionally and this provider simply ignores it.
+        """
+        return ""
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -274,24 +290,41 @@ class OpenAICompatibleProvider(LLMProvider):
         return ""
 
     # ---------------------------------------------------------------- agents --
-    def chat(self, system_prompt: str, messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,  # noqa: ARG002 — no local runtime has one
+    ) -> ChatResult:
+        requested_model = model or self._chat_model
         payload = {
-            "model": self._chat_model,
+            "model": requested_model,
             "max_tokens": max_tokens or self._max_tokens,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
         }
-        body, _latency = self._post(payload, self._chat_model)
-        return self._first_message(body)
+        body, latency_ms = self._post(payload, requested_model)
+        return ChatResult(
+            text=self._first_message(body),
+            metadata=self._metadata(body, requested_model, self._base_url, latency_ms),
+        )
 
     def analyze_structured(
         self,
         system_prompt: str,
         user_text: str,
         tool_schema: dict[str, Any],
+        *,
+        model: str | None = None,
+        effort: str | None = None,  # noqa: ARG002 — no local runtime has one
+        max_tokens: int | None = None,
     ) -> StructuredAnalysisResult:
+        requested_model = model or self._analysis_model
         payload = {
-            "model": self._analysis_model,
-            "max_tokens": self._max_tokens,
+            "model": requested_model,
+            "max_tokens": max_tokens or self._max_tokens,
             # Deterministic decoding: this is an extraction task, and two
             # different readings of the same sentence would make a historic
             # decision impossible to reproduce.
@@ -310,7 +343,7 @@ class OpenAICompatibleProvider(LLMProvider):
             },
         }
         try:
-            body, latency_ms = self._post(payload, self._analysis_model)
+            body, latency_ms = self._post(payload, requested_model)
         except StructuredAnalysisError as exc:
             # Servers that do not implement json_schema reject the whole
             # request rather than ignoring the field. Retry once in the
@@ -321,15 +354,15 @@ class OpenAICompatibleProvider(LLMProvider):
             logger.info("Local endpoint rejected json_schema; retrying with json_object")
             payload["response_format"] = {"type": "json_object"}
             try:
-                body, latency_ms = self._post(payload, self._analysis_model)
+                body, latency_ms = self._post(payload, requested_model)
             except StructuredAnalysisError as retry_exc:
                 if retry_exc.http_status not in (400, 422):
                     raise
                 logger.info("Local endpoint rejected json_object too; retrying as plain text")
                 payload.pop("response_format", None)
-                body, latency_ms = self._post(payload, self._analysis_model)
+                body, latency_ms = self._post(payload, requested_model)
 
-        metadata = self._metadata(body, self._analysis_model, self._base_url, latency_ms)
+        metadata = self._metadata(body, requested_model, self._base_url, latency_ms)
         text = self._first_message(body)
         if not text:
             raise StructuredAnalysisError("invalid_output", metadata=metadata, error_code="empty_response")

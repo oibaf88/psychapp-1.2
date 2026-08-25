@@ -708,6 +708,9 @@ class LLMEndpointConfigIn(BaseModel):
     base_url: Optional[str] = None
     chat_model: str = Field(min_length=1, max_length=160)
     analysis_model: str = Field(min_length=1, max_length=160)
+    # Agent 3. Blank is meaningful: it means "same model as the chat agent",
+    # which is what the copilot used before it had a setting of its own.
+    copilot_model: Optional[str] = Field(default=None, max_length=160)
     # null keeps the stored key, "" clears it. The current key is never
     # returned, so the UI cannot echo it back by accident.
     api_key: Optional[str] = Field(default=None, max_length=400)
@@ -721,6 +724,7 @@ class LLMEndpointTestIn(BaseModel):
     base_url: Optional[str] = None
     chat_model: str = Field(min_length=1, max_length=160)
     analysis_model: Optional[str] = Field(default=None, max_length=160)
+    copilot_model: Optional[str] = Field(default=None, max_length=160)
     api_key: Optional[str] = Field(default=None, max_length=400)
     timeout_seconds: int = Field(default=30, ge=5, le=600)
 

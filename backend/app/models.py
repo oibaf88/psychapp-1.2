@@ -437,7 +437,11 @@ class TherapistCopilotMessage(Base):
     kind: Mapped[str] = mapped_column(String(24), nullable=False, default="question")
     # question | answer | summary
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    requested_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 160 to match llm_endpoint_configs.chat_model/analysis_model/copilot_model.
+    # At 128 a valid configured model name could produce a reply and then be
+    # rejected on INSERT, leaving the professional's question committed with
+    # no answer beside it.
+    requested_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     context_window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     context_counts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -504,8 +508,9 @@ class Agent2AnalysisTrace(Base):
     # alone stops identifying anything: two deployments can both say
     # "llama-3.1-8b" and mean different weights on different machines.
     provider_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
-    response_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 160, matching the model names llm_endpoint_configs accepts.
+    requested_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    response_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     effort: Mapped[str] = mapped_column(String(16), nullable=False)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -580,6 +585,10 @@ class LLMEndpointConfig(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     chat_model: Mapped[str] = mapped_column(String(160), nullable=False)
     analysis_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Agent 3, the clinical copilot. Nullable, and NULL means "same as
+    # chat_model" — the behaviour of every row written before this column
+    # existed, so old rows keep meaning exactly what they meant.
+    copilot_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)

@@ -806,6 +806,11 @@ export interface LLMEndpointSummary {
   base_url: string | null;
   chat_model: string;
   analysis_model: string;
+  /** Agent 3, resolved — falls back to chat_model. For display. */
+  copilot_model: string;
+  /** What was actually configured. Empty means "follows chat". For the form. */
+  copilot_model_explicit: string;
+  copilot_model_is_inherited: boolean;
   max_tokens: number;
   timeout_seconds: number;
   source: "environment" | "runtime" | string;
@@ -830,6 +835,8 @@ export interface LLMEndpointConfigIn {
   base_url?: string | null;
   chat_model: string;
   analysis_model: string;
+  /** Blank means "same model as chat" — the backend applies the fallback. */
+  copilot_model?: string | null;
   /** null keeps the stored key; "" clears it. It is never sent back out. */
   api_key?: string | null;
   max_tokens: number;
@@ -842,6 +849,7 @@ export interface LLMEndpointTestIn {
   base_url?: string | null;
   chat_model: string;
   analysis_model?: string | null;
+  copilot_model?: string | null;
   api_key?: string | null;
   timeout_seconds: number;
 }
