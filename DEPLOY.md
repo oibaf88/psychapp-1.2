@@ -44,7 +44,7 @@ instance alive.
 
 ### What is in `supabase/migrations/`
 
-Filename order is apply order, and the five files together are the whole
+Filename order is apply order, and the nine files together are the whole
 schema:
 
 | File | Adds |
@@ -54,11 +54,28 @@ schema:
 | `20260815160000_add_therapist_copilot_messages.sql` | `therapist_copilot_messages`, behind the clinical copilot. |
 | `20260815180000_add_psychosocial_observations.sql` | `agent2_analysis_traces.agent_role` and `psychosocial_observations`, which stores a bounded verbatim fragment of the patient's own text. |
 | `20260818120000_add_llm_endpoint_config.sql` | `llm_endpoint_configs` and the provider/model provenance columns on chat turns and analysis traces. |
+| `20260825120000_add_copilot_model.sql` | `llm_endpoint_configs.copilot_model`, so Agent 3 can be pinned separately. Nullable: NULL keeps meaning "same model as chat", which is what every earlier row meant. |
+| `20260825130000_widen_provenance_model_columns.sql` | Widens `requested_model` / `response_model` to `varchar(160)` — the length the endpoint config already accepts. At 128 a valid long model name produced a reply the database then refused to record. |
+| `20260825140000_widen_agent_role_for_merged_analyzer.sql` | Lets `agent2_analysis_traces.agent_role` hold `analyzer_merged`, the single analyser that replaced Agents 2 and 4. Still accepts the two retired values, which existing rows carry. |
+| `20260825160000_add_patient_profiles.sql` | `patient_profiles`: the per-patient linguistic baseline and accumulated portrait, so a reading is judged against that person rather than a constant. |
 
 Every file is idempotent and opens its own transaction: re-running is a no-op,
 and a failure rolls that file back instead of leaving the schema half applied.
-Applying all five to an empty database reproduces exactly the model graph in
+Applying all nine to an empty database reproduces exactly the model graph in
 `backend/app/models.py`.
+
+All four of the `20260825*` files are expand-only — a nullable column, three
+widened types, a widened CHECK and one new table — so they are safe to apply
+**before** the code that uses them is deployed, which is the order you want:
+the schema grows first, the application catches up second. Nothing is
+backfilled, because an absent value in these columns already means something
+exact and writing a guess into it would turn that absence into a decision
+nobody made.
+
+The `Tests` workflow applies all nine to a throwaway Postgres on every pull
+request, re-applies the newest four to prove they are idempotent, and runs
+`verify.sql` against the result — under the same role model as the real
+project, with `postgres` deliberately not a superuser.
 
 ### Apply them
 
@@ -284,7 +301,7 @@ regexes.
 5. Remove every synthetic row and account used by the smoke test. The
    per-table state that used to be checked by hand here — owner, RLS, FORCE
    RLS, the `backend_full_access` policy, no privileges for the PostgREST
-   roles — is what `verify.sql` covers in step 3, for all 21 tables rather
+   roles — is what `verify.sql` covers in step 3, for all 22 tables rather
    than just `agent2_analysis_traces`.
 
 ---
