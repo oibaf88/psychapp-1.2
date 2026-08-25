@@ -7,17 +7,23 @@ on it — the reason the endpoint is editable at all.
 
 Who may change it
 -----------------
-Any authenticated account, in every profile, because on a self-hosted
-install the person testing a local model is often signed in as an ordinary
-user rather than as an administrator. Two things keep that honest:
+Reading is open to any authenticated account: knowing which model is
+answering is part of understanding what the app just told you, and the
+payload carries no secret. Writing takes two separate permissions:
 
 * ``LLM_ALLOW_RUNTIME_OVERRIDE`` gates the whole feature at deployment
-  level. Turn it off on any install where the people using the app are not
-  the people running it — the endpoints then report the environment
-  configuration and refuse writes.
-* Every change is written to the audit log with who made it and what the
-  endpoint became, and the previous configuration is retained rather than
-  overwritten.
+  level, and is **off** unless the deployment turns it on. With it off the
+  endpoints report the environment configuration and refuse writes.
+* ``admin_clinical`` gates the account. Redirecting the agents sends
+  patient text to whatever server is named, so it is an operator action,
+  not something a patient or a therapist should be able to do by opening a
+  settings screen. This deliberately makes the single-operator case a
+  little less convenient — that operator has to sign in as the admin
+  account — in exchange for the shared case being safe by default.
+
+Every change is written to the audit log with who made it and what the
+endpoint became, and the previous configuration is retained rather than
+overwritten.
 
 What is deliberately not exposed
 --------------------------------
@@ -41,7 +47,7 @@ from app.schemas import (
     LLMEndpointTestIn,
     LLMEndpointTestOut,
 )
-from app.security import get_current_user
+from app.security import get_current_user, require_admin
 from app.services import audit, llm_config
 from app.services.llm import build_provider
 from app.services.llm.base import StructuredAnalysisError
@@ -61,18 +67,38 @@ WARNING_DISABLED = (
     "El cambio de endpoint está desactivado en este despliegue (LLM_ALLOW_RUNTIME_OVERRIDE=false). "
     "Se usa la configuración del entorno."
 )
+WARNING_NOT_ADMIN = (
+    "Solo una cuenta de administración clínica puede cambiar el endpoint del modelo: apuntarlo a otro "
+    "servidor envía el texto de los pacientes a ese servidor. Puedes ver qué modelo está atendiendo, "
+    "pero no modificarlo."
+)
+
+ADMIN_ROLE = "admin_clinical"
 
 
-def _status(db: Session) -> LLMEndpointStatusOut:
+def _status(db: Session, user: User) -> LLMEndpointStatusOut:
     settings = get_settings()
     active = llm_config.resolve(db)
     environment = llm_config.environment_config()
+    allowed = settings.llm_allow_runtime_override
+    is_admin = user.role == ADMIN_ROLE
+
+    if active.is_local:
+        notice = WARNING_LOCAL
+    elif not allowed:
+        notice = WARNING_DISABLED
+    elif not is_admin:
+        notice = WARNING_NOT_ADMIN
+    else:
+        notice = None
+
     return LLMEndpointStatusOut(
         active=active.public_dict(),
         environment_default=environment.public_dict(),
-        override_allowed=settings.llm_allow_runtime_override,
+        override_allowed=allowed,
+        can_edit=allowed and is_admin,
         is_local=active.is_local,
-        notice=WARNING_LOCAL if active.is_local else (None if settings.llm_allow_runtime_override else WARNING_DISABLED),
+        notice=notice,
     )
 
 
@@ -82,14 +108,14 @@ def read_llm_settings(
     user: User = Depends(get_current_user),
 ):
     """Which model is serving the app right now."""
-    return _status(db)
+    return _status(db, user)
 
 
 @router.put("", response_model=LLMEndpointStatusOut)
 def update_llm_settings(
     payload: LLMEndpointConfigIn,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
     """Point the inference agents at a different endpoint."""
     settings = get_settings()
@@ -127,13 +153,13 @@ def update_llm_settings(
             "analysis_model": config.analysis_model,
         },
     )
-    return _status(db)
+    return _status(db, user)
 
 
 @router.delete("", response_model=LLMEndpointStatusOut)
 def reset_llm_settings(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
     """Go back to the model configured in the deployment environment."""
     settings = get_settings()
@@ -147,14 +173,14 @@ def reset_llm_settings(
         action="llm_endpoint_reset",
         entity_type="llm_endpoint_config",
     )
-    return _status(db)
+    return _status(db, user)
 
 
 @router.post("/test", response_model=LLMEndpointTestOut)
 def test_llm_endpoint(
     payload: LLMEndpointTestIn,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
     """Try a candidate endpoint before committing to it.
 

@@ -474,3 +474,129 @@ class ActiveConfigWriteTests(unittest.TestCase):
             self._set(db, base_url="")
         self.assertEqual(db.events, [])
         self.assertTrue(previous.is_active)
+
+
+class OverrideGateTests(unittest.TestCase):
+    """Who may repoint the agents, and what happens when nobody may.
+
+    Redirecting the endpoint makes the server post patient text to a URL a
+    human typed in, so it is gated twice: once at deployment level and once
+    at account level. These tests pin both gates and the default.
+    """
+
+    def _user(self, role):
+        return SimpleNamespace(id="u1", role=role)
+
+    def _settings(self, allow):
+        return SimpleNamespace(
+            llm_allow_runtime_override=allow,
+            anthropic_chat_model="claude-opus-5",
+            anthropic_analysis_model="claude-opus-5",
+            anthropic_max_tokens=8192,
+        )
+
+    def test_the_shipped_default_is_off(self):
+        """A deployment that never mentions the variable must not get it on.
+
+        render.yaml did not set it, so the previous `True` default meant the
+        hosted install shipped with the override live.
+        """
+        from app.config import Settings
+
+        self.assertFalse(Settings.model_fields["llm_allow_runtime_override"].default)
+
+    def test_render_blueprint_pins_it_off(self):
+        import pathlib
+
+        blueprint = pathlib.Path(__file__).resolve().parents[2] / "render.yaml"
+        text = blueprint.read_text(encoding="utf-8")
+        self.assertIn("LLM_ALLOW_RUNTIME_OVERRIDE", text)
+        # The value is on the line after the key in Render's env-var shape.
+        key_line = text.index("LLM_ALLOW_RUNTIME_OVERRIDE")
+        self.assertIn('value: "false"', text[key_line : key_line + 120])
+
+    def test_writes_are_admin_only(self):
+        """The role check is a dependency, so assert the dependency itself."""
+        import inspect
+
+        from app.routers import llm_settings
+        from app.security import require_admin
+
+        for handler in (
+            llm_settings.update_llm_settings,
+            llm_settings.reset_llm_settings,
+            llm_settings.test_llm_endpoint,
+        ):
+            default = inspect.signature(handler).parameters["user"].default
+            self.assertIs(
+                default.dependency,
+                require_admin,
+                f"{handler.__name__} must require admin_clinical",
+            )
+
+    def test_reading_stays_open_to_any_account(self):
+        import inspect
+
+        from app.routers import llm_settings
+        from app.security import get_current_user
+
+        default = inspect.signature(llm_settings.read_llm_settings).parameters["user"].default
+        self.assertIs(default.dependency, get_current_user)
+
+    def test_require_admin_rejects_a_therapist(self):
+        from fastapi import HTTPException
+
+        from app.security import require_roles
+
+        dep = require_roles("admin_clinical")
+        with self.assertRaises(HTTPException) as caught:
+            dep(user=self._user("therapist"))
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_status_says_a_therapist_cannot_edit_and_explains_why(self):
+        from app.routers import llm_settings
+
+        llm_config.invalidate_cache()
+        with patch.object(llm_config, "get_settings", return_value=self._settings(True)), patch.object(
+            llm_settings, "get_settings", return_value=self._settings(True)
+        ):
+            status = llm_settings._status(db=None, user=self._user("therapist"))
+        self.assertTrue(status.override_allowed)
+        self.assertFalse(status.can_edit)
+        self.assertEqual(status.notice, llm_settings.WARNING_NOT_ADMIN)
+        llm_config.invalidate_cache()
+
+    def test_status_lets_an_admin_edit_when_the_deployment_allows_it(self):
+        from app.routers import llm_settings
+
+        llm_config.invalidate_cache()
+        with patch.object(llm_config, "get_settings", return_value=self._settings(True)), patch.object(
+            llm_settings, "get_settings", return_value=self._settings(True)
+        ):
+            status = llm_settings._status(db=None, user=self._user("admin_clinical"))
+        self.assertTrue(status.can_edit)
+        self.assertIsNone(status.notice)
+        llm_config.invalidate_cache()
+
+    def test_an_admin_still_cannot_edit_where_the_deployment_forbids_it(self):
+        """The deployment gate is the outer one: role does not override it."""
+        from app.routers import llm_settings
+
+        llm_config.invalidate_cache()
+        with patch.object(llm_config, "get_settings", return_value=self._settings(False)), patch.object(
+            llm_settings, "get_settings", return_value=self._settings(False)
+        ):
+            status = llm_settings._status(db=None, user=self._user("admin_clinical"))
+        self.assertFalse(status.can_edit)
+        self.assertEqual(status.notice, llm_settings.WARNING_DISABLED)
+        llm_config.invalidate_cache()
+
+    def test_the_write_handlers_refuse_when_the_deployment_forbids_it(self):
+        from fastapi import HTTPException
+
+        from app.routers import llm_settings
+
+        with patch.object(llm_settings, "get_settings", return_value=self._settings(False)):
+            with self.assertRaises(HTTPException) as caught:
+                llm_settings.reset_llm_settings(db=None, user=self._user("admin_clinical"))
+            self.assertEqual(caught.exception.status_code, 403)

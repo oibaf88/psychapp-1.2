@@ -736,6 +736,10 @@ class LLMEndpointTestOut(BaseModel):
 class LLMEndpointStatusOut(BaseModel):
     active: dict[str, Any]
     environment_default: dict[str, Any]
+    # The deployment allows a runtime override at all.
     override_allowed: bool
+    # ...and *this* account may actually perform one (admin_clinical only).
+    # The UI locks the form on either, so it needs both to say which.
+    can_edit: bool = False
     is_local: bool
     notice: Optional[str] = None
