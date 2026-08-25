@@ -1,4 +1,4 @@
 # Test-only dependencies. Kept out of requirements.txt so the runtime image
 # does not ship a test runner.
 -r requirements.txt
-pytest==8.3.3
+pytest==9.0.3
