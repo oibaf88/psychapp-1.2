@@ -2591,3 +2591,41 @@ tr.row-highlight {
 .recharts-tooltip-label {
   color: var(--ink-muted) !important;
 }
+
+/* Accumulated patient profile: portrait, agenda and personal baseline. */
+.profile-panel textarea {
+  /* Width, padding, border, fill and colour already come from the base
+     input rule above; only the growth direction is specific to this one. */
+  resize: vertical;
+}
+
+.profile-panel h3 {
+  margin: 1.5rem 0 0.35rem;
+}
+
+.profile-panel h3:first-child {
+  margin-top: 0;
+}
+
+.thread-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.thread-list li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.thread-list li button {
+  margin-left: auto;
+}
