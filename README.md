@@ -75,9 +75,16 @@ The LLM call sits behind a small `LLMProvider` interface
 (`backend/app/services/llm/`), and there are now two implementations: Claude
 over the Anthropic API, and any server speaking the OpenAI chat-completions
 API — llama.cpp, Ollama, LM Studio, vLLM, LocalAI. **Ajustes → Modelo de
-lenguaje** switches between them at runtime, in every profile, so you can see
-how the app behaves on a model you host yourself without redeploying. Set
-`LLM_ALLOW_RUNTIME_OVERRIDE=false` to lock the choice to the environment.
+lenguaje** switches between them at runtime, so you can see how the app
+behaves on a model you host yourself without redeploying.
+
+That switch is **off unless you turn it on**: set
+`LLM_ALLOW_RUNTIME_OVERRIDE=true`, and sign in as an `admin_clinical`
+account. Both gates exist for the same reason — redirecting the agents makes
+the server send patient text to whatever URL is named, so it belongs to
+whoever runs the deployment, not to whoever happens to be signed in. Everyone
+else can still see which model is answering; they just cannot change it. The
+hosted blueprint (`render.yaml`) pins it to `false`.
 
 Three things are worth knowing before pointing it somewhere else:
 

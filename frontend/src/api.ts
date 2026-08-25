@@ -817,7 +817,10 @@ export interface LLMEndpointSummary {
 export interface LLMEndpointStatusOut {
   active: LLMEndpointSummary;
   environment_default: LLMEndpointSummary;
+  /** The deployment permits a runtime override at all. */
   override_allowed: boolean;
+  /** ...and this account may perform one. Only admin_clinical may. */
+  can_edit: boolean;
   is_local: boolean;
   notice: string | null;
 }

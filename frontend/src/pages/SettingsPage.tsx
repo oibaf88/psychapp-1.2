@@ -229,7 +229,11 @@ export default function SettingsPage() {
   }
 
   const active = status?.active;
-  const locked = Boolean(status && !status.override_allowed);
+  // Two different reasons the form can be read-only, and they need different
+  // instructions: the deployment has the feature off, or this account is not
+  // an administrator. `notice` above already explains which.
+  const disabledByDeployment = Boolean(status && !status.override_allowed);
+  const locked = Boolean(status && !status.can_edit);
 
   return (
     <div className="page">
@@ -297,9 +301,10 @@ export default function SettingsPage() {
 
         {status?.notice && <p className={status.is_local ? "warning" : "info"}>{status.notice}</p>}
 
-        {locked && (
+        {disabledByDeployment && (
           <p className="meta">
-            Para habilitarlo, arranca el backend con <code>LLM_ALLOW_RUNTIME_OVERRIDE=true</code>.
+            Para habilitarlo, arranca el backend con <code>LLM_ALLOW_RUNTIME_OVERRIDE=true</code>. Viene desactivado a
+            propósito: en un despliegue compartido, quien usa la aplicación no es quien la administra.
           </p>
         )}
 

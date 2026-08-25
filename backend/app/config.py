@@ -49,10 +49,15 @@ class Settings(BaseSettings):
     # The server fetches whatever URL is configured, so this is genuinely a
     # deployment decision and not only a UI one: patient text is sent to that
     # endpoint, and Agent 2's ability to spot a linguistic risk marker
-    # becomes a property of the model behind it. Turn it off on any
-    # deployment where the people using the app are not the people running
-    # it. Every change is written to the audit log either way.
-    llm_allow_runtime_override: bool = True
+    # becomes a property of the model behind it.
+    #
+    # Off by default. A deployment where the people using the app are not the
+    # people running it must never expose this, and defaulting to on meant a
+    # deployment that simply never mentioned the variable — as this repo's
+    # own render.yaml did — shipped with it enabled. Turning it on is now a
+    # deliberate act. Even then only `admin_clinical` may write (see
+    # routers/llm_settings.py), and every change goes to the audit log.
+    llm_allow_runtime_override: bool = False
 
     # --- App / locale -----------------------------------------------------
     app_locale: str = "es-ES"

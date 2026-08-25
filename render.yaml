@@ -49,6 +49,13 @@ services:
         value: high
       - key: ANTHROPIC_MAX_TOKENS
         value: "8192"
+      # Runtime endpoint override: OFF. This is a shared deployment — the
+      # people using the app are not the people running it — and the feature
+      # lets a signed-in account redirect the agents, and therefore patient
+      # text, to an arbitrary server. Leave it false here; use it on
+      # single-operator installs only.
+      - key: LLM_ALLOW_RUNTIME_OVERRIDE
+        value: "false"
 
       # --- Auth ---------------------------------------------------------
       - key: JWT_SECRET
