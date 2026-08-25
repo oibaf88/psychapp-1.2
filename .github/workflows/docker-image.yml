@@ -4,7 +4,9 @@ on:
   push:
     branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+    # `claude/**` too: a stacked PR targets the branch below it, so a
+    # master-only filter left every PR in a stack with no checks at all.
+    branches: [ "master", "claude/**" ]
 
 jobs:
 
