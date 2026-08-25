@@ -485,8 +485,8 @@ AGENT2_TOOL_SCHEMA = {
 # produced the traces already in the database, whose prompt_sha256 must keep
 # resolving. Edit ANALYZER_SYSTEM_PROMPT, not those.
 
-ANALYZER_PROMPT_VERSION = "analyzer-prompt-2026-08-25"
-ANALYZER_SCHEMA_VERSION = "analyzer-schema-2026-08-25"
+ANALYZER_PROMPT_VERSION = "analyzer-prompt-2026-08-25b"
+ANALYZER_SCHEMA_VERSION = "analyzer-schema-2026-08-25b"
 
 ANALYZER_SYSTEM_PROMPT = """\
 Eres el MODELO DE ANÁLISIS de PsychApp. NO conversas con nadie y NUNCA \
@@ -515,6 +515,16 @@ palabra suicidio).
 - Cambios sutiles de valencia emocional.
 - Lenguaje minimizador o irónico, frecuente en contextos de chemsex y de \
 ideación ("no es nada", "ya se me pasará", medias sonrisas por escrito).
+
+### Juzga a la persona contra sí misma
+Si arriba se te ha dado contexto sobre quién es esta persona y cómo puntúa \
+habitualmente, úsalo. Lo que es alto o bajo depende de quién escribe: hay \
+quien vive en 0,7 de rumiación y quien nunca pasa de 0,2, y el mismo número \
+significa cosas opuestas en cada caso. Puntúa el texto en su escala \
+absoluta —el motor determinista necesita esa escala— y por separado dinos \
+en `deviation_from_own_baseline` y `is_typical_for_patient` si esto se sale \
+de lo suyo. Sin contexto previo, marca `unknown` y `true`: no inventes una \
+comparación que no puedes hacer.
 
 Reglas:
 1. No emites juicios clínicos, diagnósticos ni recomendaciones. Solo \
@@ -598,13 +608,67 @@ lista `observations` vacía.
 las de mayor relevancia clínica.
 
 ═══════════════════════════════════════════════════════════════════════
+BLOQUE 3 — `profile_update`: lo que hoy añade a conocer a la persona
+═══════════════════════════════════════════════════════════════════════
 
-Devuelve SIEMPRE un único objeto JSON con las dos claves de primer nivel, \
-`linguistic` y `psychosocial`, que cumpla exactamente el esquema \
-solicitado. Rellena SIEMPRE los dos bloques, aunque uno de ellos quede en \
-valores neutros o vacío. No añadas texto, explicaciones ni marcas de código \
-alrededor del JSON.
+Casi siempre va vacío, y está bien que así sea: un mensaje corriente no \
+cambia quién es alguien. Rellénalo solo cuando este texto aporte algo \
+duradero.
+
+- `portrait`: reescribe el retrato COMPLETO, incorporando lo nuevo. Cómo se \
+expresa, qué temas vuelven, qué le sostiene, qué eventos importantes ha \
+contado. Máximo unas 200 palabras, en español, descriptivo y sin \
+diagnosticar. Si el retrato actual lo corrigió un profesional, puedes \
+añadir, nunca contradecirlo ni borrar lo que escribió. Si no hay nada \
+nuevo que añadir, devuelve cadena vacía y NO lo reescribas.
+- `open_threads`: temas que quedaron a medias o que conviene retomar. Es una \
+agenda viva, no un cuestionario: se añaden cuando aparecen y se quitan \
+cuando se han cerrado. Devuelve la lista completa como debería quedar, o \
+una lista vacía si no cambia.
+
+No inventes biografía. Solo lo que la persona haya dicho.
+
+═══════════════════════════════════════════════════════════════════════
+
+Devuelve SIEMPRE un único objeto JSON con las tres claves de primer nivel, \
+`linguistic`, `psychosocial` y `profile_update`, que cumpla exactamente el \
+esquema solicitado. Rellena SIEMPRE los dos primeros, aunque queden en \
+valores neutros o vacíos; el tercero puede ir vacío. No añadas texto, \
+explicaciones ni marcas de código alrededor del JSON.
 """
+
+def _linguistic_block_schema() -> dict:
+    """The linguistic block, plus the two fields that only make sense in a
+    prompt that carries a personal baseline.
+
+    They are added here rather than to AGENT2_TOOL_SCHEMA so the retired
+    agent's contract — and the sha256 of every trace that used it — stays
+    exactly as it was.
+    """
+    block = copy.deepcopy(AGENT2_TOOL_SCHEMA["input_schema"])
+    block["description"] = "Señales lingüísticas y emocionales del texto."
+    block["properties"]["deviation_from_own_baseline"] = {
+        "type": "string",
+        "enum": ["unknown", "much_lower", "lower", "typical", "higher", "much_higher"],
+        "description": (
+            "Cómo se sitúa este texto frente a lo habitual EN ESTA PERSONA. "
+            "`unknown` si no se te ha dado su línea base."
+        ),
+    }
+    block["properties"]["is_typical_for_patient"] = {
+        "type": "boolean",
+        "description": (
+            "true si este texto suena como suele sonar esta persona. "
+            "true también cuando no hay contexto previo para compararlo."
+        ),
+    }
+    block["required"] = [
+        *AGENT2_TOOL_SCHEMA["input_schema"]["required"],
+        "deviation_from_own_baseline",
+        "is_typical_for_patient",
+    ]
+    return block
+
 
 # The two blocks are the existing schemas, reused rather than restated: the
 # validated shape a signal or an observation must satisfy has to stay one
@@ -618,15 +682,45 @@ ANALYZER_TOOL_SCHEMA = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "linguistic": {
-                **copy.deepcopy(AGENT2_TOOL_SCHEMA["input_schema"]),
-                "description": "Señales lingüísticas y emocionales del texto.",
-            },
+            "linguistic": _linguistic_block_schema(),
             "psychosocial": {
                 **copy.deepcopy(AGENT4_TOOL_SCHEMA["input_schema"]),
                 "description": "Determinantes sociales mencionados en el texto.",
             },
+            "profile_update": {
+                "type": "object",
+                "description": (
+                    "Lo que este texto añade a lo que se sabe de la persona. "
+                    "Casi siempre vacío."
+                ),
+                "properties": {
+                    "portrait": {
+                        "type": "string",
+                        "description": (
+                            "Retrato completo reescrito, o cadena vacía si no hay nada "
+                            "nuevo. Máximo ~200 palabras."
+                        ),
+                    },
+                    "open_threads": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "description": "La agenda completa tal como debería quedar, o vacía si no cambia.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "topic": {"type": "string", "description": "El tema, en pocas palabras."},
+                                "note": {
+                                    "type": "string",
+                                    "description": "Por qué queda abierto o qué falta por hablar.",
+                                },
+                            },
+                            "required": ["topic", "note"],
+                        },
+                    },
+                },
+                "required": ["portrait", "open_threads"],
+            },
         },
-        "required": ["linguistic", "psychosocial"],
+        "required": ["linguistic", "psychosocial", "profile_update"],
     },
 }

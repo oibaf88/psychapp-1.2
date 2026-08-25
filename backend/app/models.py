@@ -33,7 +33,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -624,4 +624,79 @@ class LLMEndpointConfig(Base):
             postgresql_where=text("is_active"),
             sqlite_where=text("is_active"),
         ),
+    )
+
+
+class PatientProfile(Base):
+    """What is known about one patient, accumulated across sessions.
+
+    The analytic agents used to see one message at a time, judged against
+    constants identical for every patient. `rumination > 0.60` meant the
+    same thing for someone who writes in long anxious spirals as for someone
+    who answers in four words — which is how a person announcing they had
+    decided to change their life ended up treated as a crisis.
+
+    This row is the other half of that comparison: who this person is, and
+    what is normal *for them*.
+
+    On the inference side of the fact/inference wall, without exception.
+    Nothing here is a ConfirmedFact, nothing here decides an alert level,
+    and the deterministic engine reads it only to ask "is this unusual for
+    them?" — never to conclude anything on its own. A therapist can correct
+    the portrait; the model can never overwrite what a person declared.
+
+    Exactly one row per patient, kept current rather than versioned as a
+    series: the drift that matters is auditable through `previous_portrait`
+    plus the trace of the analysis that changed it, and a full history table
+    would collect a rewritten paragraph per message for no clinical gain.
+    """
+
+    __tablename__ = "patient_profiles"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+
+    # Mean and standard deviation of this patient's own linguistic scores,
+    # so a reading can be judged against them instead of against a constant.
+    # Shape: {"rumination_score": {"mean": .., "std": .., "n": ..}, ...}
+    #
+    # jsonb on Postgres, json on SQLite. The older JSON columns in this file
+    # are plain `json`, which quietly disagrees with the `jsonb` their
+    # migrations create; matching explicitly here keeps create_all and the
+    # production migration describing the same table.
+    linguistic_baseline: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    linguistic_baseline_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    linguistic_baseline_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # How this person talks, what keeps coming up, what holds them together.
+    # Bounded in length so it cannot grow into the prompt's whole budget.
+    portrait: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The version before the current one, kept so a drifting portrait can be
+    # compared against what it drifted from. One step back is enough to see
+    # a rewrite that went wrong; nobody audits the twentieth.
+    previous_portrait: Mapped[str | None] = mapped_column(Text, nullable=True)
+    portrait_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    portrait_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when a clinician edited the portrait by hand. The analyser may add
+    # to a hand-edited portrait but is told not to contradict it.
+    portrait_edited_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Topics left half-finished, or worth returning to. A live agenda, not a
+    # questionnaire: [{"topic": .., "note": .., "opened_at": .., "source": ..}]
+    open_threads: Mapped[list | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("portrait_version >= 0", name="ck_patient_profile_portrait_version"),
+        CheckConstraint("linguistic_baseline_n >= 0", name="ck_patient_profile_baseline_n"),
     )

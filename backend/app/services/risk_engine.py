@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models import AlfaSignal, ConfirmedFact, ProfessionalAlert, RiskAssessment
 from app.services import baseline as baseline_service
 from app.services import notifications as notification_service
+from app.services import profile as profile_service
 from app.services import psychosocial as psychosocial_service
 
 MODEL_VERSION = "risk-engine-v1.3"
@@ -33,8 +34,26 @@ PSYCHOSOCIAL_INDEX_N3_CONVERGENT = 0.60
 PSYCHOSOCIAL_INDEX_N2_ALONE = 0.50
 # The "inner half" of the convergence rules: a signal that on its own is
 # far too ordinary to alert on, and only counts next to a social rupture.
+#
+# These are absolute constants, identical for every patient, which is what
+# they were for their whole history. They remain the fallback, and for a
+# patient the system does not know yet they remain the whole rule.
 SUBTLE_RUMINATION_MIN = 0.60
 SUBTLE_NEGATIVE_VALENCE_MIN = 0.70
+
+# Once a patient has enough of their own history, the same predicate is
+# asked relative to them: how far above their own average is this?
+#
+# A fixed threshold means opposite things for different people. Someone who
+# habitually writes at 0.7 rumination trips `> 0.60` on every ordinary
+# message; someone who habitually sits at 0.15 can double their distress and
+# never reach it. Both are wrong, and the second is the dangerous one.
+#
+# Deliberately an OR, not a replacement: a reading trips the predicate if it
+# is high in absolute terms OR unusual for this person. Making it relative
+# alone would mean a patient whose baseline is genuinely alarming stops
+# tripping anything precisely because it is normal for them.
+PERSONAL_DEVIATION_SIGMA = 1.5
 # Do not spam professionals with duplicate open alerts at the same level.
 ALERT_DEDUPE_HOURS = 24
 
@@ -404,7 +423,15 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
     sleep_values = [float(row.sleep_hours) for row in ordered_checkins]
     sleep_detail = baseline_service.calculate_trend_detail(sleep_values)
     sleep_worsening = sleep_detail.label == "empeorando"
-    rumination_high = isinstance(rumination, (int, float)) and rumination > SUBTLE_RUMINATION_MIN
+    patient_profile = profile_service.get(db, user_id)
+    rumination_deviation = profile_service.deviation(patient_profile, "rumination_score", rumination)
+    rumination_absolute_high = isinstance(rumination, (int, float)) and rumination > SUBTLE_RUMINATION_MIN
+    rumination_unusual = (
+        not rumination_deviation.insufficient_data
+        and rumination_deviation.z is not None
+        and rumination_deviation.z > PERSONAL_DEVIATION_SIGMA
+    )
+    rumination_high = rumination_absolute_high or rumination_unusual
 
     n4_facts = _facts_in_categories(db, user_id, N4_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
     n3_facts = _facts_in_categories(db, user_id, N3_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
@@ -421,9 +448,16 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
     craving_detail = baseline_service.calculate_trend_detail(craving_values)
     craving_rising = craving_detail.label == "aumentando"
     negative_valence = ling.get("negative_valence")
-    negative_valence_high = (
+    valence_deviation = profile_service.deviation(patient_profile, "negative_valence", negative_valence)
+    valence_absolute_high = (
         isinstance(negative_valence, (int, float)) and negative_valence > SUBTLE_NEGATIVE_VALENCE_MIN
     )
+    valence_unusual = (
+        not valence_deviation.insufficient_data
+        and valence_deviation.z is not None
+        and valence_deviation.z > PERSONAL_DEVIATION_SIGMA
+    )
+    negative_valence_high = valence_absolute_high or valence_unusual
 
     # Psychosocial context. `assess` is pure arithmetic over stored rows — no
     # model runs here, so this stays inside the deterministic contract. None
@@ -826,6 +860,31 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
         "sleep_trend": sleep_detail.label,
         "sleep_trend_slope": sleep_detail.slope,
         "rumination_threshold_exceeded": rumination_high if rumination is not None else None,
+        # Why the predicate tripped: the absolute constant, this person's own
+        # normal, or neither. A therapist looking at an alert needs to be able
+        # to tell "unusually high" from "unusual for them", because the second
+        # is a claim about a baseline they can inspect and disagree with.
+        "personal_comparison": {
+            "available": not rumination_deviation.insufficient_data
+            or not valence_deviation.insufficient_data,
+            "baseline_n": patient_profile.linguistic_baseline_n if patient_profile else 0,
+            "minimum_n": profile_service.MIN_SIGNALS_FOR_LINGUISTIC_BASELINE,
+            "sigma_threshold": PERSONAL_DEVIATION_SIGMA,
+            "rumination": {
+                "z": rumination_deviation.z,
+                "personal_mean": rumination_deviation.mean,
+                "personal_std": rumination_deviation.std,
+                "absolute_high": rumination_absolute_high,
+                "unusual_for_this_person": rumination_unusual,
+            },
+            "negative_valence": {
+                "z": valence_deviation.z,
+                "personal_mean": valence_deviation.mean,
+                "personal_std": valence_deviation.std,
+                "absolute_high": valence_absolute_high,
+                "unusual_for_this_person": valence_unusual,
+            },
+        },
         "psychosocial": psychosocial.as_dict(),
     }
     input_facts = {
@@ -874,6 +933,8 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
                 "structural_stable_gte": 0.60,
                 "structural_transition_gte": 0.35,
                 "structural_extreme_lt": 0.20,
+                "personal_deviation_sigma": PERSONAL_DEVIATION_SIGMA,
+                "personal_baseline_minimum_signals": profile_service.MIN_SIGNALS_FOR_LINGUISTIC_BASELINE,
                 "rumination_high_gt": SUBTLE_RUMINATION_MIN,
                 "negative_valence_high_gt": SUBTLE_NEGATIVE_VALENCE_MIN,
                 "rumination_extreme_gt": 0.85,

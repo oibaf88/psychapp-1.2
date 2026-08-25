@@ -95,6 +95,8 @@ def _verify_production_schema() -> None:
         ("llm_endpoint_configs", "copilot_model"),
         ("psychosocial_observations", "id"),
         ("psychosocial_observations", "evidence_quote"),
+        ("patient_profiles", "id"),
+        ("patient_profiles", "linguistic_baseline"),
     }
     with engine.connect() as conn:
         rows = conn.execute(
