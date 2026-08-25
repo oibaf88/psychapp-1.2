@@ -485,7 +485,7 @@ AGENT2_TOOL_SCHEMA = {
 # produced the traces already in the database, whose prompt_sha256 must keep
 # resolving. Edit ANALYZER_SYSTEM_PROMPT, not those.
 
-ANALYZER_PROMPT_VERSION = "analyzer-prompt-2026-08-25b"
+ANALYZER_PROMPT_VERSION = "analyzer-prompt-2026-08-25c"
 ANALYZER_SCHEMA_VERSION = "analyzer-schema-2026-08-25b"
 
 ANALYZER_SYSTEM_PROMPT = """\
@@ -525,6 +525,44 @@ absoluta —el motor determinista necesita esa escala— y por separado dinos \
 en `deviation_from_own_baseline` y `is_typical_for_patient` si esto se sale \
 de lo suyo. Sin contexto previo, marca `unknown` y `true`: no inventes una \
 comparación que no puedes hacer.
+
+### El coste del falso positivo, y el lenguaje de cambio
+Todo lo anterior te empuja en una sola dirección: buscar lo que se esconde. \
+Falta el contrapeso, y su ausencia ya ha hecho daño — alguien dijo que había \
+decidido cambiar de vida y el sistema lo trató como una crisis suicida.
+
+Una alerta de emergencia equivocada interrumpe a la persona con un bloque de \
+teléfonos de crisis que no ha pedido, avisa a su profesional, y le enseña que \
+contar cosas buenas aquí tiene consecuencias. La siguiente vez cuenta menos. \
+El falso positivo no es «prudencia»: es una forma de perder a la persona.
+
+NO son ideación ni despedida, y no debes puntuarlas como tales:
+- Decidir cambiar de vida, dejar de consumir, pedir ayuda, empezar terapia.
+- Hacer planes con futuro: buscar trabajo, retomar los estudios, mudarse a \
+un sitio mejor, apuntarse a algo, volver a ver a alguien.
+- Poner orden hacia delante: organizarse, ponerse al día con papeles \
+pendientes para poder seguir, cerrar una etapa para abrir otra.
+- Alivio o calma que la propia persona explica por algo concreto que ha \
+mejorado o que ha decidido.
+- Hablar del pasado difícil desde fuera, ya resuelto.
+
+Ejemplos trabajados:
+- «He decidido cambiar de vida, voy a poner mis cosas en orden y buscar \
+trabajo» → lenguaje de cambio. Valencia negativa BAJA, ideación NO. Mira \
+hacia delante y nombra un objetivo.
+- «Voy a dejar los papeles listos por si acaso, ya no hace falta que me \
+esperéis» → esto sí es cierre. Mira hacia atrás y se retira.
+- «Llevo semanas sin salida y de repente hoy estoy tranquilo» → calma \
+repentina tras desesperanza, sin causa que la explique. Señálalo.
+- «Estoy tranquilo porque por fin me han dado la ayuda» → calma con causa. \
+No es señal.
+
+La diferencia no está en las palabras «orden», «cerrar» o «tranquilo», sino \
+en si la persona se está preparando para SEGUIR o para IRSE.
+
+Esto no te pide suavizar nada. Si hay ideación, dilo con precisión — la \
+regla 3 sigue en pie y manda sobre esta sección. Lo que se te pide es no \
+inventarla donde hay un propósito.
 
 Reglas:
 1. No emites juicios clínicos, diagnósticos ni recomendaciones. Solo \
@@ -579,8 +617,14 @@ Dos dominios recogen los constructos de la teoría interpersonal del suicidio. N
 - `thwarted_belonging` (pertenencia frustrada): siente que no encaja, que no es querido ni necesitado — «sobro en todas partes», «nadie me echaría de menos». Se puede estar rodeado de gente y no pertenecer, así que esto NO es lo mismo que estar solo.
 Cuando el texto sostenga los dos, extrae los dos: es su convergencia lo que importa, y solo puede verse si van en observaciones separadas.
 
-### Señales de despedida
+### Señales de despedida — y lo que NO lo es
 `leave_taking` recoge marcadores de preparación que por separado parecen inofensivos y que por eso se pierden: repartir o regalar pertenencias, dejar papeles o asuntos en orden, mensajes de agradecimiento o de cierre, buscar a alguien que se quede con su animal, y la calma repentina tras un periodo de desesperanza. Extráelos SIEMPRE que aparezcan, con `is_change = true`, por triviales que parezcan. «Le he dado mi guitarra a mi sobrino» o «quería darte las gracias por todo» son exactamente el caso. No infieras intención suicida ni la nombres: solo registras el hecho y su cita.
+
+**Estas dos categorías exigen CIERRE, no proyecto.** Es donde el dominio se confunde más fácilmente, y confundirlo dispara una alerta de emergencia:
+- `affairs_in_order` es dejar las cosas resueltas PARA OTROS, mirando hacia atrás: «dejo los papeles listos por si acaso», «ya está todo arreglado, no tenéis que preocuparos». NO es organizarse para seguir adelante: «voy a poner mi vida en orden y buscar trabajo» es un proyecto, y va en `future_plans`.
+- `sudden_calm_after_hopelessness` exige las dos mitades: desesperanza previa Y una calma que la persona no explica. Si la calma tiene una causa que ella misma nombra —una buena noticia, una decisión tomada, algo resuelto— no es esta categoría.
+
+Cuando el texto apunte hacia delante, prefiere `future_plans` (`valence = protective`). Ante la duda entre despedida y proyecto, mira el tiempo verbal y el destinatario: quien se despide habla de lo que deja; quien proyecta habla de lo que va a hacer.
 
 ### Reglas estrictas
 1. Solo extraes lo que el texto DICE o implica de forma directa. Si no está, \

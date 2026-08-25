@@ -87,6 +87,7 @@ from app.content.psychosocial_catalog import (
     DOMAIN_KEYS,
     DOMAIN_LABELS,
     DOMAIN_WEIGHTS,
+    PROTECTIVE_CATEGORIES,
     GROUP_LABELS,
     INTERPERSONAL_DOMAINS,
     LEAVE_TAKING_DOMAIN,
@@ -188,11 +189,22 @@ class PsychosocialExtraction(BaseModel):
 def _coherent(observation: PsychosocialObservationIn) -> bool:
     """Drop observations whose category does not belong to their domain.
 
-    The JSON schema constrains both fields independently, so the model can
-    still emit a valid-but-incoherent pair. Rather than guess which half was
-    meant, the row is discarded.
+    The JSON schema constrains the fields independently, so the model can
+    still emit a valid-but-incoherent combination. Rather than guess which
+    part was meant, the row is discarded.
+
+    Two things are checked. The category must belong to the domain. And a
+    category that is protective *by definition* — having future plans,
+    having stable housing, having support — may not be reported as adverse:
+    that reading is the one which moves an index upward, so a model that
+    got the valence backwards would raise a patient's risk for the very
+    things that lower it.
     """
-    return CATEGORY_DOMAIN.get(observation.category) == observation.domain
+    if CATEGORY_DOMAIN.get(observation.category) != observation.domain:
+        return False
+    if observation.category in PROTECTIVE_CATEGORIES and observation.valence == "risk":
+        return False
+    return True
 
 
 def _quote_is_grounded(quote: str, source_text: str) -> bool:
