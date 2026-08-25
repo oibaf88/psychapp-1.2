@@ -154,6 +154,18 @@ def _linguistic_flags(
         "consumption_crisis": _truthy(value.get("consumption_crisis")),
         "rumination_score": value.get("rumination_score"),
         "negative_valence": value.get("negative_valence"),
+        # Collected since the analyser existed and, until now, thrown away.
+        # These four never move a level on their own and are not meant to:
+        # they are what a therapist reads *next to* a flag to judge it.
+        # `ambivalence` in particular is the signal that would have told
+        # someone looking at the false-positive alert that the model had also
+        # detected a desire to change.
+        "ambivalence": value.get("ambivalence"),
+        "urgency_level": value.get("urgency_level"),
+        "emotional_complexity": value.get("emotional_complexity"),
+        "short_rationale": value.get("short_rationale"),
+        "deviation_from_own_baseline": value.get("deviation_from_own_baseline"),
+        "is_typical_for_patient": value.get("is_typical_for_patient"),
         "raw": value,
     }
 
@@ -854,6 +866,17 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             "ideation_indirect": ling["ideation_indirect"] if agent2_available else None,
             "consumption_crisis": ling["consumption_crisis"] if agent2_available else None,
             "negative_valence": negative_valence if agent2_available else None,
+            # Recorded beside the flags, never against them. A level is
+            # decided by the rules above; this is the context a clinician
+            # needs to decide whether the level describes the person.
+            "ambivalence": ling.get("ambivalence") if agent2_available else None,
+            "urgency_level": ling.get("urgency_level") if agent2_available else None,
+            "emotional_complexity": ling.get("emotional_complexity") if agent2_available else None,
+            "short_rationale": ling.get("short_rationale") if agent2_available else None,
+            "deviation_from_own_baseline": (
+                ling.get("deviation_from_own_baseline") if agent2_available else None
+            ),
+            "is_typical_for_patient": ling.get("is_typical_for_patient") if agent2_available else None,
         },
         "craving_trend": craving_detail.label,
         "craving_trend_slope": craving_detail.slope,

@@ -630,6 +630,27 @@ class PsychosocialAdjudicationIn(BaseModel):
     note: Optional[str] = Field(default=None, max_length=1000)
 
 
+class SignalRefutationIn(BaseModel):
+    """A clinician overruling a linguistic inference.
+
+    The reason is mandatory and has no default. It becomes a `correction`
+    fact on the patient's record, so "the model was wrong about this" has to
+    say what it was wrong about — an unexplained refutation would be
+    indistinguishable from a mis-click when someone reviews the case later.
+    """
+
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class SignalRefutationOut(BaseModel):
+    signal_id: uuid.UUID
+    is_active: bool
+    superseded_by_fact: Optional[uuid.UUID] = None
+    correction_fact_id: Optional[uuid.UUID] = None
+    alert_level_after: int
+    alert_level_before: int
+
+
 class PatientMetricsOut(BaseModel):
     window_days: int
     generated_at: Optional[str] = None

@@ -352,9 +352,15 @@ DOMAINS: tuple[Domain, ...] = (
             "pet_rehoming",
             "sudden_calm_after_hopelessness",
         ),
-        # Deliberately unweighted: this domain never moves an index on its own.
-        # It is one leg of the N4 convergence rule and nothing else.
-        weight=0.95,
+        # Genuinely unweighted, which is what the line below used to claim
+        # while carrying 0.95 — nearly the maximum, enough for one
+        # leave-taking observation to push the psychosocial index toward a
+        # threshold by itself. The intent was always that this domain is one
+        # leg of the N4 convergence rule and nothing else, so it contributes
+        # to neither the numerator nor the denominator of any index.
+        # `has_leave_taking_signal` does not read the weight, so the
+        # convergence rule is unaffected.
+        weight=0.0,
         examples=(
             "le he dado mi guitarra a mi sobrino",
             "quería darte las gracias por todo, de verdad",
@@ -530,8 +536,11 @@ ACUTE_CHANGE_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
-# Categories that are protective by definition. Used to sanity-check the
-# model's own `valence`: claiming "support_strong" is adverse is incoherent.
+# Categories that are protective by definition. Applied in
+# `psychosocial._coherent`: a model calling "support_strong" adverse has
+# misread the observation, and an adverse reading is the one that moves an
+# index, so the observation is dropped rather than trusted. This comment
+# described a check that did not exist until it did.
 PROTECTIVE_CATEGORIES: frozenset[str] = frozenset(
     {
         "housing_stable",
