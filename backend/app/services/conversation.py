@@ -22,7 +22,8 @@ anything the model says.
 """
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,8 +32,8 @@ from sqlalchemy.orm import Session
 from app.content.prompts import (
     AGENT1_CRISIS_INSTRUCTION,
     AGENT1_SYSTEM_PROMPT,
-    AGENT2_SYSTEM_PROMPT,
-    AGENT2_TOOL_SCHEMA,
+    ANALYZER_SYSTEM_PROMPT,
+    ANALYZER_TOOL_SCHEMA,
 )
 from app.content.safety_resources import (
     CRISIS_RESOURCES,
@@ -74,6 +75,11 @@ class AnalysisOutcome:
     signal_id: uuid.UUID | None
     status: str
     value: dict | None
+    # The psychosocial half of the same call. Empty when the text was too
+    # short to carry social context, or when only that half failed to
+    # validate — which is why it is reported separately from `status`.
+    observation_ids: list[uuid.UUID] = field(default_factory=list)
+    psychosocial_status: str = "not_attempted"
 
 
 def analyze_text_and_store(
@@ -84,10 +90,17 @@ def analyze_text_and_store(
     source_type: str,
     source_id: uuid.UUID,
     correlation_id: uuid.UUID,
+    observed_at: datetime | None = None,
 ) -> AnalysisOutcome:
-    """Trace Agent 2, validate its output and persist it as an inference.
+    """Analyse one piece of patient text, once, and persist both readings.
 
-    Never raises to the patient-facing flow.  If the trace cannot be
+    This used to be two provider calls over the same text — Agent 2 for the
+    linguistic markers, Agent 4 for the social determinants — each with its
+    own trace. They never disagreed about anything, because their schemas
+    were disjoint by construction; they simply cost twice. Now one call
+    returns both blocks under one trace.
+
+    Never raises to the patient-facing flow. If the trace cannot be
     committed first, no external request is made and the deterministic
     engine proceeds without a fresh signal.
     """
@@ -98,25 +111,44 @@ def analyze_text_and_store(
             source_type=source_type,
             source_id=source_id,
             correlation_id=correlation_id,
+            agent_role=agent2_trace.ANALYZER_ROLE,
         )
     except agent2_trace.TracePersistenceError:
-        logger.error("Agent2 skipped because its trace could not be persisted")
+        logger.error("Analysis skipped because its trace could not be persisted")
         return AnalysisOutcome(correlation_id, None, None, "trace_persistence_error", None)
 
     try:
         provider_result = get_llm_provider(db).analyze_structured(
-            AGENT2_SYSTEM_PROMPT,
+            ANALYZER_SYSTEM_PROMPT,
             text,
-            AGENT2_TOOL_SCHEMA,
+            ANALYZER_TOOL_SCHEMA,
         )
-        result = LinguisticAnalysis.model_validate(provider_result.value).model_dump()
+        value = provider_result.value
+        if not isinstance(value, dict):
+            raise ValueError("analyzer returned a non-object")
+        result = LinguisticAnalysis.model_validate(value.get("linguistic")).model_dump()
     except Exception as exc:  # noqa: BLE001
         # Persist only an allow-listed category and class name.  Raw SDK
         # error messages can echo request data and therefore never enter
         # the database or Render logs.
         agent2_trace.mark_failed(db, trace, exc)
-        logger.error("Agent2 analysis failed safely: %s", type(exc).__name__)
+        logger.error("Analysis failed safely: %s", type(exc).__name__)
         return AnalysisOutcome(correlation_id, trace.id, None, trace.status, None)
+
+    # The psychosocial half is built separately and is allowed to fail on its
+    # own. Losing a linguistic signal because an observation quote came back
+    # malformed would trade a safety-critical input for a contextual one.
+    rows, psychosocial_status = _psychosocial_rows(
+        db,
+        trace,
+        value.get("psychosocial"),
+        user_id=user_id,
+        text=text,
+        source_type=source_type,
+        source_id=source_id,
+        correlation_id=correlation_id,
+        observed_at=observed_at,
+    )
 
     signal = AlfaSignal(
         user_id=user_id,
@@ -127,8 +159,15 @@ def analyze_text_and_store(
     )
     try:
         agent2_trace.mark_succeeded(trace, provider_result.metadata)
+        if psychosocial_status == "invalid_block":
+            # The call succeeded; one block of it did not. Recorded on the
+            # trace rather than in the status, which stays the outcome of
+            # the call itself.
+            trace.error_code = "psychosocial_block_invalid"
         db.add(trace)
         db.add(signal)
+        for row in rows:
+            db.add(row)
         db.commit()
         db.refresh(signal)
     except Exception:  # noqa: BLE001
@@ -138,9 +177,56 @@ def analyze_text_and_store(
             trace,
             StructuredAnalysisError("provider_error", error_code="result_persistence_failed"),
         )
-        logger.error("Agent2 result could not be persisted")
+        logger.error("Analysis result could not be persisted")
         return AnalysisOutcome(correlation_id, trace.id, None, trace.status, None)
-    return AnalysisOutcome(correlation_id, trace.id, signal.id, "succeeded", result)
+    return AnalysisOutcome(
+        correlation_id,
+        trace.id,
+        signal.id,
+        "succeeded",
+        result,
+        observation_ids=[row.id for row in rows],
+        psychosocial_status=psychosocial_status,
+    )
+
+
+def _psychosocial_rows(
+    db: Session,
+    trace,
+    block,
+    *,
+    user_id,
+    text: str,
+    source_type: str,
+    source_id: uuid.UUID,
+    correlation_id: uuid.UUID,
+    observed_at: datetime | None,
+):
+    """Build the psychosocial rows, or explain why there are none.
+
+    Returns ``(rows, status)``. Never raises: a bad psychosocial block must
+    not cost the linguistic signal that came back in the same response.
+    """
+    if not text or len(text.strip()) < psychosocial.MIN_TEXT_CHARS_FOR_EXTRACTION:
+        return [], "skipped_short_text"
+    if not isinstance(block, dict):
+        logger.warning("Analyzer returned no usable psychosocial block")
+        return [], "invalid_block"
+    try:
+        rows = psychosocial.build_observation_rows(
+            block,
+            user_id=user_id,
+            text=text,
+            source_type=source_type,
+            source_id=source_id,
+            correlation_id=correlation_id,
+            trace_id=trace.id,
+            observed_at=observed_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Psychosocial block rejected (%s); linguistic half kept", type(exc).__name__)
+        return [], "invalid_block"
+    return rows, "succeeded"
 
 
 def _has_active_professional(db: Session, user_id) -> bool:
@@ -263,21 +349,11 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
     db.commit()
     db.refresh(source_message)
 
-    # 2. Agent 2: analyze the free text and store as an inference signal.
+    # 2. Analyse the free text: linguistic markers and social determinants
+    #    in one call, both stored BEFORE the risk engine runs, so a sentence
+    #    like "me he ido unos días a casa de un colega" is already on the
+    #    record when the level is decided. Failures never reach the patient.
     analysis = analyze_text_and_store(
-        db,
-        user.id,
-        user_message,
-        source_type="chat_message",
-        source_id=source_message.id,
-        correlation_id=correlation_id,
-    )
-
-    # 2b. Agent 4: extract the social determinants the person just mentioned,
-    #     BEFORE the risk engine runs, so a sentence like "me he ido unos días
-    #     a casa de un colega" is already on the record when the level is
-    #     decided. Failures here never surface to the patient.
-    psychosocial.extract_and_store(
         db,
         user.id,
         user_message,

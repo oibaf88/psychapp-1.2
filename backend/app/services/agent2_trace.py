@@ -1,9 +1,12 @@
 """Persistence helpers for privacy-preserving structured-analysis lineage.
 
-Shared by every structured-extraction agent — Agent 2 (linguistic markers)
-and Agent 4 (psychosocial context) — discriminated by ``agent_role``. Each
-role pins its own prompt and schema version so a historic trace records the
-exact contract that produced it.
+Discriminated by ``agent_role``, which pins its own prompt and schema
+version so a historic trace records the exact contract that produced it.
+
+New traces all use ``analyzer_merged``: the linguistic and psychosocial
+reads are one call. The two older roles stay registered because rows
+carrying them are already in the database and must keep resolving to the
+contract that produced them — they are history, not options.
 """
 
 from __future__ import annotations
@@ -26,14 +29,35 @@ from app.content.prompts import (
     AGENT4_SCHEMA_VERSION,
     AGENT4_SYSTEM_PROMPT,
     AGENT4_TOOL_SCHEMA,
+    ANALYZER_PROMPT_VERSION,
+    ANALYZER_SCHEMA_VERSION,
+    ANALYZER_SYSTEM_PROMPT,
+    ANALYZER_TOOL_SCHEMA,
 )
 from app.models import Agent2AnalysisTrace
 from app.services import llm_config
 from app.services.llm import ProviderMetadata, StructuredAnalysisError
 
-# Each structured-extraction agent pins its own prompt and schema so a
-# historic trace records exactly which contract produced it.
+# The role every new trace carries.
+ANALYZER_ROLE = "analyzer_merged"
+
+# Roles whose traces carry a linguistic reading. The merged analyser
+# produces one, so the therapist's Agent 2 lineage views must include it or
+# they go quietly empty the day this ships — the traces would still be
+# written, just filtered out of every screen that shows them.
+LINGUISTIC_ROLES = (ANALYZER_ROLE, "agent2_linguistic")
+
+# Each role pins its own prompt and schema so a historic trace records
+# exactly which contract produced it. The two agent* entries are retired —
+# nothing starts a trace with them any more — but they stay here so the rows
+# that already carry them keep resolving.
 AGENT_CONTRACTS = {
+    ANALYZER_ROLE: (
+        ANALYZER_PROMPT_VERSION,
+        ANALYZER_SYSTEM_PROMPT,
+        ANALYZER_SCHEMA_VERSION,
+        ANALYZER_TOOL_SCHEMA,
+    ),
     "agent2_linguistic": (AGENT2_PROMPT_VERSION, AGENT2_SYSTEM_PROMPT, AGENT2_SCHEMA_VERSION, AGENT2_TOOL_SCHEMA),
     "agent4_psychosocial": (AGENT4_PROMPT_VERSION, AGENT4_SYSTEM_PROMPT, AGENT4_SCHEMA_VERSION, AGENT4_TOOL_SCHEMA),
 }

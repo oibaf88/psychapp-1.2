@@ -49,6 +49,7 @@ from app.models import (
     PsychosocialObservation,
     RiskAssessment,
 )
+from app.services import agent2_trace
 from app.services import baseline as baseline_service
 from app.services import psychosocial as psychosocial_service
 
@@ -984,9 +985,9 @@ def build_evidence_feed(db: Session, patient_id, limit: int = 60) -> list[dict[s
         db.query(Agent2AnalysisTrace)
         .filter(
             Agent2AnalysisTrace.user_id == patient_id,
-            # Agent 4 shares this lineage table but produces psychosocial
-            # observations, not linguistic signals; it has its own view.
-            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+            # Psychosocial-only traces share this lineage table but produce
+            # observations, not linguistic signals; they have their own view.
+            Agent2AnalysisTrace.agent_role.in_(agent2_trace.LINGUISTIC_ROLES),
         )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .limit(min(limit, 200))
