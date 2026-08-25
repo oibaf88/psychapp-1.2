@@ -49,6 +49,7 @@ required_columns(table_name, column_name) as (values
     ('psychosocial_observations', 'id'),
     ('psychosocial_observations', 'evidence_quote'),
     ('llm_endpoint_configs', 'id'),
+    ('llm_endpoint_configs', 'copilot_model'),
     ('chat_messages', 'provider'),
     ('chat_messages', 'model'),
     ('chat_messages', 'provider_base_url')

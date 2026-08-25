@@ -51,6 +51,9 @@ def build_provider(config) -> LLMProvider:
             analysis_model=config.analysis_model,
             copilot_model=config.copilot_model,
             api_key=config.api_key,
+            # A local endpoint has one budget for everything it serves, so
+            # the resolved value applies whether it came from a stored row
+            # or the environment.
             max_tokens=config.max_tokens,
             timeout_seconds=float(config.timeout_seconds),
         )
@@ -58,7 +61,11 @@ def build_provider(config) -> LLMProvider:
         chat_model=config.chat_model,
         analysis_model=config.analysis_model,
         copilot_model=config.copilot_model,
-        max_tokens=config.max_tokens,
+        # Only a runtime override pins one budget across both roles. Passing
+        # the environment's shared value here would shadow the per-role
+        # settings, which is how ANTHROPIC_MAX_TOKENS_CHAT / _ANALYSIS came
+        # to be documented while doing nothing.
+        max_tokens=config.explicit_max_tokens,
     )
 
 

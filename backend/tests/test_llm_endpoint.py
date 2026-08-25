@@ -297,6 +297,7 @@ class ProviderSelectionTests(unittest.TestCase):
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
             copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
         with patch.object(llm_config, "get_settings", return_value=settings):
             resolved = llm_config.resolve(db=None)
@@ -316,6 +317,7 @@ class ProviderSelectionTests(unittest.TestCase):
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
             copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
         with patch.object(llm_config, "get_settings", return_value=settings):
             resolved = llm_config.resolve(_ExplodingDb())
@@ -498,6 +500,7 @@ class OverrideGateTests(unittest.TestCase):
             anthropic_analysis_model="claude-opus-5",
             anthropic_max_tokens=8192,
             copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
         )
 
     def test_the_shipped_default_is_off(self):
@@ -725,6 +728,7 @@ class CopilotModelPlumbingTests(unittest.TestCase):
             anthropic_analysis_model="analysis-x",
             anthropic_max_tokens=8192,
             copilot_model="copilot-x",
+            anthropic_copilot_model="copilot-x",
         )
         with patch.object(llm_config, "get_settings", return_value=settings):
             resolved = llm_config.resolve(db=None)
@@ -792,3 +796,123 @@ class CopilotModelPlumbingTests(unittest.TestCase):
             re.search(r"add column if not exists copilot_model varchar\(160\)", sql),
             "the ORM column has no matching migration",
         )
+
+
+class ReviewFindingTests(unittest.TestCase):
+    """Four defects a review caught in the per-agent-model change.
+
+    Each is pinned here because each was a case of shipping something that
+    reads as working: documented settings that did nothing, a schema check
+    that passed while the schema was wrong, a column narrower than what the
+    validator accepts, and a form that quietly changed what it was told.
+    """
+
+    def test_the_environment_does_not_pin_a_shared_token_budget(self):
+        """ANTHROPIC_MAX_TOKENS_CHAT/_ANALYSIS were documented but inert.
+
+        `environment_config()` always fills `max_tokens`, and passing that
+        into the provider made it shadow both per-role settings on every
+        ordinary call.
+        """
+        llm_config.invalidate_cache()
+        settings = SimpleNamespace(
+            llm_allow_runtime_override=False,
+            anthropic_chat_model="c",
+            anthropic_analysis_model="a",
+            anthropic_copilot_model="",
+            anthropic_max_tokens=8192,
+            copilot_model="c",
+        )
+        with patch.object(llm_config, "get_settings", return_value=settings):
+            self.assertIsNone(llm_config.environment_config().explicit_max_tokens)
+
+    def test_a_runtime_override_does_pin_one(self):
+        """A stored row carries one budget for both roles by design."""
+        config = llm_config.ResolvedConfig(
+            provider="openai_compatible", chat_model="m", analysis_model="m",
+            base_url="http://localhost:1234/v1", max_tokens=2048, source="runtime",
+        )
+        self.assertEqual(config.explicit_max_tokens, 2048)
+
+    def test_the_per_role_budgets_reach_the_anthropic_provider(self):
+        """The end-to-end version of the first test."""
+        from app.config import Settings
+        from app.services.llm import build_provider
+
+        settings = Settings(
+            anthropic_api_key="",
+            anthropic_max_tokens=8192,
+            anthropic_max_tokens_chat=1500,
+            anthropic_max_tokens_analysis=16000,
+        )
+        llm_config.invalidate_cache()
+        with patch("app.services.llm.anthropic_provider.get_settings", return_value=settings), \
+             patch.object(llm_config, "get_settings", return_value=settings):
+            provider = build_provider(llm_config.environment_config())
+        self.assertEqual(provider._max_tokens_chat, 1500)
+        self.assertEqual(provider._max_tokens_analysis, 16000)
+        llm_config.invalidate_cache()
+
+    def test_a_deployment_missing_the_migration_refuses_to_boot(self):
+        """Otherwise ORM reads fail and resolve() silently falls back to the
+        environment, ignoring a saved override."""
+        import inspect
+        import pathlib
+
+        from app import main
+
+        self.assertIn('("llm_endpoint_configs", "copilot_model")', inspect.getsource(main))
+        verify = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "verify.sql"
+        self.assertIn("('llm_endpoint_configs', 'copilot_model')", verify.read_text(encoding="utf-8"))
+
+    def test_provenance_columns_fit_the_model_names_the_config_accepts(self):
+        """A 140-character model name must not produce a reply the database
+        then refuses to record."""
+        from app.models import Agent2AnalysisTrace, LLMEndpointConfig, TherapistCopilotMessage
+
+        accepted = LLMEndpointConfig.__table__.columns["copilot_model"].type.length
+        for table, column in (
+            (TherapistCopilotMessage, "requested_model"),
+            (Agent2AnalysisTrace, "requested_model"),
+            (Agent2AnalysisTrace, "response_model"),
+        ):
+            self.assertGreaterEqual(
+                table.__table__.columns[column].type.length,
+                accepted,
+                f"{table.__tablename__}.{column} is narrower than a valid model name",
+            )
+
+    def test_an_inherited_copilot_model_is_reported_as_inherited(self):
+        """The UI needs the raw value: prefilling the form with the resolved
+        one turns "follows chat" into "pinned to whatever chat was"."""
+        inherited = llm_config.ResolvedConfig(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model="chat-x", copilot_model_explicit="",
+        )
+        pinned = llm_config.ResolvedConfig(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model="copilot-y", copilot_model_explicit="copilot-y",
+        )
+        self.assertTrue(inherited.copilot_model_is_inherited)
+        self.assertFalse(pinned.copilot_model_is_inherited)
+        # Resolved for display, raw for the form.
+        self.assertEqual(inherited.public_dict()["copilot_model"], "chat-x")
+        self.assertEqual(inherited.public_dict()["copilot_model_explicit"], "")
+
+    def test_a_stored_row_that_inherits_reports_it(self):
+        row = SimpleNamespace(
+            provider="anthropic", chat_model="chat-x", analysis_model="a",
+            copilot_model=None, base_url=None, api_key=None, max_tokens=4096,
+            timeout_seconds=120, label="", id="r", created_at=None,
+        )
+        resolved = llm_config._from_row(row)
+        self.assertEqual(resolved.copilot_model, "chat-x")
+        self.assertTrue(resolved.copilot_model_is_inherited)
+
+    def test_the_settings_form_reads_the_explicit_value(self):
+        import pathlib
+
+        page = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "SettingsPage.tsx"
+        source = page.read_text(encoding="utf-8")
+        self.assertIn("active.copilot_model_explicit", source)
+        self.assertNotIn("copilotModel: active.copilot_model ", source)

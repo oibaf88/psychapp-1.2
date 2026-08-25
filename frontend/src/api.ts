@@ -806,8 +806,11 @@ export interface LLMEndpointSummary {
   base_url: string | null;
   chat_model: string;
   analysis_model: string;
-  /** Agent 3. Falls back to chat_model when the deployment leaves it unset. */
+  /** Agent 3, resolved — falls back to chat_model. For display. */
   copilot_model: string;
+  /** What was actually configured. Empty means "follows chat". For the form. */
+  copilot_model_explicit: string;
+  copilot_model_is_inherited: boolean;
   max_tokens: number;
   timeout_seconds: number;
   source: "environment" | "runtime" | string;

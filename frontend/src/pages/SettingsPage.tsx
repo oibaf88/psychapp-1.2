@@ -78,7 +78,10 @@ function formFromStatus(status: LLMEndpointStatusOut): FormState {
     baseUrl: active.base_url || "",
     chatModel: active.chat_model || "",
     analysisModel: active.analysis_model || "",
-    copilotModel: active.copilot_model || "",
+    // The *explicit* value, not the resolved one. Prefilling with the
+    // resolved model would silently pin the copilot to whatever chat was,
+    // so changing the chat model later would leave the copilot behind.
+    copilotModel: active.copilot_model_explicit || "",
     apiKey: "",
     maxTokens: active.max_tokens,
     timeoutSeconds: active.timeout_seconds,
@@ -153,7 +156,9 @@ export default function SettingsPage() {
       baseUrl: preset.baseUrl,
       chatModel: preset.model,
       analysisModel: preset.model,
-      copilotModel: preset.model,
+      // Left blank so it follows chat: a local runtime usually has one model
+      // loaded, and pinning it here would survive a later change of chat model.
+      copilotModel: "",
       label: preset.name,
     });
     setTestResult(null);
@@ -188,7 +193,7 @@ export default function SettingsPage() {
         base_url: form.provider === "openai_compatible" ? form.baseUrl : null,
         chat_model: form.chatModel,
         analysis_model: form.analysisModel || form.chatModel,
-        copilot_model: form.copilotModel || form.chatModel,
+        copilot_model: form.copilotModel || form.chatModel,  // the test needs a concrete name
         api_key: form.apiKey || null,
         timeout_seconds: Math.min(form.timeoutSeconds, 60),
       });

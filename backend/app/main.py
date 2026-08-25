@@ -92,6 +92,7 @@ def _verify_production_schema() -> None:
         ("risk_assessments", "calculation_trace"),
         ("therapist_copilot_messages", "id"),
         ("agent2_analysis_traces", "agent_role"),
+        ("llm_endpoint_configs", "copilot_model"),
         ("psychosocial_observations", "id"),
         ("psychosocial_observations", "evidence_quote"),
     }
