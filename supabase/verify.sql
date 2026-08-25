@@ -30,7 +30,8 @@ expected_tables(table_name) as (values
     ('audit_log'), ('baselines'), ('biometric_data'), ('chat_messages'),
     ('check_ins'), ('confirmed_facts'), ('diary_entries'),
     ('llm_endpoint_configs'), ('notifications'), ('password_reset_tokens'),
-    ('patient_professional_assignments'), ('professional_alerts'),
+    ('patient_professional_assignments'), ('patient_profiles'),
+    ('professional_alerts'),
     ('psychosocial_observations'), ('risk_assessments'), ('safety_plans'),
     ('therapist_copilot_messages'), ('user_consents'), ('users')
 ),
@@ -50,6 +51,8 @@ required_columns(table_name, column_name) as (values
     ('psychosocial_observations', 'evidence_quote'),
     ('llm_endpoint_configs', 'id'),
     ('llm_endpoint_configs', 'copilot_model'),
+    ('patient_profiles', 'id'),
+    ('patient_profiles', 'linguistic_baseline'),
     ('chat_messages', 'provider'),
     ('chat_messages', 'model'),
     ('chat_messages', 'provider_base_url')

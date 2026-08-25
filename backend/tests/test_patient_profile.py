@@ -392,3 +392,29 @@ class NeverRaisesIntoTheChatTests(unittest.TestCase):
 
         source = inspect.getsource(main)
         self.assertIn('("patient_profiles", "id")', source)
+
+
+class DeploymentContractTests(unittest.TestCase):
+    """The same gap a review caught on the copilot column, checked here too.
+
+    A deployment that missed the migration must refuse to boot, not fail on
+    every patient message. Both the API's own startup check and the Supabase
+    verifier have to know about the table.
+    """
+
+    def test_the_api_refuses_to_start_without_the_table(self):
+        import inspect
+
+        from app import main
+
+        self.assertIn('("patient_profiles", "id")', inspect.getsource(main))
+
+    def test_the_supabase_verifier_knows_about_the_table(self):
+        import pathlib
+
+        verify = (
+            pathlib.Path(__file__).resolve().parents[2] / "supabase" / "verify.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("('patient_profiles')", verify)
+        self.assertIn("('patient_profiles', 'id')", verify)
+        self.assertIn("('patient_profiles', 'linguistic_baseline')", verify)
