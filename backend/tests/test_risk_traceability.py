@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
-from app.models import PsychosocialObservation
+from app.models import PatientProfile, PsychosocialObservation
 from app.schemas import RiskAssessmentOut
 from app.services import baseline, conversation, risk_engine
 from app.services.conversation import AnalysisOutcome, LinguisticAnalysis
@@ -43,6 +43,9 @@ class _FakeQuery:
     def all(self):
         return self.rows
 
+    def first(self):
+        return self.rows[0] if self.rows else None
+
     def count(self):
         return len(self.rows)
 
@@ -56,13 +59,19 @@ class _FakeDb:
     check-ins into that path, so the mapping is explicit.
     """
 
-    def __init__(self, checkins=None, psychosocial=None):
+    def __init__(self, checkins=None, psychosocial=None, profile=None):
         self.checkins = checkins or []
         self.psychosocial = psychosocial or []
+        # No profile by default, which is the case that must be preserved:
+        # a patient the system has never met is evaluated on the absolute
+        # constants, exactly as every patient was before profiles existed.
+        self.profile = profile
 
     def query(self, model):
         if model is PsychosocialObservation:
             return _FakeQuery(self.psychosocial)
+        if model is PatientProfile:
+            return _FakeQuery([self.profile] if self.profile is not None else [])
         return _FakeQuery(self.checkins)
 
 

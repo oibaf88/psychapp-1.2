@@ -29,6 +29,20 @@ BASELINE_WINDOW_DAYS = 21
 RECENT_WINDOW_DAYS = 7
 MIN_CHECKINS_FOR_BASELINE = 5
 
+# How long an active baseline describes the present.
+#
+# It used to be forever: `get_active_baseline(...) or compute_or_refresh_...`
+# created one on first use and never looked again, so a person's "normal" was
+# fixed by their first three weeks in treatment and stayed there. Someone who
+# genuinely improved kept being measured against how they were at their worst,
+# and someone who deteriorated slowly drifted out of their own baseline
+# without any single reading looking unusual.
+#
+# Recomputed on a 21-day window, so the baseline follows the person at the
+# same pace it was built from. Long enough that a bad fortnight does not
+# redefine normal; short enough that a season of change eventually does.
+BASELINE_MAX_AGE_DAYS = 21
+
 # craving is "inverted" (lower is better) so we flip sign before z-scoring
 VARIABLES = ("mood", "craving_inv", "sleep_hours", "self_efficacy")
 
@@ -113,8 +127,27 @@ def get_active_baseline(db: Session, user_id) -> Baseline | None:
     )
 
 
+def _current_baseline(db: Session, user_id) -> Baseline | None:
+    """The active baseline, recomputed when it has aged out.
+
+    A stale baseline is not discarded before its replacement exists:
+    `compute_or_refresh_baseline` returns None when there are too few recent
+    check-ins, and in that case the old one keeps serving. Losing a person's
+    baseline because they stopped checking in for a fortnight would take the
+    structural axis offline exactly when it is worth watching.
+    """
+    active = get_active_baseline(db, user_id)
+    if active is None:
+        return compute_or_refresh_baseline(db, user_id)
+
+    created = active.created_at or datetime.utcnow()
+    if datetime.utcnow() - created < timedelta(days=BASELINE_MAX_AGE_DAYS):
+        return active
+    return compute_or_refresh_baseline(db, user_id) or active
+
+
 def compute_structural_score(db: Session, user_id) -> StructuralScoreResult:
-    baseline = get_active_baseline(db, user_id) or compute_or_refresh_baseline(db, user_id)
+    baseline = _current_baseline(db, user_id)
     if baseline is None:
         return StructuralScoreResult(
             score=None,

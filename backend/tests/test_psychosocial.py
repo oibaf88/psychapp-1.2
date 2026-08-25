@@ -646,17 +646,41 @@ class MergedAnalyzerTests(unittest.TestCase):
         )
 
         blocks = ANALYZER_TOOL_SCHEMA["input_schema"]["properties"]
-        self.assertEqual(
-            blocks["linguistic"]["properties"], AGENT2_TOOL_SCHEMA["input_schema"]["properties"]
-        )
+
+        # The psychosocial block is the original, unchanged.
         self.assertEqual(
             blocks["psychosocial"]["properties"], AGENT4_TOOL_SCHEMA["input_schema"]["properties"]
         )
         self.assertEqual(
-            blocks["linguistic"]["required"], AGENT2_TOOL_SCHEMA["input_schema"]["required"]
+            blocks["psychosocial"]["required"], AGENT4_TOOL_SCHEMA["input_schema"]["required"]
+        )
+
+        # The linguistic block is the original plus the two personal-comparison
+        # fields, which only mean anything in a prompt carrying a baseline.
+        # Every original field must survive byte-for-byte: the risk engine
+        # reads them, so a silent redefinition here is a silent change there.
+        original = AGENT2_TOOL_SCHEMA["input_schema"]["properties"]
+        merged = blocks["linguistic"]["properties"]
+        for field, spec in original.items():
+            self.assertEqual(spec, merged[field], f"{field} was redefined by the merge")
+        self.assertEqual(
+            set(merged) - set(original),
+            {"deviation_from_own_baseline", "is_typical_for_patient"},
         )
         self.assertEqual(
-            blocks["psychosocial"]["required"], AGENT4_TOOL_SCHEMA["input_schema"]["required"]
+            blocks["linguistic"]["required"][: len(AGENT2_TOOL_SCHEMA["input_schema"]["required"])],
+            AGENT2_TOOL_SCHEMA["input_schema"]["required"],
+        )
+
+    def test_the_retired_agent2_contract_is_not_mutated(self):
+        """Its sha256 is stamped on traces already in the database."""
+        from app.content.prompts import AGENT2_TOOL_SCHEMA
+
+        self.assertNotIn(
+            "deviation_from_own_baseline", AGENT2_TOOL_SCHEMA["input_schema"]["properties"]
+        )
+        self.assertNotIn(
+            "is_typical_for_patient", AGENT2_TOOL_SCHEMA["input_schema"]["required"]
         )
 
 

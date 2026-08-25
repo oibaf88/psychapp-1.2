@@ -43,7 +43,7 @@ from app.content.safety_resources import (
     LEVEL4_PATIENT_MESSAGE_SECONDARY,
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
-from app.services import llm_config, psychosocial, risk_engine
+from app.services import llm_config, profile as profile_service, psychosocial, risk_engine
 from app.services import agent2_trace
 from app.services.llm import ChatResult, ProviderMetadata, StructuredAnalysisError, get_llm_provider
 
@@ -66,6 +66,15 @@ class LinguisticAnalysis(BaseModel):
     ambivalence: float = Field(ge=0, le=1)
     emotional_complexity: Literal["low", "medium", "high"]
     short_rationale: str = Field(min_length=1, max_length=500)
+    # How this reading sits against the patient's own history, as the model
+    # judged it. Defaulted rather than required so a provider that has not
+    # seen the new schema — or a stored signal written before it existed —
+    # still validates: absent means "no comparison was made", which is
+    # exactly what those cases mean.
+    deviation_from_own_baseline: Literal[
+        "unknown", "much_lower", "lower", "typical", "higher", "much_higher"
+    ] = "unknown"
+    is_typical_for_patient: bool = True
 
 
 @dataclass(frozen=True)
@@ -117,9 +126,14 @@ def analyze_text_and_store(
         logger.error("Analysis skipped because its trace could not be persisted")
         return AnalysisOutcome(correlation_id, None, None, "trace_persistence_error", None)
 
+    # Who the analyser is reading. Read-only, and read without creating: a
+    # patient with no profile is analysed exactly as before this existed.
+    patient_profile = profile_service.get(db, user_id)
+    system_prompt = ANALYZER_SYSTEM_PROMPT + profile_service.analyzer_context_block(patient_profile)
+
     try:
         provider_result = get_llm_provider(db).analyze_structured(
-            ANALYZER_SYSTEM_PROMPT,
+            system_prompt,
             text,
             ANALYZER_TOOL_SCHEMA,
         )
@@ -179,6 +193,18 @@ def analyze_text_and_store(
         )
         logger.error("Analysis result could not be persisted")
         return AnalysisOutcome(correlation_id, trace.id, None, trace.status, None)
+    # Fold what was learned about the person back in, after the analysis is
+    # safely committed. A failure here costs the profile update only; it must
+    # never roll back the signal the risk engine is about to read, and it must
+    # never raise — this function's whole contract is that the patient-facing
+    # flow survives whatever the analytic layer does.
+    try:
+        profile_service.apply_analyzer_update(db, user_id, value.get("profile_update"))
+        profile_service.refresh_linguistic_baseline(db, user_id)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Profile refresh skipped safely: %s", type(exc).__name__)
+
     return AnalysisOutcome(
         correlation_id,
         trace.id,
