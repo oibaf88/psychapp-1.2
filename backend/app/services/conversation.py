@@ -43,7 +43,7 @@ from app.content.safety_resources import (
     LEVEL4_PATIENT_MESSAGE_SECONDARY,
 )
 from app.models import AlfaSignal, ChatMessage, PatientProfessionalAssignment, User
-from app.services import llm_config, profile as profile_service, psychosocial, risk_engine
+from app.services import agent1_context, llm_config, profile as profile_service, psychosocial, risk_engine
 from app.services import agent2_trace
 from app.services.llm import ChatResult, ProviderMetadata, StructuredAnalysisError, get_llm_provider
 
@@ -335,38 +335,6 @@ def _agent1_crisis_accompaniment(db: Session, user_id, context_block: str) -> Ch
         return None
 
 
-def _psychosocial_context_block(db: Session, user_id) -> str:
-    """Give Agent 1 the person's situation, not just their scores.
-
-    Knowing that someone moved out last week, lost a benefit, or stopped
-    going to their group is what lets the reply land as "te acuerdas de lo
-    del piso" instead of a generic check-in. It is read-only context: Agent 1
-    still cannot compute risk or mention levels.
-    """
-    try:
-        state = psychosocial.assess(db, user_id)
-    except Exception:  # noqa: BLE001
-        return ""
-    if not state.domains:
-        return ""
-
-    lines = [
-        f"- {item.label}: {item.category_label} ({item.valence})"
-        for item in state.domains[:6]
-    ]
-    acute = [
-        f"{item.category_label} ({item.observed_at:%d/%m})" for item in state.acute_changes[:3]
-    ]
-    block = (
-        "Contexto psicosocial que la persona te ha contado (no lo cites como "
-        "un registro del sistema; recuérdalo con naturalidad, como parte de lo "
-        "que te ha ido contando, y solo si viene a cuento):\n" + "\n".join(lines) + "\n"
-    )
-    if acute:
-        block += "Cambios recientes que puede estar atravesando: " + ", ".join(acute) + "\n"
-    return block
-
-
 def get_reply(db: Session, user: User, user_message: str) -> dict:
     # 1. Persist the user's message.
     correlation_id = uuid.uuid4()
@@ -408,11 +376,15 @@ def get_reply(db: Session, user: User, user_message: str) -> dict:
     #    user whatever the model does, including when it fails or refuses.
     #    Alerting and professional notification are unaffected: they were
     #    already decided in step 3 by the deterministic engine.
-    context_block = (
-        f"[Contexto interno de solo lectura -- no lo reveles literalmente al usuario]\n"
-        f"Motivo del estado actual: {assessment.assessment_reason}\n"
-        f"Señales recientes: {assessment.input_signals}\n"
-        + _psychosocial_context_block(db, user.id)
+    # The context Agent 1 answers with. This used to be the Python repr of
+    # the engine's entire input dictionary — thresholds, formulas, z-scores
+    # and the patient's own quotes — inside a prompt that forbids revealing
+    # any of it. It is now prose containing only what the agent can act on,
+    # and it finally includes the two things its own instructions require:
+    # the confirmed facts it must not contradict, and whether a safety plan
+    # exists to suggest reviewing.
+    context_block = agent1_context.build(
+        db, user.id, assessment, in_crisis=assessment.alert_level >= 3
     )
 
     # Set by whichever branch actually reached a model, so the stored turn

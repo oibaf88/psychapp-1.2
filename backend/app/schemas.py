@@ -630,6 +630,36 @@ class PsychosocialAdjudicationIn(BaseModel):
     note: Optional[str] = Field(default=None, max_length=1000)
 
 
+class OpenThreadIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=120)
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
+class PatientProfileIn(BaseModel):
+    """What a clinician may change about the accumulated portrait.
+
+    Both fields are optional and independent: correcting the portrait and
+    setting what to explore next are different acts, and a panel that made
+    you do both at once would make one of them accidental.
+    """
+
+    portrait: Optional[str] = Field(default=None, max_length=1500)
+    open_threads: Optional[list[OpenThreadIn]] = None
+
+
+class PatientProfileOut(BaseModel):
+    portrait: Optional[str] = None
+    previous_portrait: Optional[str] = None
+    portrait_version: int = 0
+    portrait_updated_at: Optional[str] = None
+    portrait_edited_by_clinician: bool = False
+    open_threads: list[dict[str, Any]] = []
+    linguistic_baseline: Optional[dict[str, Any]] = None
+    linguistic_baseline_n: int = 0
+    baseline_is_usable: bool = False
+    minimum_signals_for_baseline: int = 0
+
+
 class SignalRefutationIn(BaseModel):
     """A clinician overruling a linguistic inference.
 

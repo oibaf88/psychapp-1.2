@@ -296,11 +296,80 @@ def apply_analyzer_update(db: Session, user_id, block) -> PatientProfile | None:
         return None
 
 
-# A clinician-facing editor for the portrait and the open threads belongs
-# with the panel that shows them, so it lands with that panel rather than
-# as unused surface here. `portrait_edited_by` is already honoured on read:
-# the analyser is told it may add to a hand-edited portrait, never
-# contradict it.
+def set_portrait_by_clinician(db: Session, user_id, *, portrait: str, actor_id) -> PatientProfile:
+    """A therapist correcting the portrait.
+
+    Kept separate from the analyser path so `portrait_edited_by` records
+    that a person wrote this. The analyser is then told it may add to a
+    hand-edited portrait but never contradict it — the same asymmetry as
+    the fact/inference wall, applied to prose.
+    """
+    profile = get_or_create(db, user_id)
+    text = (portrait or "").strip()[:MAX_PORTRAIT_CHARS]
+    if text != (profile.portrait or ""):
+        profile.previous_portrait = profile.portrait
+        profile.portrait = text or None
+        profile.portrait_version = (profile.portrait_version or 0) + 1
+        profile.portrait_updated_at = datetime.utcnow()
+    profile.portrait_edited_by = actor_id
+    profile.updated_at = datetime.utcnow()
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def set_open_threads(db: Session, user_id, threads: list) -> PatientProfile:
+    """A therapist setting what to explore next.
+
+    Marked `source: clinician` so the analyser's own additions stay
+    distinguishable from what a professional asked for.
+    """
+    profile = get_or_create(db, user_id)
+    profile.open_threads = _clean_threads(
+        [{**t, "source": "clinician"} if isinstance(t, dict) else t for t in (threads or [])]
+    )
+    profile.updated_at = datetime.utcnow()
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def as_dict(profile: PatientProfile | None) -> dict:
+    """What the therapist's panel shows. Nothing here is a decision."""
+    if profile is None:
+        return {
+            "portrait": None,
+            "previous_portrait": None,
+            "portrait_version": 0,
+            "portrait_updated_at": None,
+            "portrait_edited_by_clinician": False,
+            "open_threads": [],
+            "linguistic_baseline": None,
+            "linguistic_baseline_n": 0,
+            "baseline_is_usable": False,
+            "minimum_signals_for_baseline": MIN_SIGNALS_FOR_LINGUISTIC_BASELINE,
+        }
+    n = profile.linguistic_baseline_n or 0
+    return {
+        "portrait": profile.portrait,
+        "previous_portrait": profile.previous_portrait,
+        "portrait_version": profile.portrait_version or 0,
+        "portrait_updated_at": profile.portrait_updated_at.isoformat()
+        if profile.portrait_updated_at
+        else None,
+        "portrait_edited_by_clinician": profile.portrait_edited_by is not None,
+        "open_threads": profile.open_threads or [],
+        "linguistic_baseline": profile.linguistic_baseline,
+        "linguistic_baseline_n": n,
+        # Whether the engine is actually comparing against this person yet,
+        # which is not the same as whether numbers exist to show.
+        "baseline_is_usable": n >= MIN_SIGNALS_FOR_LINGUISTIC_BASELINE,
+        "minimum_signals_for_baseline": MIN_SIGNALS_FOR_LINGUISTIC_BASELINE,
+    }
+
+
 
 
 # ------------------------------------------------------------ for the LLM ---

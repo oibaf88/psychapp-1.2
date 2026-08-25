@@ -55,6 +55,8 @@ from app.schemas import (
     PatientDossierOut,
     PatientMetricsOut,
     PsychosocialAdjudicationIn,
+    PatientProfileIn,
+    PatientProfileOut,
     SignalRefutationIn,
     SignalRefutationOut,
     PsychosocialExplanationOut,
@@ -71,6 +73,7 @@ from app.schemas import (
 )
 from app.security import require_professional
 from app.services import agent2_trace, audit, clinical_copilot, clinical_view, psychosocial, risk_engine
+from app.services import profile as profile_service
 from app.services import signals as signals_service
 from app.services.timeline import build_timeline
 
@@ -562,6 +565,64 @@ def patient_signals(
         .limit(min(limit, 100))
         .all()
     )
+
+
+@router.get("/patients/{patient_id}/profile", response_model=PatientProfileOut)
+def patient_profile(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """What the system has accumulated about this person, and what it plans
+    to bring up next.
+
+    Read-only for most of the panel, but the point of showing it is that a
+    clinician can disagree with it: a portrait is a model's summary of a
+    patient, and one nobody can correct is one nobody should trust.
+    """
+    _require_clinical_read(db, professional, patient_id)
+    return PatientProfileOut(**profile_service.as_dict(profile_service.get(db, patient_id)))
+
+
+@router.put("/patients/{patient_id}/profile", response_model=PatientProfileOut)
+def update_patient_profile(
+    patient_id: uuid.UUID,
+    payload: PatientProfileIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Correct the portrait, or set what to explore next.
+
+    Requires the same access as adjudicating an observation: this shapes
+    what the conversational agent brings up with the patient, so it belongs
+    to the assigned therapist rather than to anyone with read access.
+    """
+    _require_fact_access(professional, db, patient_id)
+    changed = []
+    if payload.portrait is not None:
+        profile_service.set_portrait_by_clinician(
+            db, patient_id, portrait=payload.portrait, actor_id=professional.id
+        )
+        changed.append("portrait")
+    if payload.open_threads is not None:
+        profile_service.set_open_threads(
+            db, patient_id, [t.model_dump() for t in payload.open_threads]
+        )
+        changed.append("open_threads")
+
+    if changed:
+        audit.log(
+            db,
+            actor_id=professional.id,
+            actor_role=professional.role,
+            action="patient_profile_edited",
+            entity_type="patient_profile",
+            entity_id=patient_id,
+            extra={"patient_id": str(patient_id), "changed": changed},
+        )
+    # No re-evaluation: the profile shapes conversation and comparison, and
+    # nothing here is an input the deterministic engine reads as evidence.
+    return PatientProfileOut(**profile_service.as_dict(profile_service.get(db, patient_id)))
 
 
 @router.post(
