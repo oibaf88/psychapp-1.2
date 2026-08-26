@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ROLE_LABELS, UserRole } from "../api";
 import { useAuth } from "../auth/AuthContext";
+import PsychDeepMark from "./PsychDeepMark";
 
 export default function NavBar() {
   const { user, logout } = useAuth();
@@ -8,7 +9,10 @@ export default function NavBar() {
   if (!user) {
     return (
       <nav className="navbar">
-        <div className="navbar-brand">PsychApp</div>
+        <div className="navbar-brand">
+          <PsychDeepMark variant="compact" className="navbar-mark" />
+          <span>PsychApp</span>
+        </div>
         <div className="navbar-links">
           <Link to="/login">Entrar</Link>
           <Link to="/settings">Ajustes / instalar</Link>
@@ -25,7 +29,10 @@ export default function NavBar() {
 
   return (
     <nav className="navbar">
-      <div className="navbar-brand">PsychApp</div>
+      <div className="navbar-brand">
+        <PsychDeepMark variant="compact" className="navbar-mark" />
+        <span>PsychApp</span>
+      </div>
       <div className="navbar-links">
         {isPatient && (
           <>
