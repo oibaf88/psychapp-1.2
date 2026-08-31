@@ -71,6 +71,8 @@ const COLORS = {
   psychosocial: "#c98500",
   neutral: "#9aa8bc",
 };
+const STRUCTURAL_STABLE_MIN = 1 / (1 + 1.2);
+const STRUCTURAL_TRANSITION_MIN = 1 / (1 + 1.95);
 
 export function ChartCard({
   title,
@@ -153,41 +155,55 @@ export function LevelHistoryChart({
 
 /** Structural score with its band thresholds drawn in. */
 export function StructuralScoreChart({ points }: { points: StructuralPoint[] }) {
+  const versions = [...new Set(points.filter((point) => typeof point.score === "number" && Number.isFinite(point.score)).map((point) => point.calculation_version ?? "structural-v1"))];
   return (
     <ChartCard
       title="Score estructural (similitud con su línea base)"
       question="¿Se están alejando sus check-ins de lo que es habitual en él o ella?"
-      howToRead="1.00 = sus últimos 7 días son indistinguibles de sus 21 días previos. 0.00 = se han alejado mucho. NO es una escala de riesgo: un score alto significa «sin cambios», no «sin peligro». Verde ≥ 0.60 estable · amarillo 0.35–0.60 transición · rojo < 0.35 inestable."
-      empty={points.length === 0}
+      howToRead="La versión structural-v2 calcula 1 / (1 + media de |z|): 1 = sin cambio; un valor menor indica más distancia de la línea base. No es una escala clínica ni una probabilidad de riesgo. Bandas v2: estable ≥ 1/2,2 (≈ 0,455), transición ≥ 1/2,95 (≈ 0,339), inestable por debajo. Las reglas usan un componente de deterioro separado para que las mejoras no compensen señales adversas."
+      empty={!points.some((point) => typeof point.score === "number" && Number.isFinite(point.score))}
+      footer={versions.some((version) => version !== "structural-v2") ? <p className="chart-footnote">Los cálculos históricos se conservan. Cada versión tiene su propia gráfica y sus umbrales; no se une el cambio de fórmula como si fuera una evolución clínica.</p> : undefined}
     >
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={points} margin={{ top: 8, right: 16, bottom: 4, left: -18 }}>
+      {versions.map((version) => {
+        const isVersion2 = version === "structural-v2";
+        const hasKnownBands = isVersion2 || version === "structural-v1";
+        const stableMin = isVersion2 ? STRUCTURAL_STABLE_MIN : 0.6;
+        const transitionMin = isVersion2 ? STRUCTURAL_TRANSITION_MIN : 0.35;
+        const versionPoints = points.map((point) => ({ ...point, score: (point.calculation_version ?? "structural-v1") === version ? point.score : null }));
+        return <div key={version}>
+        <p className="meta"><strong>{version}</strong>{isVersion2 ? " · fórmula actual" : " · cálculo histórico"}</p>
+        <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={versionPoints} margin={{ top: 8, right: 16, bottom: 4, left: -18 }}>
           <CartesianGrid strokeDasharray="3 3" />
-          <ReferenceArea y1={0.6} y2={1} fill="#55bd91" fillOpacity={0.06} />
-          <ReferenceArea y1={0.35} y2={0.6} fill="#e5b75f" fillOpacity={0.08} />
-          <ReferenceArea y1={0} y2={0.35} fill="#e36a6a" fillOpacity={0.07} />
-          <ReferenceLine y={0.6} stroke="#55bd91" strokeDasharray="4 4" />
-          <ReferenceLine y={0.35} stroke="#e36a6a" strokeDasharray="4 4" />
+          {hasKnownBands && <>
+          <ReferenceArea y1={stableMin} y2={1} fill="#55bd91" fillOpacity={0.06} />
+          <ReferenceArea y1={transitionMin} y2={stableMin} fill="#e5b75f" fillOpacity={0.08} />
+          <ReferenceArea y1={0} y2={transitionMin} fill="#e36a6a" fillOpacity={0.07} />
+          <ReferenceLine y={stableMin} stroke="#55bd91" strokeDasharray="4 4" />
+          <ReferenceLine y={transitionMin} stroke="#e36a6a" strokeDasharray="4 4" />
+          </>}
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
           <YAxis domain={[0, 1]} tick={{ fontSize: 11 }} />
           <Tooltip
             labelFormatter={formatDay}
             formatter={(value: unknown, _n, item) => {
-              const band = (item?.payload as StructuralPoint | undefined)?.band;
-              return [`${value}${band ? ` (${band})` : ""}`, "Score estructural"];
+              const point = item?.payload as StructuralPoint | undefined;
+              return [`${value}${point?.band ? ` (${point.band})` : ""} · ${point?.calculation_version ?? "versión histórica"}`, "Score estructural"];
             }}
           />
           <Line
             type="monotone"
             dataKey="score"
-            name="Score estructural"
+            name={`Score ${version}`}
             stroke={COLORS.score}
             strokeWidth={2}
-            connectNulls
+            connectNulls={false}
             dot={{ r: 2 }}
           />
         </LineChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+        </div>;
+      })}
     </ChartCard>
   );
 }
@@ -198,7 +214,7 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
     <ChartCard
       title="Desviación por variable (z-scores)"
       question="Si se ha desviado, ¿QUÉ se ha desviado y en qué dirección?"
-      howToRead="0 = igual que su línea base. Por DEBAJO de 0 = peor que su normalidad (menos ánimo, más craving, menos sueño, menos autoeficacia). Por ENCIMA de 0 = mejor. El score estructural usa el valor absoluto, así que una mejora grande también baja el score: esta gráfica es la que dice si el cambio es a mejor o a peor."
+      howToRead="0 = igual que su línea base. Para ánimo, craving invertido y autoeficacia, valores negativos indican cambio adverso y positivos cambio favorable. En sueño, negativo significa menos horas y positivo más: ambas direcciones requieren contexto, sin diagnóstico automático. El denominador mínimo v2 es 1 punto para escalas 0–10 y 0,5 h para sueño. La similitud usa |z|; las reglas usan los componentes adversos sin compensarlos con mejoras."
       empty={points.length === 0}
     >
       <ResponsiveContainer width="100%" height={240}>
@@ -209,13 +225,13 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
           <YAxis tick={{ fontSize: 11 }} />
           <Tooltip labelFormatter={formatDay} />
           <Legend />
-          <Line type="monotone" dataKey="z_mood" name="Ánimo" stroke={COLORS.mood} connectNulls dot={false} />
+          <Line type="monotone" dataKey="z_mood" name="Ánimo" stroke={COLORS.mood} connectNulls={false} dot={false} />
           <Line
             type="monotone"
             dataKey="z_craving_inv"
             name="Craving (invertido)"
             stroke={COLORS.craving}
-            connectNulls
+            connectNulls={false}
             dot={false}
           />
           <Line
@@ -223,7 +239,7 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
             dataKey="z_sleep_hours"
             name="Sueño"
             stroke={COLORS.sleep}
-            connectNulls
+            connectNulls={false}
             dot={false}
           />
           <Line
@@ -231,7 +247,7 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
             dataKey="z_self_efficacy"
             name="Autoeficacia"
             stroke={COLORS.efficacy}
-            connectNulls
+            connectNulls={false}
             dot={false}
           />
         </LineChart>
@@ -240,30 +256,37 @@ export function ZScoreChart({ points }: { points: StructuralPoint[] }) {
   );
 }
 
-export function CheckInChart({ points }: { points: CheckInPoint[] }) {
+type CheckInChartPoint = Pick<CheckInPoint, "date"> & {
+  mood?: number | null;
+  craving?: number | null;
+  sleep_hours?: number | null;
+  self_efficacy?: number | null;
+};
+
+export function CheckInChart({ points }: { points: CheckInChartPoint[] }) {
   return (
     <ChartCard
       title="Check-ins declarados"
       question="¿Qué está reportando el paciente día a día?"
-      howToRead="Valores crudos tal y como los introduce el paciente, sin transformar. Ánimo, craving y autoeficacia en 0–10 (eje izquierdo); horas de sueño en el eje derecho. Craving alto es malo; ánimo y autoeficacia altos son buenos."
-      empty={points.length === 0}
+      howToRead="Ánimo, craving y autoeficacia en 0–10 (eje izquierdo); sueño en horas, de 0 a 24 (eje derecho, línea discontinua). Un valor ausente nunca se sustituye por cero. Un craving mayor expresa más deseo de consumo; ánimo y autoeficacia mayores expresan mejor estado y más confianza."
+      empty={!points.some((point) => [point.mood, point.craving, point.self_efficacy, point.sleep_hours].some((value) => typeof value === "number" && Number.isFinite(value)))}
     >
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={points} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
-          <YAxis yAxisId="left" domain={[0, 10]} tick={{ fontSize: 11 }} />
-          <YAxis yAxisId="right" orientation="right" domain={[0, 12]} tick={{ fontSize: 11 }} />
+          <YAxis yAxisId="left" domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} tick={{ fontSize: 11 }} />
+          <YAxis yAxisId="right" orientation="right" domain={[0, 24]} ticks={[0, 6, 12, 18, 24]} tickFormatter={(value: number) => `${value} h`} tick={{ fontSize: 11 }} />
           <Tooltip labelFormatter={formatDay} />
           <Legend />
-          <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke={COLORS.mood} connectNulls />
+          <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke={COLORS.mood} connectNulls={false} />
           <Line
             yAxisId="left"
             type="monotone"
             dataKey="craving"
             name="Craving"
             stroke={COLORS.craving}
-            connectNulls
+            connectNulls={false}
           />
           <Line
             yAxisId="left"
@@ -271,7 +294,7 @@ export function CheckInChart({ points }: { points: CheckInPoint[] }) {
             dataKey="self_efficacy"
             name="Autoeficacia"
             stroke={COLORS.efficacy}
-            connectNulls
+            connectNulls={false}
           />
           <Line
             yAxisId="right"
@@ -280,7 +303,7 @@ export function CheckInChart({ points }: { points: CheckInPoint[] }) {
             name="Sueño (h)"
             stroke={COLORS.sleep}
             strokeDasharray="5 3"
-            connectNulls
+            connectNulls={false}
           />
         </LineChart>
       </ResponsiveContainer>
@@ -300,7 +323,7 @@ export function LinguisticSignalChart({
   points: LinguisticPoint[];
   onSelect?: (point: LinguisticPoint) => void;
 }) {
-  const data = points.map((point) => ({
+  const data = points.filter((point) => point.is_active !== false).map((point) => ({
     ...point,
     flagged:
       point.ideation_direct || point.ideation_indirect || point.consumption_crisis ? 1 : null,
@@ -313,9 +336,10 @@ export function LinguisticSignalChart({
       empty={data.length === 0}
       footer={
         <p className="chart-footnote">
-          Ningún valor de esta gráfica decide por sí solo el nivel de alarma; solo{" "}
-          <code>ideation_direct</code> y <code>consumption_crisis</code> entran en una regla, y solo si el
-          texto tiene menos de 12 h.
+          Las banderas de ideación directa, ideación indirecta y crisis de consumo forman parte de las
+          reglas de seguridad. Su interpretación requiere revisar el texto, la antigüedad de la señal y
+          la valoración profesional; no son diagnósticos ni puntuaciones de una escala clínica.
+          Las inferencias refutadas se excluyen de esta gráfica y de las estadísticas, y siguen en la trazabilidad.
         </p>
       }
     >
@@ -343,21 +367,21 @@ export function LinguisticSignalChart({
             dataKey="rumination_score"
             name="Rumiación"
             stroke={COLORS.rumination}
-            connectNulls
+            connectNulls={false}
           />
           <Line
             type="monotone"
             dataKey="negative_valence"
             name="Valencia negativa"
             stroke={COLORS.valence}
-            connectNulls
+            connectNulls={false}
           />
           <Line
             type="monotone"
             dataKey="urgency_level"
             name="Urgencia"
             stroke={COLORS.urgency}
-            connectNulls
+            connectNulls={false}
           />
           <Line
             type="monotone"
@@ -365,7 +389,7 @@ export function LinguisticSignalChart({
             name="Ambivalencia"
             stroke={COLORS.ambivalence}
             strokeDasharray="4 3"
-            connectNulls
+            connectNulls={false}
           />
           <Scatter dataKey="flagged" name="Bandera crítica" fill={COLORS.level} shape="diamond" />
         </ComposedChart>

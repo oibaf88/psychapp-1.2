@@ -164,6 +164,18 @@ def analyze_text_and_store(
         observed_at=observed_at,
     )
 
+    # Preserve the validated extractor answer even when it yielded no
+    # grounded observations. Zero rows alone cannot establish "no content".
+    # Failed/skipped blocks, like historic signals without this field, stay
+    # unknown. This metadata is descriptive and never a risk-engine input.
+    psychosocial_block = value.get("psychosocial")
+    psychosocial_content = psychosocial_block.get("has_psychosocial_content") if isinstance(psychosocial_block, dict) else None
+    result["has_psychosocial_content"] = (
+        psychosocial_content
+        if psychosocial_status == "succeeded" and isinstance(psychosocial_content, bool)
+        else None
+    )
+
     signal = AlfaSignal(
         user_id=user_id,
         signal_type="linguistic_analysis",

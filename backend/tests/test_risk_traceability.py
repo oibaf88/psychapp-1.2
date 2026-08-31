@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -88,6 +88,9 @@ def _structural(score=0.8, band="stable"):
         },
         recent_means={key: 4.8 for key in baseline.VARIABLES},
         composite_z=0.15,
+        deterioration_band=band,
+        deterioration_score=score,
+        adverse_composite_z=(1 / score - 1) if score else 8.0,
     )
 
 
@@ -327,7 +330,7 @@ class _CalculationHarness:
                 patient_id,
                 linguistic_signal_id=preferred_signal_id,
             )
-        linguistic_lookup.assert_called_once_with(fake_db, patient_id, signal_id=preferred_signal_id)
+        linguistic_lookup.assert_called_once_with(fake_db, patient_id, signal_id=preferred_signal_id, now=ANY)
         return decision
 
 
@@ -338,12 +341,12 @@ class DeterministicExplanationTests(_CalculationHarness, unittest.TestCase):
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 17)
+        self.assertEqual(len(trace["rules"]), 18)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])
         self.assertFalse(trace["rules"][-1]["matched"])
-        self.assertIn("clamp(1 - composite_z / 3", trace["inputs"]["structural"]["composite"]["score_formula"])
+        self.assertEqual("1 / (1 + composite_z)", trace["inputs"]["structural"]["composite"]["score_formula"])
         self.assertEqual(trace["inputs"]["sleep_trend"]["classification"], "empeorando")
 
     def test_priority_is_visible_when_multiple_rules_match(self):
@@ -653,7 +656,7 @@ class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
         """
         decision = self._calculate(
             structural=_structural(score=0.9, band="stable"),
-            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            linguistic=_linguistic(ideation_indirect=False, rumination=0.2),
             psychosocial=self._interpersonal_context(days_ago=90),
         )
         self.assertLess(decision.level, 3)
@@ -679,7 +682,7 @@ class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
         ]
         decision = self._calculate(
             structural=_structural(score=0.9, band="stable"),
-            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            linguistic=_linguistic(ideation_indirect=False, rumination=0.2),
             psychosocial=rows,
         )
         self.assertLess(decision.level, 3)

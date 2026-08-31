@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
 import { api, AssignmentOut, CheckInIn, TimelineOut } from "../api";
+import { CheckInChart, StructuralScoreChart } from "../components/ClinicalCharts";
+import DailyStatisticsPanel from "../components/DailyStatisticsPanel";
 
 const emptyForm: CheckInIn = { mood: 5, craving: 3, sleep_hours: 7, self_efficacy: 5, notes: "" };
 
@@ -123,30 +124,20 @@ export default function PatientDashboard() {
           </p>
         )}
         {timeline && timeline.points.length > 0 ? (
-          <ResponsiveContainer width="100%" height={320}>
-            <LineChart data={timeline.points}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis yAxisId="left" domain={[0, 10]} />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 1]} />
-              <Tooltip />
-              <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke="#3987e5" connectNulls />
-              <Line yAxisId="left" type="monotone" dataKey="craving" name="Craving" stroke="#d95926" connectNulls />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="structural_score"
-                name="Score estructural"
-                stroke="#55bd91"
-                connectNulls
-                strokeWidth={2}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="chart-grid">
+            <CheckInChart points={timeline.points} />
+            <StructuralScoreChart points={timeline.points.map((point) => ({
+              date: point.date,
+              at: point.date,
+              score: point.structural_score,
+              calculation_version: point.structural_calculation_version,
+              band: point.confidence_band,
+            }))} />
+          </div>
         ) : (
           <p>Sin datos todavía.</p>
         )}
+        {timeline && <DailyStatisticsPanel data={timeline.daily_statistics} patientView />}
       </section>
     </div>
   );

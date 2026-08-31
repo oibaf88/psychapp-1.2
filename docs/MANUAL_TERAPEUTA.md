@@ -1,5 +1,14 @@
 # Manual del terapeuta — PsychDeep / PsychApp 1.2
 
+> **Documento histórico (motor anterior a v1.4).** Las fórmulas y la tabla de
+> reglas siguientes se conservan para interpretar evaluaciones antiguas, no
+> describen el motor actual. Para el funcionamiento vigente consulta el manual
+> dentro de la aplicación y [Fundamentos y límites clínicos](CLINICAL_RISK_BASIS.md).
+> Desde v1.4, el score usa `1 / (1 + media(|z|))`, las reglas distinguen deterioro
+> de cambio favorable y una señal vigente no refutada de ideación indirecta
+> exige al menos N3 (valoración prioritaria). Ninguno de estos índices es una
+> escala clínica validada ni una probabilidad de suicidio o recaída.
+
 Este manual explica **todo** lo que un profesional necesita saber para usar
 el panel: de dónde salen los datos, cómo se genera cada alerta, qué es
 exactamente el score estructural, qué hace y qué no hace cada agente de IA,

@@ -29,6 +29,7 @@ import {
 import CopilotPanel from "../components/CopilotPanel";
 import PatientProfilePanel from "../components/PatientProfilePanel";
 import PsychosocialPanel from "../components/PsychosocialPanel";
+import DailyStatisticsPanel from "../components/DailyStatisticsPanel";
 
 type Tab =
   | "resumen"
@@ -304,6 +305,7 @@ export default function PatientDetailPage() {
               <CheckInChart points={metrics.checkins} />
               <LinguisticSignalChart points={metrics.linguistic} onSelect={openEvidence} />
             </div>
+            <DailyStatisticsPanel data={metrics.daily_statistics} />
           </section>
         )}
 

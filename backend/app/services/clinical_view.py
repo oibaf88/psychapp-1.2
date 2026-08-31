@@ -51,6 +51,7 @@ from app.models import (
 )
 from app.services import agent2_trace
 from app.services import baseline as baseline_service
+from app.services import daily_statistics as daily_statistics_service
 from app.services import psychosocial as psychosocial_service
 
 EXCERPT_CHARS = 320
@@ -87,6 +88,34 @@ FAMILY_EVIDENCE_KIND = {
 }
 
 RULE_CATALOG: dict[str, dict[str, Any]] = {
+    "N3_senal_linguistica_ideacion_indirecta": {
+        "family": FAMILY_LINGUISTIC,
+        "level": 3,
+        "title": "Posible ideación no explicitada: valoración pendiente",
+        "plain": (
+            "Una señal textual activa de las últimas 12 horas marca ideación indirecta. "
+            "Es una inferencia que requiere indagación directa, no una ideación confirmada ni "
+            "un resultado C-SSRS. El score estructural, los protectores y otros mensajes neutros "
+            "no pueden rebajar esta prioridad de revisión."
+        ),
+        "what_now": (
+            "Revisa la fuente original y contacta para aclarar deseo de morir, pensamiento activo, "
+            "método, intención, plan y conducta, siguiendo C-SSRS/SAFE-T y juicio clínico. "
+            "Si la inferencia es errónea, refútala con motivo; si hay peligro inmediato, activa "
+            "el protocolo de seguridad. N3 es prioridad operativa, no predicción de suicidio."
+        ),
+    },
+    "N3_convergencia_critica_extrema": {
+        "family": FAMILY_CONVERGENCE,
+        "level": 3,
+        "title": "Deterioro concurrente: revisión profesional",
+        "plain": (
+            "El componente de cambio adverso supera 2.4, con rumiación mayor de 0.85 y "
+            "sueño descendente. Son umbrales operativos exploratorios: una suma estadística "
+            "no establece por sí misma emergencia suicida ni probabilidad de recaída."
+        ),
+        "what_now": "Contrasta los cambios con la persona y valora conjuntamente seguridad, consumo, sueño y contexto clínico.",
+    },
     "N4_declaracion_ideacion_o_plan": {
         "family": FAMILY_CONFIRMED_FACT,
         "level": 4,
@@ -115,6 +144,23 @@ RULE_CATALOG: dict[str, dict[str, Any]] = {
             "lectura del modelo es correcta, actúa como en una alerta de nivel 4. Si es un falso "
             "positivo (ironía, cita, letra de canción), regístralo como hecho de categoría "
             "«corrección» y descarta la alerta indicando el motivo."
+        ),
+    },
+    "N4_convergencia_interpersonal_despedida": {
+        "family": FAMILY_CONVERGENCE,
+        "level": 4,
+        "title": "Posible ideación con contexto interpersonal y despedida",
+        "plain": (
+            "Coinciden una señal textual reciente de ideación indirecta, carga percibida y "
+            "pertenencia frustrada vigentes, y una señal de despedida. Esta coincidencia "
+            "eleva la prioridad operativa de valoración; no confirma intención o plan "
+            "suicida ni representa una probabilidad clínica validada."
+        ),
+        "what_now": (
+            "Revisa el texto original y las observaciones interpersonales que sostienen "
+            "la alerta. Contacta de inmediato para valorar seguridad, intención, plan y "
+            "conducta mediante indagación directa y juicio clínico, aplicando el protocolo "
+            "local de seguridad cuando corresponda."
         ),
     },
     "N4_convergencia_critica_extrema": {
@@ -400,6 +446,22 @@ def level_explanation(
     signals = _as_dict(assessment.input_signals)
     score = _number(signals.get("structural_score"))
     band = signals.get("confidence_band")
+    if signals.get("structural_calculation_version") == "structural-v2":
+        info = dict(info)
+        if family == FAMILY_STRUCTURAL:
+            info["plain"] = (
+                "La regla usa la banda del componente para revisión: cambios adversos de ánimo, "
+                "craving invertido y autoeficacia, y cambios bilaterales de sueño. Las mejoras "
+                "se describen aparte y no generan por sí mismas deterioro. La persistencia cuenta "
+                "días distintos con la fórmula v2; los ceros históricos de v1 no se reutilizan."
+            )
+        elif code == "N0_estable":
+            info["title"] = "Sin criterios superiores de revisión en las entradas disponibles"
+            info["plain"] = (
+                "No se alcanza un umbral operativo de deterioro ni una regla superior. La "
+                "similitud estructural puede ser baja si hubo mejoras. Esto no confirma seguridad "
+                "ni sustituye una evaluación clínica."
+            )
 
     if family == FAMILY_CONFIRMED_FACT:
         headline = f"Nivel {level} por un HECHO declarado, no por una inferencia del sistema."
@@ -420,7 +482,7 @@ def level_explanation(
     if score is not None and family in (FAMILY_CONFIRMED_FACT, FAMILY_LINGUISTIC) and level >= 3:
         reconciliation = (
             f"El score estructural es {score:.2f} ({BAND_LABELS.get(band, band)}), es decir, sus check-ins "
-            f"diarios siguen pareciéndose a su línea base. No hay contradicción: el score estructural solo "
+            f"diarios tienen esa similitud con su línea base. No hay contradicción: el score estructural solo "
             f"mide check-ins, y este nivel {level} no lo ha disparado el score sino "
             f"{'un hecho declarado' if family == FAMILY_CONFIRMED_FACT else 'un texto concreto del paciente'}. "
             f"Una persona puede seguir durmiendo y puntuando como siempre y aun así escribir, o declarar, "
@@ -436,10 +498,18 @@ def level_explanation(
             f"tratamiento). Este nivel lo ha disparado el contexto, que suele moverse antes que el ánimo."
         )
     elif score is not None and family in (FAMILY_STRUCTURAL, FAMILY_CONVERGENCE):
-        reconciliation = (
-            f"Aquí el score estructural SÍ es el motivo: {score:.2f} "
-            f"({BAND_LABELS.get(band, band)}). Revisa qué variable se ha desviado en la gráfica de z-scores."
-        )
+        if signals.get("structural_calculation_version") == "structural-v2":
+            reconciliation = (
+                f"La similitud estructural es {score:.2f}. Las reglas estadísticas usan por separado "
+                f"el componente para revisión ({signals.get('deterioration_band', 'sin datos')}), "
+                "sin compensar cambios adversos con mejoras. Revisa la regla seleccionada: una "
+                "convergencia lingüística puede tener prioridad sin depender del score."
+            )
+        else:
+            reconciliation = (
+                f"Evaluación histórica: score estructural {score:.2f} ({BAND_LABELS.get(band, band)}). "
+                "Revisa las variables y la regla de aquella versión del motor."
+            )
     elif score is None:
         reconciliation = (
             "No hay score estructural en esta evaluación: el paciente aún no tiene línea base "
@@ -475,6 +545,12 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
     both push the score down. Splitting the variables into adverse and
     favourable movements is what makes a low score actionable.
     """
+    from math import isfinite
+
+    def number(value):
+        parsed = _number(value)
+        return parsed if parsed is not None and isfinite(parsed) else None
+
     empty = {
         "score": None,
         "band": None,
@@ -492,6 +568,10 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
         "composite_z": None,
         "adverse_composite_z": None,
         "favourable_composite_z": None,
+        "deterioration_score": None,
+        "deterioration_band": None,
+        "calculation_version": None,
+        "baseline_is_stale": False,
         "baseline_sample_count": None,
         "recent_sample_count": None,
         "sleep_trend": None,
@@ -506,10 +586,33 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
     structural = _as_dict(_as_dict(trace.get("inputs")).get("structural"))
     composite = _as_dict(structural.get("composite"))
 
-    score = _number(signals.get("structural_score"))
+    score = number(signals.get("structural_score"))
     band = signals.get("confidence_band")
     if score is None and band is None:
         return empty
+
+    version = structural.get("calculation_version") or signals.get("structural_calculation_version") or "structural-v1"
+    is_v2 = version == "structural-v2"
+    baseline_is_stale = structural.get("baseline_is_stale") is True
+    deterioration_score = number(composite.get("deterioration_score")) if is_v2 else None
+    if is_v2 and deterioration_score is None:
+        deterioration_score = number(signals.get("deterioration_score"))
+    deterioration_band = (composite.get("deterioration_band") or signals.get("deterioration_band")) if is_v2 else None
+    scale_note = empty["scale_note"]
+    band_meaning = BAND_MEANING.get(band)
+    if is_v2:
+        scale_note = (
+            "El score estructural mide SIMILITUD con la línea base personal: va de más de 0 a 1. "
+            "1.00 = las medias recientes coinciden con la línea base; cuanto menor es, mayor es el cambio. "
+            "Una mejora también puede bajarlo. Un score alto significa «sin cambios», nunca «sin riesgo». "
+            "El componente de deterioro se calcula por separado y tampoco es una probabilidad clínica."
+        )
+        band_meaning = {
+            "stable": "Media de |z| ≤ 1.20: similitud descriptiva estable (score ≥ 1/2.20).",
+            "transition": "1.20 < media de |z| ≤ 1.95: transición (1/2.95 ≤ score < 1/2.20).",
+            "unstable": "Media de |z| > 1.95: cambio descriptivo marcado (score < 1/2.95).",
+            "insufficient_data": "Faltan observaciones válidas para comparar los cuatro ejes con su línea base.",
+        }.get(band)
 
     z_scores = _as_dict(signals.get("z_scores"))
     trace_variables = {row.get("key"): row for row in _as_list(structural.get("variables")) if isinstance(row, dict)}
@@ -519,17 +622,23 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
     favourable: list[float] = []
     for key in baseline_service.VARIABLES:
         row = _as_dict(trace_variables.get(key))
-        z = _number(row.get("z_score"))
+        z = number(row.get("z_score"))
         if z is None:
-            z = _number(z_scores.get(key))
-        baseline_mean = _number(row.get("baseline_mean"))
-        recent_mean = _number(row.get("recent_mean"))
+            z = number(z_scores.get(key))
+        baseline_mean = number(row.get("baseline_mean"))
+        recent_mean = number(row.get("recent_mean"))
         if z is None:
             direction = "sin_datos"
             reading = "Sin z-score guardado para esta variable."
         elif abs(z) < 0.5:
             direction = "igual"
             reading = "Prácticamente igual que su línea base."
+        elif key == "sleep_hours":
+            direction = "cambio"
+            reading = (
+                "Más horas que su línea base; no implica por sí solo mejoría."
+                if z > 0 else "Menos horas que su línea base; conviene revisar duración, calidad y contexto."
+            )
         elif z < 0:
             direction = "peor"
             reading = "Por DEBAJO de su línea base (movimiento adverso)."
@@ -537,16 +646,25 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
             direction = "mejor"
             reading = "Por ENCIMA de su línea base (movimiento favorable)."
         if z is not None:
-            (adverse if z < 0 else favourable).append(abs(z))
+            if is_v2:
+                adverse.append(abs(z) if key == "sleep_hours" else max(-z, 0.0))
+                favourable.append(0.0 if key == "sleep_hours" else max(z, 0.0))
+            else:
+                # Explain saved v1 aggregates without relabelling historical
+                # calculations as the new directional engine.
+                (adverse if z < 0 else favourable).append(abs(z))
         variables.append(
             {
                 "key": key,
                 "label": VARIABLE_LABELS.get(key, key),
-                "note": VARIABLE_NOTES.get(key),
+                "note": (
+                    "Horas declaradas: el cambio respecto a su media se revisa en ambas direcciones."
+                    if key == "sleep_hours" else VARIABLE_NOTES.get(key)
+                ),
                 "baseline_mean": baseline_mean,
-                "baseline_std": _number(row.get("baseline_population_std")),
+                "baseline_std": number(row.get("baseline_population_std")),
                 "recent_mean": recent_mean,
-                "difference": _number(row.get("difference")),
+                "difference": number(row.get("difference")),
                 "z_score": z,
                 "abs_z": abs(z) if z is not None else None,
                 "direction": direction,
@@ -554,9 +672,20 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
             }
         )
 
-    adverse_z = round(sum(adverse) / len(adverse), 3) if adverse else 0.0
-    favourable_z = round(sum(favourable) / len(favourable), 3) if favourable else 0.0
-    composite_z = _number(composite.get("composite_z"))
+    complete = sum(v["z_score"] is not None for v in variables) == len(baseline_service.VARIABLES)
+    if is_v2:
+        # Persisted unrounded-input aggregates take precedence. Fallback is
+        # possible only with all four axes; unknown is never an observed zero.
+        adverse_z = number(composite.get("adverse_composite_z"))
+        favourable_z = number(composite.get("favourable_composite_z"))
+        if complete and adverse_z is None:
+            adverse_z = round(sum(adverse) / len(baseline_service.VARIABLES), 3)
+        if complete and favourable_z is None:
+            favourable_z = round(sum(favourable) / len(baseline_service.VARIABLES), 3)
+    else:
+        adverse_z = (round(sum(adverse) / len(adverse), 3) if adverse else 0.0) if complete else None
+        favourable_z = (round(sum(favourable) / len(favourable), 3) if favourable else 0.0) if complete else None
+    composite_z = number(composite.get("composite_z"))
 
     worst = max(
         (v for v in variables if v["abs_z"] is not None and v["direction"] == "peor"),
@@ -570,11 +699,11 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
     )
 
     if score is None:
-        summary = "El paciente no tiene línea base personal todavía, así que no hay score estructural."
+        summary = "No hay suficientes datos válidos de línea base o de check-ins recientes para calcular el score."
     elif band == "stable":
         summary = (
-            f"{score:.2f} · estable. Sus check-ins de los últimos 7 días se parecen a los de sus 21 días "
-            f"previos. Esto describe continuidad, no bienestar."
+            f"{score:.2f} · estable. Sus check-ins de los últimos 7 días se parecen a su línea base "
+            f"personal de 21 días. Esto describe continuidad, no bienestar."
         )
     elif band == "transition":
         summary = (
@@ -585,13 +714,22 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
             f"{score:.2f} · inestable. Sus últimos 7 días se alejan claramente de su línea base personal."
         )
 
-    if adverse_z == 0 and favourable_z == 0:
+    sleep_variable = next((v for v in variables if v["key"] == "sleep_hours"), None)
+    sleep_change = sleep_variable["abs_z"] if sleep_variable is not None else None
+    if adverse_z is None or favourable_z is None:
+        direction_summary = "Faltan datos para resumir la dirección del cambio; no se imputan ceros."
+    elif adverse_z == 0 and favourable_z == 0:
         direction_summary = "Sin desviación apreciable en ninguna variable."
     elif favourable_z > adverse_z and best is not None:
         direction_summary = (
             f"La desviación es mayoritariamente FAVORABLE: lo que más se ha movido es «{best['label']}», "
             f"y hacia arriba. Ojo: un score bajo no implica empeoramiento — el cálculo usa valores "
             f"absolutos, así que una mejora grande también baja el score."
+        )
+    elif is_v2 and sleep_change is not None and sleep_change >= 0.5 and (worst is None or sleep_change >= worst["abs_z"]):
+        direction_summary = (
+            "El cambio dominante está en las horas de sueño. Se cuenta como cambio para revisión en "
+            "ambas direcciones; dormir más o menos no establece por sí solo deterioro clínico."
         )
     elif worst is not None:
         direction_summary = (
@@ -607,8 +745,32 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
         "usa el desglose por variable para saber si el cambio es a mejor o a peor.",
         "Los textos de chat y diario NO entran en este score. Se analizan por separado (Agente 2).",
     ]
-    baseline_n = _number(structural.get("baseline_sample_count"))
-    recent_n = _number(structural.get("recent_sample_count"))
+    if is_v2:
+        caveats.extend([
+            "structural-v2: score = 1 / (1 + media de |z|). z = (media reciente − media base) / "
+            "max(DE base, suelo técnico): 1 punto para ánimo, craving invertido y autoeficacia; 0.5 h para sueño.",
+            "El componente adverso usa max(−z, 0), salvo sueño, que usa |z|. Tanto la media adversa "
+            "como la favorable dividen entre los cuatro ejes, incluidos los ceros observados; sin los cuatro "
+            "ejes no hay compuesto. Deterioration score = 1 / (1 + media adversa).",
+            "Fórmula, suelos y bandas son heurísticos técnicos de seguimiento, no una escala clínica "
+            "validada ni una probabilidad de suicidio, recaída o patología dual.",
+        ])
+    elif version == "structural-v1":
+        caveats.extend([
+            "Registro histórico structural-v1: score = max(0, 1 − media de |z| / 3). Podía saturarse "
+            "en cero ante grandes mejoras o empeoramientos; esta pantalla conserva el cálculo guardado.",
+            "Los resúmenes direccionales históricos usaban medias por grupo de signos y contaban más "
+            "sueño como favorable. No equivalen al componente de deterioro bilateral de structural-v2.",
+        ])
+    else:
+        caveats.append("Versión de cálculo no reconocida; consulta la fórmula guardada en la traza antes de interpretar sus bandas.")
+    if baseline_is_stale:
+        caveats.append(
+            "La línea base ha superado 21 días sin reemplazo por falta de observaciones válidas suficientes. "
+            "El cálculo conserva esa referencia antigua y debe interpretarse con cautela."
+        )
+    baseline_n = number(structural.get("baseline_sample_count"))
+    recent_n = number(structural.get("recent_sample_count"))
     if recent_n is not None and recent_n < 3:
         caveats.append(
             f"Solo {int(recent_n)} check-in(s) en la ventana reciente de 7 días: el score es muy sensible "
@@ -619,18 +781,22 @@ def structural_explanation(assessment: RiskAssessment | None) -> dict[str, Any]:
         "score": score,
         "band": band,
         "band_label": BAND_LABELS.get(band, band),
-        "band_meaning": BAND_MEANING.get(band),
-        "scale_note": empty["scale_note"],
+        "band_meaning": band_meaning,
+        "scale_note": scale_note,
         "summary": summary,
         "direction_summary": direction_summary,
         "variables": variables,
         "composite_z": composite_z,
         "adverse_composite_z": adverse_z,
         "favourable_composite_z": favourable_z,
+        "deterioration_score": deterioration_score,
+        "deterioration_band": deterioration_band,
+        "calculation_version": version,
+        "baseline_is_stale": baseline_is_stale,
         "baseline_sample_count": int(baseline_n) if baseline_n is not None else None,
         "recent_sample_count": int(recent_n) if recent_n is not None else None,
         "sleep_trend": signals.get("sleep_trend"),
-        "sleep_trend_slope": _number(signals.get("sleep_trend_slope")),
+        "sleep_trend_slope": number(signals.get("sleep_trend_slope")),
         "caveats": caveats,
     }
 
@@ -1110,20 +1276,21 @@ def evidence_for_assessment(db: Session, assessment: RiskAssessment | None) -> d
     code = selected_rule_code(assessment)
     family = rule_info(code)["family"]
 
-    if family == FAMILY_LINGUISTIC and assessment.agent2_trace_id:
-        trace = db.get(Agent2AnalysisTrace, assessment.agent2_trace_id)
+    if family == FAMILY_LINGUISTIC or code == "N4_convergencia_interpersonal_despedida":
+        # A recent safety signal can retain priority through a later neutral
+        # message. Show the source that drove the rule, not that neutral text.
+        driver_id = _as_dict(assessment.input_signals).get("safety_driver_signal_id")
+        signal_id = driver_id or assessment.linguistic_signal_id_used
+        signal = db.get(AlfaSignal, uuid.UUID(str(signal_id))) if signal_id else None
+        if signal is not None and signal.user_id != assessment.user_id:
+            signal = None
+        trace_id = signal.agent2_trace_id if signal is not None else assessment.agent2_trace_id
+        trace = db.get(Agent2AnalysisTrace, trace_id) if trace_id else None
         if trace and trace.user_id == assessment.user_id:
             source_model = ChatMessage if trace.source_type == "chat_message" else DiaryEntry
             source_id = trace.chat_message_id or trace.diary_entry_id
             row = db.get(source_model, source_id) if source_id else None
             content = row.content if row is not None and row.user_id == trace.user_id else ""
-            signal = (
-                db.query(AlfaSignal)
-                .filter(AlfaSignal.id == assessment.linguistic_signal_id_used)
-                .first()
-                if assessment.linguistic_signal_id_used
-                else None
-            )
             return {
                 "kind": "texto",
                 "source_type": trace.source_type,
@@ -1245,7 +1412,8 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     Everything is returned as flat, already-sorted arrays with ISO
     timestamps so the frontend only has to draw it.
     """
-    since = datetime.utcnow() - timedelta(days=window_days)
+    now = datetime.utcnow()
+    since, _ = daily_statistics_service.window_bounds(window_days, now)
 
     checkins = (
         db.query(CheckIn)
@@ -1317,7 +1485,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     checkin_series = [
         {
             "at": _utc_iso(row.created_at),
-            "date": row.created_at.strftime("%Y-%m-%d"),
+            "date": daily_statistics_service.local_day(row.created_at),
             "mood": row.mood,
             "craving": row.craving,
             "sleep_hours": row.sleep_hours,
@@ -1334,9 +1502,10 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
         structural_series.append(
             {
                 "at": _utc_iso(row.timestamp),
-                "date": row.timestamp.strftime("%Y-%m-%d"),
+                "date": daily_statistics_service.local_day(row.timestamp),
                 "score": _number(value.get("score")),
                 "band": row.confidence_band,
+                "calculation_version": value.get("calculation_version") or "structural-v1",
                 "composite_z": _number(value.get("composite_z")),
                 "z_mood": _number(z_scores.get("mood")),
                 "z_craving_inv": _number(z_scores.get("craving_inv")),
@@ -1360,21 +1529,25 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
         source_text = ""
         source_type = None
         source_id = None
+        source_created_at = None
         if trace is not None:
             source_type = trace.source_type
-            source_id, source_text, _created = _source_for_trace(trace, chat_by_id, diary_by_id)
+            source_id, source_text, source_created_at = _source_for_trace(trace, chat_by_id, diary_by_id)
         linguistic_series.append(
             {
                 "at": _utc_iso(row.timestamp),
-                "date": row.timestamp.strftime("%Y-%m-%d"),
+                "date": daily_statistics_service.local_day(source_created_at or row.timestamp),
                 "signal_id": str(row.id),
+                "is_active": row.is_active,
                 "rumination_score": _number(value.get("rumination_score")),
                 "negative_valence": _number(value.get("negative_valence")),
                 "urgency_level": _number(value.get("urgency_level")),
                 "ambivalence": _number(value.get("ambivalence")),
-                "ideation_direct": bool(value.get("ideation_direct")),
-                "ideation_indirect": bool(value.get("ideation_indirect")),
-                "consumption_crisis": bool(value.get("consumption_crisis")),
+                "ideation_direct": value.get("ideation_direct") if isinstance(value.get("ideation_direct"), bool) else None,
+                "ideation_indirect": value.get("ideation_indirect") if isinstance(value.get("ideation_indirect"), bool) else None,
+                "consumption_crisis": value.get("consumption_crisis") if isinstance(value.get("consumption_crisis"), bool) else None,
+                "is_typical_for_patient": value.get("is_typical_for_patient") if isinstance(value.get("is_typical_for_patient"), bool) else None,
+                "deviation_from_own_baseline": value.get("deviation_from_own_baseline"),
                 "emotional_complexity": value.get("emotional_complexity"),
                 "short_rationale": value.get("short_rationale"),
                 "source_type": source_type,
@@ -1382,6 +1555,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
                 if source_type is None
                 else ("Chat" if source_type == "chat_message" else "Diario"),
                 "source_id": str(source_id) if source_id else None,
+                "source_at": _utc_iso(source_created_at),
                 "source_excerpt": _excerpt(source_text, 200),
                 "trace_id": str(trace.id) if trace else None,
             }
@@ -1399,7 +1573,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
         psychosocial_series.append(
             {
                 "at": _utc_iso(row.calculated_at),
-                "date": row.calculated_at.strftime("%Y-%m-%d"),
+                "date": daily_statistics_service.local_day(row.calculated_at),
                 "index": index,
                 "band": snapshot.get("band"),
                 "has_acute_change": bool(snapshot.get("has_acute_change")),
@@ -1424,7 +1598,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     psychosocial_events = [
         {
             "at": _utc_iso(row.observed_at),
-            "date": row.observed_at.strftime("%Y-%m-%d"),
+            "date": daily_statistics_service.local_day(row.observed_at),
             "domain": row.domain,
             "domain_label": psychosocial_service.DOMAIN_LABELS.get(row.domain, row.domain),
             "category": row.category,
@@ -1445,7 +1619,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     level_series = [
         {
             "at": _utc_iso(row.calculated_at),
-            "date": row.calculated_at.strftime("%Y-%m-%d"),
+            "date": daily_statistics_service.local_day(row.calculated_at),
             "level": row.alert_level,
             "assessment_id": str(row.id),
             "rule": selected_rule_code(row),
@@ -1460,14 +1634,14 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     # chat turn), which is unreadable over 90 days.
     by_day: dict[str, int] = defaultdict(int)
     for row in assessments:
-        day = row.calculated_at.strftime("%Y-%m-%d")
+        day = daily_statistics_service.local_day(row.calculated_at)
         by_day[day] = max(by_day[day], row.alert_level)
     daily_level_series = [{"date": day, "max_level": level} for day, level in sorted(by_day.items())]
 
     events = [
         {
             "at": _utc_iso(row.created_at),
-            "date": row.created_at.strftime("%Y-%m-%d"),
+            "date": daily_statistics_service.local_day(row.created_at),
             "kind": "alert",
             "level": row.alert_level,
             "label": row.title,
@@ -1478,7 +1652,7 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     ] + [
         {
             "at": _utc_iso(row.created_at),
-            "date": row.created_at.strftime("%Y-%m-%d"),
+            "date": daily_statistics_service.local_day(row.created_at),
             "kind": "fact",
             "level": None,
             "label": f"Hecho: {row.category} ({row.declared_by})",
@@ -1492,6 +1666,10 @@ def build_metrics(db: Session, patient_id, window_days: int = 90) -> dict[str, A
     return {
         "window_days": window_days,
         "generated_at": _utc_iso(datetime.utcnow()),
+        "daily_statistics": daily_statistics_service.load_daily_statistics(
+            db, patient_id, window_days, now=now,
+            checkins=checkins, linguistic_signals=linguistic_signals, observations=observations,
+        ),
         "checkins": checkin_series,
         "structural": structural_series,
         "daily_structural": daily_structural_series,

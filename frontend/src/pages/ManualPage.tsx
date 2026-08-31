@@ -397,21 +397,21 @@ export default function ManualPage() {
                 </li>
                 <li>
                   Media y desviación típica poblacional por variable. El craving se invierte antes (
-                  <code>craving_inv = 10 − craving</code>) para que en las cuatro «más alto sea mejor».
+                  <code>craving_inv = 10 − craving</code>) para que menos craving sea favorable. El sueño se interpreta en ambas direcciones: más horas no implica siempre mejora.
                 </li>
                 <li>
                   <strong>Ventana reciente</strong>: media de los últimos <strong>7 días</strong>.
                 </li>
                 <li>
                   <strong>z por variable</strong>:{" "}
-                  <code>z = (media_reciente − media_base) / desviación_base</code> (si la desviación es 0,{" "}
-                  <code>z = 0</code>).
+                  <code>z = (media_reciente − media_base) / máx(desviación_base, mínimo_técnico)</code>.
+                  El mínimo es 1 punto en escalas 0–10 y 0,5 h en sueño; no son cortes clínicos.
                 </li>
                 <li>
                   <strong>z compuesto</strong>: media de los <strong>valores absolutos</strong> de los cuatro z.
                 </li>
                 <li>
-                  <strong>Score</strong>: <code>score = máx(0, mín(1, 1 − z_compuesto / 3))</code>
+                  <strong>Score</strong>: <code>score = 1 / (1 + z_compuesto)</code>, sin saturación artificial a cero.
                 </li>
               </ol>
 
@@ -430,21 +430,21 @@ export default function ManualPage() {
                       <td>
                         <code>stable</code>
                       </td>
-                      <td>≥ 0.60</td>
+                      <td>≥ 1/2,2 (≈ 0,455)</td>
                       <td>Los últimos 7 días se parecen a su línea base.</td>
                     </tr>
                     <tr>
                       <td>
                         <code>transition</code>
                       </td>
-                      <td>0.35 – 0.60</td>
+                      <td>≥ 1/2,95 y &lt; 1/2,2</td>
                       <td>Desviación moderada.</td>
                     </tr>
                     <tr>
                       <td>
                         <code>unstable</code>
                       </td>
-                      <td>&lt; 0.35</td>
+                      <td>&lt; 1/2,95 (≈ 0,339)</td>
                       <td>Se alejan claramente de su línea base.</td>
                     </tr>
                     <tr>
@@ -469,7 +469,7 @@ z_sueño        = (5.5 − 7.0) / 1.0 = −1.50
 z_autoeficacia = (5.0 − 6.0) / 1.0 = −1.00
 
 z_compuesto = (2.00 + 1.00 + 1.50 + 1.00) / 4 = 1.375
-score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
+score       = 1 / (1 + 1.375) = 0.421  →  banda "transition"`}</pre>
               <p>Los cuatro z son negativos: la desviación es adversa.</p>
 
               <h3>La trampa importante: el score es ciego a la dirección</h3>
@@ -478,7 +478,7 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                 también baja su score y puede aparecer como <code>unstable</code>. Por eso el panel muestra
                 siempre la <strong>desviación adversa media</strong> y la{" "}
                 <strong>desviación favorable media</strong>, y lo dice explícitamente si domina la favorable.{" "}
-                <strong>Nunca leas el score solo: lee el desglose por variable.</strong>
+                <strong>Las reglas usan un componente separado de deterioro.</strong> En ánimo, craving invertido y autoeficacia toma máx(−z, 0); en sueño toma |z| como cambio bilateral para revisar. Promedia los cuatro ejes, sin compensar cambios adversos con mejoras. Los datos ausentes son desconocidos, no ceros. Las evaluaciones antiguas conservan su fórmula y versión.
               </p>
 
               <h3>Qué NO es el score</h3>
@@ -632,8 +632,10 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
           {active === "motor" && (
             <>
               <h2>6. El motor de riesgo: cómo se genera cada nivel</h2>
+              <p className="manual-key">N0–N4 son prioridades operativas de revisión, no probabilidades ni una escala clínica validada. La ideación indirecta vigente requiere como mínimo N3, aunque haya mejoras o factores protectores. Una inferencia textual no confirma intención ni plan.</p>
+              <p>La indagación de seguridad se orienta por <a href="https://cssrs.columbia.edu/wp-content/uploads/C-SSRS-Screener-with-Triage-Points-for-outpatientambulatory-2026.pdf" target="_blank" rel="noreferrer">C-SSRS</a> y <a href="https://library.samhsa.gov/sites/default/files/safet-flyer-pep24-01-036.pdf" target="_blank" rel="noreferrer">SAFE-T</a>. El seguimiento de consumo considera dominios de <a href="https://www.mentalhealth.va.gov/healthcare-providers/docs/VA_OMH_The_Brief_Addiction-Monitor_Instuctions_508.pdf" target="_blank" rel="noreferrer">BAM</a> y ASSIST; la patología dual requiere evaluación integrada según SAMHSA TIP 42. No se calculan puntuaciones de esos instrumentos desde texto libre o autocheckings: requieren sus preguntas y periodos. Los umbrales del producto necesitan validación clínica prospectiva.</p>
               <p>
-                Es código determinista, sin IA. Se evalúan <strong>catorce reglas en orden fijo</strong> y gana{" "}
+                Es código determinista, sin IA. Se evalúan <strong>dieciocho reglas en orden fijo</strong> y gana{" "}
                 <strong>la primera que se cumple</strong>.
               </p>
               <div className="table-wrap">
@@ -649,20 +651,24 @@ score       = 1 − 1.375 / 3 = 0.54  →  banda "transition"`}</pre>
                   <tbody>
                     {(
                       [
-                        ["1", "N4_declaracion_ideacion_o_plan", 4, "Hecho confirmado ideation_active o planning en las últimas 48 h"],
-                        ["2", "N4_senal_linguistica_ideacion_directa", 4, "Señal del Agente 2 con ideation_direct = true y menos de 12 h"],
-                        ["3", "N4_convergencia_critica_extrema", 4, "score < 0.20 y rumiación > 0.85 y sueño empeorando"],
-                        ["4", "N3_declaracion_crisis_consumo", 3, "Hecho confirmado consumption_crisis en 48 h"],
-                        ["5", "N3_senal_linguistica_crisis_consumo", 3, "Señal del Agente 2 con consumption_crisis = true (< 12 h)"],
-                        ["6", "N3_unstable_persistente_con_convergencia", 3, "unstable y ≥ 3 días naturales distintos y (sueño empeorando o rumiación > 0.60)"],
-                        ["7", "N3_unstable_persistente", 3, "unstable y ≥ 5 días naturales distintos"],
-                        ["8", "N3_desestabilizacion_psicosocial_aguda", 3, "Cambio psicosocial adverso en 14 días y (sueño empeorando o rumiación > 0.60 o banda no estable)"],
-                        ["9", "N3_convergencia_psicosocial_estructural", 3, "Índice psicosocial ≥ 0.60 y banda unstable"],
-                        ["10", "N2_desviacion_moderada", 2, "Banda transition, o primer día en unstable"],
-                        ["11", "N2_vulnerabilidad_psicosocial", 2, "Índice psicosocial ≥ 0.50 sin nada más"],
-                        ["12", "N0_estable", 0, "Banda stable"],
-                        ["13", "N1_datos_insuficientes_o_sin_criterios", 1, "Banda insufficient_data"],
-                        ["14", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
+                        ["1", "N4_declaracion_ideacion_o_plan", 4, "Declaración crítica ideation_active o planning en 48 h; requiere valoración urgente"],
+                        ["2", "N4_senal_linguistica_ideacion_directa", 4, "Ideación directa activa y reciente, actual o retenida en la ventana de 12 h"],
+                        ["3", "N4_convergencia_interpersonal_despedida", 4, "Ideación indirecta + señal interpersonal vigente + despedida; valoración urgente"],
+                        ["4", "N3_senal_linguistica_ideacion_indirecta", 3, "Posible ideación no explicitada activa en 12 h: valoración prioritaria sin compensación"],
+                        ["5", "N3_convergencia_critica_extrema", 3, "Componente adverso > 2.4, rumiación > 0.85 y sueño descendente; no emergencia inferida de la suma"],
+                        ["6", "N3_declaracion_crisis_consumo", 3, "Crisis de consumo declarada en 48 h"],
+                        ["7", "N3_senal_linguistica_crisis_consumo", 3, "Crisis de consumo inferida activa en 12 h"],
+                        ["8", "N3_unstable_persistente_con_convergencia", 3, "Banda de deterioro unstable ≥ 3 días distintos con sueño descendente o rumiación elevada"],
+                        ["9", "N3_unstable_persistente", 3, "Banda de deterioro unstable ≥ 5 días distintos"],
+                        ["10", "N3_desestabilizacion_psicosocial_aguda", 3, "Cambio adverso en 14 días y otra señal convergente"],
+                        ["11", "N3_riesgo_interpersonal_alto", 3, "Carga percibida y pertenencia frustrada elevadas, expresadas en 14 días"],
+                        ["12", "N3_riesgo_recaida_contextual", 3, "Contexto de consumo elevado y craving ascendente"],
+                        ["13", "N3_convergencia_psicosocial_estructural", 3, "Índice psicosocial ≥ 0.60 y banda de deterioro unstable"],
+                        ["14", "N2_desviacion_moderada", 2, "Banda de deterioro transition o primer día unstable, sin criterios superiores"],
+                        ["15", "N2_vulnerabilidad_psicosocial", 2, "Apoyo bajo, adversidad material, cambio adverso o índice psicosocial ≥ 0.50"],
+                        ["16", "N0_estable", 0, "Sin deterioro estadístico suficiente ni criterios superiores; no equivale a seguridad clínica"],
+                        ["17", "N1_datos_insuficientes_o_sin_criterios", 1, "Datos insuficientes para calcular deterioro"],
+                        ["18", "N1_sin_criterios_superiores", 1, "Regla de cierre"],
                       ] as const
                     ).map(([n, code, level, condition]) => (
                       <tr key={code}>

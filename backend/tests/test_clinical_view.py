@@ -9,6 +9,7 @@ import unittest
 import uuid
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services import clinical_view
 
@@ -98,12 +99,24 @@ class LevelExplanationTests(unittest.TestCase):
         self.assertEqual(explanation["driver_family"], clinical_view.FAMILY_CONFIRMED_FACT)
         self.assertIn("HECHO", explanation["headline"])
 
-    def test_structural_rule_points_back_at_the_score(self):
+    def test_historical_structural_rule_keeps_its_original_attribution(self):
         explanation = clinical_view.level_explanation(
             _assessment(level=3, rule="N3_unstable_persistente", score=0.21, band="unstable")
         )
         self.assertEqual(explanation["driver_family"], clinical_view.FAMILY_STRUCTURAL)
-        self.assertIn("SÍ es el motivo", explanation["structural_reconciliation"])
+        self.assertIn("histórica", explanation["structural_reconciliation"])
+        self.assertIn("0.21", explanation["structural_reconciliation"])
+
+    def test_v2_structural_rule_explains_separate_adverse_component(self):
+        assessment = _assessment(level=3, rule="N3_unstable_persistente", score=0.21, band="unstable")
+        assessment.input_signals.update(
+            structural_calculation_version="structural-v2", deterioration_band="unstable",
+        )
+        explanation = clinical_view.level_explanation(assessment)
+        self.assertEqual(explanation["driver_family"], clinical_view.FAMILY_STRUCTURAL)
+        self.assertIn("por separado", explanation["structural_reconciliation"])
+        self.assertIn("unstable", explanation["structural_reconciliation"])
+        self.assertNotIn("histórica", explanation["structural_reconciliation"])
 
     def test_no_assessment_does_not_crash(self):
         explanation = clinical_view.level_explanation(None)
@@ -122,6 +135,16 @@ class LevelExplanationTests(unittest.TestCase):
 
 
 class StructuralExplanationTests(unittest.TestCase):
+    def _v2_assessment(self, z_scores=None):
+        assessment = _assessment(
+            level=0, rule="N0_estable", score=0.4, band="transition",
+            z_scores=z_scores or {"mood": 2.0, "craving_inv": 2.0, "sleep_hours": 0.0, "self_efficacy": 2.0},
+        )
+        structural = assessment.calculation_trace["inputs"]["structural"]
+        structural["calculation_version"] = "structural-v2"
+        structural["composite"].update(deterioration_score=1.0, deterioration_band="stable")
+        return assessment
+
     def test_direction_is_reported_per_variable(self):
         explanation = clinical_view.structural_explanation(
             _assessment(
@@ -188,6 +211,67 @@ class StructuralExplanationTests(unittest.TestCase):
         self.assertIsNone(explanation["score"])
         self.assertEqual(explanation["variables"], [])
 
+    def test_v2_explains_new_formula_and_separates_favourable_change_from_deterioration(self):
+        explanation = clinical_view.structural_explanation(self._v2_assessment())
+        self.assertEqual(explanation["calculation_version"], "structural-v2")
+        self.assertEqual(explanation["score"], 0.4)
+        self.assertEqual(explanation["deterioration_score"], 1.0)
+        self.assertEqual(explanation["deterioration_band"], "stable")
+        self.assertEqual(explanation["adverse_composite_z"], 0.0)
+        self.assertEqual(explanation["favourable_composite_z"], 1.5)
+        self.assertIn("FAVORABLE", explanation["direction_summary"])
+        self.assertIn("1.20", explanation["band_meaning"])
+        self.assertNotIn("0.60", explanation["band_meaning"])
+        self.assertTrue(any("1 / (1 + media de |z|)" in text for text in explanation["caveats"]))
+        self.assertTrue(any("no una escala clínica validada" in text for text in explanation["caveats"]))
+
+    def test_v2_sleep_increase_is_bilateral_not_favourable(self):
+        assessment = self._v2_assessment({"mood": 0.0, "craving_inv": 0.0, "sleep_hours": 3.0, "self_efficacy": 0.0})
+        explanation = clinical_view.structural_explanation(assessment)
+        by_key = {row["key"]: row for row in explanation["variables"]}
+        self.assertEqual(by_key["sleep_hours"]["direction"], "cambio")
+        self.assertIn("no implica por sí solo mejoría", by_key["sleep_hours"]["reading"])
+        self.assertEqual(explanation["adverse_composite_z"], 0.75)
+        self.assertEqual(explanation["favourable_composite_z"], 0.0)
+        self.assertIn("sueño", explanation["direction_summary"])
+        self.assertNotIn("FAVORABLE", explanation["direction_summary"])
+
+    def test_v2_prefers_persisted_unrounded_input_aggregates(self):
+        assessment = self._v2_assessment()
+        assessment.calculation_trace["inputs"]["structural"]["composite"].update(
+            adverse_composite_z=0.001, favourable_composite_z=1.499,
+        )
+        explanation = clinical_view.structural_explanation(assessment)
+        self.assertEqual(explanation["adverse_composite_z"], 0.001)
+        self.assertEqual(explanation["favourable_composite_z"], 1.499)
+
+    def test_v2_partial_axes_do_not_become_zero_or_shorter_denominator(self):
+        assessment = self._v2_assessment()
+        assessment.input_signals["z_scores"].pop("mood")
+        structural = assessment.calculation_trace["inputs"]["structural"]
+        structural["variables"] = [row for row in structural["variables"] if row["key"] != "mood"]
+        explanation = clinical_view.structural_explanation(assessment)
+        self.assertIsNone(explanation["adverse_composite_z"])
+        self.assertIsNone(explanation["favourable_composite_z"])
+        self.assertIn("Faltan datos", explanation["direction_summary"])
+
+    def test_v2_stale_baseline_is_disclosed(self):
+        assessment = self._v2_assessment()
+        assessment.calculation_trace["inputs"]["structural"]["baseline_is_stale"] = True
+        explanation = clinical_view.structural_explanation(assessment)
+        self.assertTrue(explanation["baseline_is_stale"])
+        self.assertTrue(any("referencia antigua" in text for text in explanation["caveats"]))
+
+    def test_historical_zero_is_preserved_with_old_formula_not_relabelled_v2(self):
+        assessment = _assessment(level=2, rule="N2_desviacion_moderada", score=0.0, band="unstable")
+        explanation = clinical_view.structural_explanation(assessment)
+        self.assertEqual(explanation["score"], 0.0)
+        self.assertEqual(explanation["calculation_version"], "structural-v1")
+        self.assertIsNone(explanation["deterioration_score"])
+        self.assertIsNone(explanation["deterioration_band"])
+        self.assertTrue(any("conserva el cálculo guardado" in text for text in explanation["caveats"]))
+        self.assertTrue(any("max(0, 1 − media de |z| / 3)" in text for text in explanation["caveats"]))
+
 
 class ExcerptTests(unittest.TestCase):
     def test_excerpt_is_truncated_with_an_ellipsis(self):
@@ -203,6 +287,77 @@ class ExcerptTests(unittest.TestCase):
         self.assertEqual(clinical_view._excerpt(None), "")
 
 
+class InterpersonalEvidenceTests(unittest.TestCase):
+    def test_recent_indirect_source_remains_driver_after_a_neutral_message(self):
+        from app.services import risk_engine
+        from test_risk_traceability import InterpersonalConvergenceRuleTests, _linguistic, _structural
+
+        harness = InterpersonalConvergenceRuleTests()
+        prior_signal_id, current_signal_id = uuid.uuid4(), uuid.uuid4()
+        safety = {
+            "ideation_indirect": True,
+            "ideation_direct": False,
+            "consumption_crisis": False,
+            "window_hours": 12,
+            "evidence": [{"signal_id": str(prior_signal_id), "ideation_indirect": True}],
+        }
+        with patch.object(risk_engine, "_recent_safety_signals", return_value=safety):
+            decision = harness._calculate(
+                structural=_structural(score=0.9, band="stable"),
+                linguistic=_linguistic(signal_id=current_signal_id, ideation_indirect=False, rumination=0.2),
+                psychosocial=harness._interpersonal_context(),
+                preferred_signal_id=current_signal_id,
+            )
+        self.assertEqual(decision.triggering_rules, ["N4_convergencia_interpersonal_despedida"])
+        self.assertEqual(decision.input_signals["safety_driver_signal_id"], str(prior_signal_id))
+        self.assertEqual(decision.linguistic_signal_id, current_signal_id)
+
+    def _evidence_fixture(self):
+        assessment = _assessment(level=4, rule="N4_convergencia_interpersonal_despedida")
+        signal_id, trace_id, message_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        assessment.linguistic_signal_id_used = uuid.uuid4()
+        assessment.input_signals["safety_driver_signal_id"] = str(signal_id)
+        signal = SimpleNamespace(
+            id=signal_id, user_id=assessment.user_id, agent2_trace_id=trace_id,
+            value={"ideation_indirect": True},
+        )
+        trace = SimpleNamespace(
+            id=trace_id, user_id=assessment.user_id, source_type="chat_message",
+            chat_message_id=message_id, diary_entry_id=None,
+        )
+        message = SimpleNamespace(
+            id=message_id, user_id=assessment.user_id, content="Texto sintético que originó la señal.",
+            created_at=assessment.calculated_at,
+        )
+        records = {
+            (clinical_view.AlfaSignal, signal_id): signal,
+            (clinical_view.Agent2AnalysisTrace, trace_id): trace,
+            (clinical_view.ChatMessage, message_id): message,
+        }
+        db = SimpleNamespace(get=lambda model, key: records.get((model, key)))
+        return assessment, db, signal, trace, message
+
+    def test_convergence_evidence_resolves_the_actual_textual_driver(self):
+        assessment, db, signal, trace, message = self._evidence_fixture()
+        explanation = clinical_view.level_explanation(assessment)
+        self.assertEqual(explanation["driver_family"], clinical_view.FAMILY_CONVERGENCE)
+        self.assertNotIn("no se cumplió", explanation["headline"])
+        evidence = clinical_view.evidence_for_assessment(db, assessment)
+        self.assertEqual(evidence["kind"], "texto")
+        self.assertEqual(evidence["signal_id"], str(signal.id))
+        self.assertEqual(evidence["trace_id"], str(trace.id))
+        self.assertEqual(evidence["source_id"], str(message.id))
+        self.assertEqual(evidence["text"], message.content)
+
+    def test_convergence_evidence_does_not_disclose_another_patients_text(self):
+        for foreign_row in ("signal", "trace", "message"):
+            with self.subTest(foreign_row=foreign_row):
+                assessment, db, signal, trace, message = self._evidence_fixture()
+                {"signal": signal, "trace": trace, "message": message}[foreign_row].user_id = uuid.uuid4()
+                evidence = clinical_view.evidence_for_assessment(db, assessment)
+                self.assertFalse(evidence and evidence.get("text"))
+
+
 class RuleCatalogTests(unittest.TestCase):
     def test_every_engine_rule_has_a_therapist_facing_entry(self):
         """A rule the engine can select but the catalog does not know would
@@ -212,6 +367,7 @@ class RuleCatalogTests(unittest.TestCase):
         engine_codes = {
             "N4_declaracion_ideacion_o_plan",
             "N4_senal_linguistica_ideacion_directa",
+            "N4_convergencia_interpersonal_despedida",
             "N4_convergencia_critica_extrema",
             "N3_declaracion_crisis_consumo",
             "N3_senal_linguistica_crisis_consumo",

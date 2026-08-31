@@ -85,18 +85,20 @@ export interface CheckInIn {
 
 export interface TimelinePoint {
   date: string;
-  mood?: number;
-  craving?: number;
-  sleep_hours?: number;
-  self_efficacy?: number;
-  structural_score?: number;
-  confidence_band?: string;
+  mood?: number | null;
+  craving?: number | null;
+  sleep_hours?: number | null;
+  self_efficacy?: number | null;
+  structural_score?: number | null;
+  structural_calculation_version?: string | null;
+  confidence_band?: string | null;
 }
 
 export interface TimelineOut {
   points: TimelinePoint[];
   baseline_available: boolean;
   window_days: number;
+  daily_statistics?: DailyStatisticsOut | null;
 }
 
 export interface ChatMessageOut {
@@ -307,7 +309,7 @@ export interface StructuralVariableOut {
   difference?: number | null;
   z_score?: number | null;
   abs_z?: number | null;
-  direction: "peor" | "mejor" | "igual" | "sin_datos";
+  direction: "peor" | "mejor" | "igual" | "cambio" | "sin_datos";
   reading: string;
 }
 
@@ -323,6 +325,10 @@ export interface StructuralExplanationOut {
   composite_z?: number | null;
   adverse_composite_z?: number | null;
   favourable_composite_z?: number | null;
+  deterioration_score?: number | null;
+  deterioration_band?: string | null;
+  calculation_version?: string | null;
+  baseline_is_stale?: boolean | null;
   baseline_sample_count?: number | null;
   recent_sample_count?: number | null;
   sleep_trend?: string | null;
@@ -524,6 +530,7 @@ export interface StructuralPoint {
   at: string;
   date: string;
   score?: number | null;
+  calculation_version?: string | null;
   band?: string | null;
   composite_z?: number | null;
   z_mood?: number | null;
@@ -540,9 +547,10 @@ export interface LinguisticPoint {
   negative_valence?: number | null;
   urgency_level?: number | null;
   ambivalence?: number | null;
-  ideation_direct: boolean;
-  ideation_indirect: boolean;
-  consumption_crisis: boolean;
+  ideation_direct?: boolean | null;
+  ideation_indirect?: boolean | null;
+  consumption_crisis?: boolean | null;
+  is_active?: boolean;
   emotional_complexity?: string | null;
   short_rationale?: string | null;
   source_type?: string | null;
@@ -573,6 +581,56 @@ export interface MetricEvent {
   id: string;
 }
 
+export interface DailyStatisticVariable {
+  key: string;
+  label: string;
+  kind: "numeric" | "boolean" | "categorical";
+  unit?: string | null;
+  source: string;
+  aggregation: string;
+}
+
+export interface StatisticSummary {
+  n: number;
+  mean?: number | null;
+  sd?: number | null;
+  min?: number | null;
+  max?: number | null;
+  true_count?: number;
+  false_count?: number;
+  rate?: number | null;
+  counts?: Record<string, number>;
+  day_counts?: Record<string, number>;
+  observed_days?: number;
+  missing_days?: number;
+}
+
+export interface DailyStatisticRow {
+  date: string;
+  counts: Record<string, number>;
+  statistics: Record<string, StatisticSummary>;
+  categories: Record<string, StatisticSummary>;
+  [key: string]: unknown;
+}
+
+export interface DailyCorrelation {
+  x: string;
+  y: string;
+  n: number;
+  r: number | null;
+  status: "ok" | "insufficient_pairs" | "constant_series";
+}
+
+export interface DailyStatisticsOut {
+  timezone: string;
+  window_days: number;
+  daily: DailyStatisticRow[];
+  variables: DailyStatisticVariable[];
+  summary: Record<string, StatisticSummary>;
+  correlations: DailyCorrelation[];
+  notes: string[];
+}
+
 export interface PatientMetricsOut {
   window_days: number;
   generated_at?: string | null;
@@ -591,6 +649,7 @@ export interface PatientMetricsOut {
   daily_levels: { date: string; max_level: number }[];
   events: MetricEvent[];
   counts: Record<string, number>;
+  daily_statistics?: DailyStatisticsOut | null;
 }
 
 export interface PatientChatMessageOut {
@@ -782,7 +841,9 @@ export function formatDateTime(value?: string | null): string {
 
 export function formatDay(value?: string | null): string {
   if (!value) return "—";
-  const parsed = new Date(value);
+  // A daily bucket is a calendar date in the API's timezone, not UTC
+  // midnight. Keep it on that date even when the viewer is abroad.
+  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
 }
 
