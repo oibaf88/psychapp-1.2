@@ -184,12 +184,20 @@ class DailyStatisticsOut(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
-class TimelinePoint(BaseModel):
+class PatientTimelinePoint(BaseModel):
     date: str
     mood: Optional[float] = None
     craving: Optional[float] = None
     sleep_hours: Optional[float] = None
     self_efficacy: Optional[float] = None
+
+
+class PatientTimelineOut(BaseModel):
+    points: list[PatientTimelinePoint]
+    window_days: int
+
+
+class TimelinePoint(PatientTimelinePoint):
     structural_score: Optional[float] = None
     confidence_band: Optional[str] = None
     structural_calculation_version: Optional[str] = None
