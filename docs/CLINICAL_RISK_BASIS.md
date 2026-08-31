@@ -37,6 +37,11 @@ El historial previo se conserva con su fórmula y versión. Las nuevas evaluacio
 
 ## Estadística diaria
 
+El panel completo de estadísticas, score e inferencias corresponde exclusivamente
+al profesional autorizado. El paciente sólo ve una gráfica sencilla de ánimo,
+craving, autoeficacia y sueño con las respuestas de su último check-in de cada
+día. Su endpoint de historial no carga ni devuelve análisis o estadísticas.
+
 Fechas en `Europe/Madrid`, con cambio horario; timestamps antiguos sin zona se interpretan como UTC según el contrato de la aplicación. Se promedian observaciones dentro de cada fecha antes del resumen y las correlaciones, de forma que un día con muchos registros no pese más.
 
 Se informan ánimo, sueño, autoeficacia, craving, valencia **negativa** media (la variable realmente disponible), rumiación, urgencia, ambivalencia, ideación directa/indirecta, crisis de consumo, comparación con la expresión habitual y todas las variables numéricas/categóricas psicosociales persistidas. Los textos explicativos siguen siendo evidencia cualitativa, no números inventados.

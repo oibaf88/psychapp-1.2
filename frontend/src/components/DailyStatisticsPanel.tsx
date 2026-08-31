@@ -16,7 +16,6 @@ import {
   formatDay,
 } from "../api";
 
-const CHECKIN_KEYS = new Set(["mood", "sleep_hours", "self_efficacy", "craving"]);
 const SOURCE_LABELS: Record<string, string> = { checkin: "Check-in", linguistic: "Análisis textual", psychosocial: "Análisis psicosocial" };
 const AGGREGATION_LABELS: Record<string, string> = { mean: "Media diaria", any: "Presencia en el día", counts: "Frecuencia de categorías" };
 const formatNumber = (value: unknown, digits = 2) =>
@@ -55,10 +54,8 @@ function SummaryReading({ variable, stats }: { variable: DailyStatisticVariable;
  * missing-value rules. The chart only plots available same-date pairs. */
 export default function DailyStatisticsPanel({
   data,
-  patientView = false,
 }: {
   data?: DailyStatisticsOut | null;
-  patientView?: boolean;
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
@@ -69,11 +66,11 @@ export default function DailyStatisticsPanel({
     return <p className="meta">Las estadísticas diarias todavía no están disponibles.</p>;
   }
 
-  const variables = data.variables.filter((variable) => !patientView || CHECKIN_KEYS.has(variable.key));
+  const variables = data.variables;
   const filtered = variables.filter((variable) => `${variable.label} ${variable.key}`.toLocaleLowerCase("es").includes(query.toLocaleLowerCase("es")));
   const correlationKeys = new Set(data.correlations.flatMap((pair) => [pair.x, pair.y]));
   const numeric = variables.filter((variable) => variable.kind !== "categorical" && correlationKeys.has(variable.key));
-  const rows = data.daily.filter((row) => !patientView || (row.counts.checkins ?? 0) > 0);
+  const rows = data.daily;
   const selectedDay = rows.find((row) => row.date === date) ?? rows[rows.length - 1];
   const selectedIndex = selectedDay ? rows.indexOf(selectedDay) : -1;
   const xVariable = numeric.find((variable) => variable.key === xKey) ?? numeric[0];
@@ -91,7 +88,7 @@ export default function DailyStatisticsPanel({
   return (
     <section className="statistics-panel" aria-labelledby={`${id}-title`}>
       <div className="statistics-heading">
-        <h3 id={`${id}-title`}>{patientView ? "Tus registros en cifras" : "Estadística diaria y relaciones entre variables"}</h3>
+        <h3 id={`${id}-title`}>Estadística diaria y relaciones entre variables</h3>
         <span className="statistics-badge">Análisis exploratorio</span>
       </div>
       <p className="meta">
@@ -99,18 +96,14 @@ export default function DailyStatisticsPanel({
         peso a cada día con datos. «—» significa sin dato, nunca cero.
       </p>
       <p className="statistics-caution">
-        {patientView
-          ? "Estos cálculos ayudan a observar tus registros. No son un diagnóstico ni una escala clínica; una relación entre dos variables no demuestra que una cause la otra."
-          : "Las señales textuales son inferencias pendientes de valoración clínica. Estas estadísticas y correlaciones no son escalas validadas, no predicen por sí solas suicidio o recaída y no modifican las reglas de seguridad."}
+        Las señales textuales son inferencias pendientes de valoración clínica. Estas estadísticas y correlaciones no son escalas validadas, no predicen por sí solas suicidio o recaída y no modifican las reglas de seguridad.
       </p>
       {!rows.length ? <p>Sin observaciones en esta ventana.</p> : (
         <>
-          {!patientView && (
-            <label className="statistics-filter">
-              Filtrar variables
-              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ánimo, valencia, ideación, rumiación…" />
-            </label>
-          )}
+          <label className="statistics-filter">
+            Filtrar variables
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ánimo, valencia, ideación, rumiación…" />
+          </label>
           <h4>Resumen del período</h4>
           <div className="table-wrap">
             <table className="table statistics-table">
@@ -138,7 +131,7 @@ export default function DailyStatisticsPanel({
           </div>
           <p className="meta">DE: desviación estándar muestral; requiere al menos dos valores. En categorías se cuentan observaciones, por lo que un mismo día puede aportar varias.</p>
 
-          <details className="statistics-details" open={patientView ? undefined : true}>
+          <details className="statistics-details" open>
             <summary>Desglose por fecha</summary>
             {selectedDay && (
               <>
@@ -154,7 +147,7 @@ export default function DailyStatisticsPanel({
                 </div>
                 <p className="meta">
                   {selectedDay.counts.checkins ?? 0} check-ins
-                  {!patientView && <> · {selectedDay.counts.interactions ?? 0} interacciones analizadas · {selectedDay.counts.psychosocial_observations ?? 0} observaciones psicosociales</>}.
+                  {" "}· {selectedDay.counts.interactions ?? 0} interacciones analizadas · {selectedDay.counts.psychosocial_observations ?? 0} observaciones psicosociales.
                 </p>
                 <div className="table-wrap">
                   <table className="table statistics-table">
@@ -212,7 +205,7 @@ export default function DailyStatisticsPanel({
               )}
             </details>
           )}
-          {!patientView && data.notes.length > 0 && (
+          {data.notes.length > 0 && (
             <details className="statistics-details">
               <summary>Método, fuentes y límites</summary>
               <ul>{data.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>

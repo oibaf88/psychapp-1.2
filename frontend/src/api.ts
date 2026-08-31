@@ -101,6 +101,12 @@ export interface TimelineOut {
   daily_statistics?: DailyStatisticsOut | null;
 }
 
+/** Patient history contains only the four values entered in the check-in. */
+export interface PatientTimelineOut {
+  points: Pick<TimelinePoint, "date" | "mood" | "craving" | "sleep_hours" | "self_efficacy">[];
+  window_days: number;
+}
+
 export interface ChatMessageOut {
   id: string;
   role: "user" | "assistant";

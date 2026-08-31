@@ -1,20 +1,19 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, AssignmentOut, CheckInIn, TimelineOut } from "../api";
-import { CheckInChart, StructuralScoreChart } from "../components/ClinicalCharts";
-import DailyStatisticsPanel from "../components/DailyStatisticsPanel";
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { api, AssignmentOut, CheckInIn, PatientTimelineOut, formatDay } from "../api";
 
 const emptyForm: CheckInIn = { mood: 5, craving: 3, sleep_hours: 7, self_efficacy: 5, notes: "" };
 
 export default function PatientDashboard() {
-  const [timeline, setTimeline] = useState<TimelineOut | null>(null);
+  const [timeline, setTimeline] = useState<PatientTimelineOut | null>(null);
   const [form, setForm] = useState<CheckInIn>(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pendingLinks, setPendingLinks] = useState<AssignmentOut[]>([]);
 
   async function loadTimeline() {
-    const data = await api.get<TimelineOut>("/api/v1/timeline?window_days=30");
+    const data = await api.get<PatientTimelineOut>("/api/v1/timeline?window_days=30");
     setTimeline(data);
   }
 
@@ -117,27 +116,27 @@ export default function PatientDashboard() {
 
       <section className="card">
         <h2>Tu tendencia (últimos 30 días)</h2>
-        {!timeline?.baseline_available && (
-          <p className="info">
-            Aún no hay suficientes check-ins para calcular tu línea base personal (se necesitan al menos 5). Sigue
-            registrando check-ins para ver tu tendencia.
-          </p>
-        )}
         {timeline && timeline.points.length > 0 ? (
-          <div className="chart-grid">
-            <CheckInChart points={timeline.points} />
-            <StructuralScoreChart points={timeline.points.map((point) => ({
-              date: point.date,
-              at: point.date,
-              score: point.structural_score,
-              calculation_version: point.structural_calculation_version,
-              band: point.confidence_band,
-            }))} />
-          </div>
+          <>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={timeline.points} margin={{ top: 8, right: 8, bottom: 4, left: -16 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={formatDay} minTickGap={24} />
+                <YAxis yAxisId="left" domain={[0, 10]} tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="sleep" orientation="right" domain={[0, 24]} tick={{ fontSize: 11 }} tickFormatter={(value: number) => `${value} h`} />
+                <Tooltip labelFormatter={formatDay} />
+                <Legend />
+                <Line yAxisId="left" type="monotone" dataKey="mood" name="Ánimo" stroke="#3987e5" strokeWidth={2} connectNulls={false} dot={{ r: 2 }} />
+                <Line yAxisId="left" type="monotone" dataKey="craving" name="Craving" stroke="#d95926" strokeWidth={2} connectNulls={false} dot={{ r: 2 }} />
+                <Line yAxisId="left" type="monotone" dataKey="self_efficacy" name="Autoeficacia" stroke="#c98500" strokeWidth={2} connectNulls={false} dot={{ r: 2 }} />
+                <Line yAxisId="sleep" type="monotone" dataKey="sleep_hours" name="Sueño (h)" stroke="#199e70" strokeWidth={2} strokeDasharray="5 3" connectNulls={false} dot={{ r: 2 }} />
+              </LineChart>
+            </ResponsiveContainer>
+            <p className="meta">Ánimo, craving y autoeficacia: 0–10. Sueño: horas, en el eje derecho.</p>
+          </>
         ) : (
           <p>Sin datos todavía.</p>
         )}
-        {timeline && <DailyStatisticsPanel data={timeline.daily_statistics} patientView />}
       </section>
     </div>
   );

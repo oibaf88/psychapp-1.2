@@ -10,6 +10,37 @@ from app.services import daily_statistics
 DEFAULT_WINDOW_DAYS = 30
 
 
+def build_patient_timeline(db: Session, user_id, window_days: int = DEFAULT_WINDOW_DAYS) -> dict:
+    """Patient chart: exactly the four answers from each day's last check-in.
+
+    This path does not load analyses, scores, baselines or descriptive
+    statistics. The professional timeline keeps those in build_timeline.
+    """
+    window_days = max(1, min(int(window_days), 365))
+    since, until = daily_statistics.window_bounds(window_days, datetime.utcnow())
+    checkins = (
+        db.query(CheckIn)
+        .filter(
+            CheckIn.user_id == user_id,
+            CheckIn.created_at >= since,
+            CheckIn.created_at <= until,
+        )
+        .order_by(CheckIn.created_at.asc(), CheckIn.id.asc())
+        .all()
+    )
+    by_day: dict[str, dict] = {}
+    for checkin in checkins:
+        day = daily_statistics.local_day(checkin.created_at)
+        by_day[day] = {
+            "date": day,
+            "mood": checkin.mood,
+            "craving": checkin.craving,
+            "sleep_hours": checkin.sleep_hours,
+            "self_efficacy": checkin.self_efficacy,
+        }
+    return {"points": [by_day[day] for day in sorted(by_day)], "window_days": window_days}
+
+
 def build_timeline(db: Session, user_id, window_days: int = DEFAULT_WINDOW_DAYS) -> dict:
     window_days = max(1, min(int(window_days), 365))
     now = datetime.utcnow()
