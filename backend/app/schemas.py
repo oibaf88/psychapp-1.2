@@ -169,6 +169,21 @@ class SafetyPlanOut(SafetyPlanIn):
 
 
 # ------------------------------------------------------------- timeline ----
+class DailyStatisticsOut(BaseModel):
+    version: str
+    timezone: str
+    window_days: int
+    start_date: str
+    end_date: str
+    generated_at: str
+    daily: list[dict[str, Any]] = Field(default_factory=list)
+    variables: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    correlations: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: dict[str, int] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
 class TimelinePoint(BaseModel):
     date: str
     mood: Optional[float] = None
@@ -177,12 +192,14 @@ class TimelinePoint(BaseModel):
     self_efficacy: Optional[float] = None
     structural_score: Optional[float] = None
     confidence_band: Optional[str] = None
+    structural_calculation_version: Optional[str] = None
 
 
 class TimelineOut(BaseModel):
     points: list[TimelinePoint]
     baseline_available: bool
     window_days: int
+    daily_statistics: Optional[DailyStatisticsOut] = None
 
 
 # ---------------------------------------------------------------- chat -----
@@ -452,6 +469,10 @@ class StructuralVariableOut(BaseModel):
 
 
 class StructuralExplanationOut(BaseModel):
+    deterioration_score: Optional[float] = None
+    deterioration_band: Optional[str] = None
+    calculation_version: Optional[str] = None
+    baseline_is_stale: bool = False
     score: Optional[float] = None
     band: Optional[str] = None
     band_label: Optional[str] = None
@@ -684,6 +705,7 @@ class SignalRefutationOut(BaseModel):
 class PatientMetricsOut(BaseModel):
     window_days: int
     generated_at: Optional[str] = None
+    daily_statistics: Optional[DailyStatisticsOut] = None
     checkins: list[dict[str, Any]] = []
     structural: list[dict[str, Any]] = []
     daily_structural: list[dict[str, Any]] = []

@@ -151,6 +151,10 @@ def on_startup():
         Base.metadata.create_all(bind=engine)
         logger.info("Local database schema ensured (create_all).")
 
+    from app.maintenance.refresh_risk_v14 import run_configured_startup_refresh
+
+    run_configured_startup_refresh()
+
     from app.services.agent2_trace import mark_stale_started_as_abandoned
 
     db = SessionLocal()
