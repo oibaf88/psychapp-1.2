@@ -84,7 +84,6 @@ from app.content.psychosocial_catalog import (
     CATEGORY_LABELS,
     DOMAIN_BY_KEY,
     DOMAIN_CATEGORIES,
-    DOMAIN_KEYS,
     DOMAIN_LABELS,
     DOMAIN_WEIGHTS,
     PROTECTIVE_CATEGORIES,
