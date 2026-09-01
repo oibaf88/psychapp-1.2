@@ -1,4 +1,3 @@
-import os
 try:
     from mangum import Mangum
     from app.main import app
