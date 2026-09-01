@@ -16,7 +16,7 @@ when the deployment allows it. Callers do not pass it — they ask for a
 provider and get whichever one is in force, with the metadata to prove which
 one answered.
 """
-from app.services.llm.anthropic_provider import AnthropicProvider, RefusalError
+from app.services.llm.anthropic_provider import AnthropicProvider
 from app.services.llm.base import (
     ChatResult,
     LLMProvider,
@@ -34,7 +34,6 @@ __all__ = [
     "StructuredAnalysisResult",
     "AnthropicProvider",
     "OpenAICompatibleProvider",
-    "RefusalError",
     "get_llm_provider",
     "build_provider",
 ]
