@@ -90,5 +90,35 @@ class PublicSignupRoleTest(unittest.TestCase):
         self.assertEqual(jwt.get_unverified_claims(token.access_token)["role"], "patient")
 
 
+    def test_mock_google_login_blocked_in_production(self):
+        db = _FakeSession()
+        prev_allow = auth.settings.allow_mock_google_login
+        prev_env = auth.settings.app_env
+        auth.settings.allow_mock_google_login = True
+        auth.settings.app_env = "production"
+        try:
+            with self.assertRaises(auth.HTTPException) as ctx:
+                auth.google_login(
+                    GoogleLoginRequest(id_token="user@example.com"),
+                    db=db,
+                )
+            self.assertEqual(ctx.exception.status_code, 501)
+        finally:
+            auth.settings.allow_mock_google_login = prev_allow
+            auth.settings.app_env = prev_env
+
+    def test_mock_google_login_disabled_by_default(self):
+        db = _FakeSession()
+        prev_allow = auth.settings.allow_mock_google_login
+        auth.settings.allow_mock_google_login = False
+        try:
+            with self.assertRaises(auth.HTTPException) as ctx:
+                auth.google_login(
+                    GoogleLoginRequest(id_token="user@example.com"),
+                    db=db,
+                )
+            self.assertEqual(ctx.exception.status_code, 501)
+        finally:
+            auth.settings.allow_mock_google_login = prev_allow
 if __name__ == "__main__":
     unittest.main()
