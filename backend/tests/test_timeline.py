@@ -8,8 +8,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.models import Agent2AnalysisTrace, AlfaSignal, Baseline, CheckIn, User
-from app.services import daily_statistics, timeline
+from app.database import Base
+from app.models import AlfaSignal, Baseline, CheckIn, User
+from app.services import timeline
 
 NOW = datetime(2026, 8, 31, 18, 0, 0)
 
@@ -23,8 +24,7 @@ class _Clock(datetime):
 class TimelineServiceTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-        for model in (User, CheckIn, Baseline, AlfaSignal, Agent2AnalysisTrace):
-            model.__table__.create(self.engine)
+        Base.metadata.create_all(bind=self.engine)
         self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.db: Session = self.sessions()
 
@@ -133,8 +133,8 @@ class TimelineServiceTests(unittest.TestCase):
 
     def test_build_patient_timeline_same_timestamp_id_tiebreaking(self):
         same_time = datetime(2026, 8, 30, 12, 0, 0)
-        id1 = uuid.UUID("11111111-1111-1111-1111-111111111111")
-        id2 = uuid.UUID("22222222-2222-2222-2222-222222222222")
+        id1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        id2 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
 
         self._create_checkin(self.user1.id, created_at=same_time, mood=3, checkin_id=id1)
         self._create_checkin(self.user1.id, created_at=same_time, mood=8, checkin_id=id2)
