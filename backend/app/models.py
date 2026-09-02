@@ -34,7 +34,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
@@ -488,7 +488,7 @@ class Agent2AnalysisTrace(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     agent_role: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="agent2_linguistic", index=True
+        String(32), nullable=False, default="analyzer_merged", index=True
     )
     # analyzer_merged (current) | agent2_linguistic | agent4_psychosocial
     # The two agent* values are retired. Rows carrying them stay, so the
