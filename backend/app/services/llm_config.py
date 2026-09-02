@@ -35,7 +35,8 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urlparse
+import re
+from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
@@ -242,6 +243,11 @@ def normalise_base_url(raw: str) -> str:
         if url.endswith(suffix):
             url = url[: -len(suffix)]
             break
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    # Clean up redundant /api prefixes pasted from frontend routes
+    cleaned_path = re.sub(r"^(?:/api)+(/v1.*)?$", r"", path)
+    url = urlunparse((parsed.scheme, parsed.netloc, cleaned_path, parsed.params, parsed.query, parsed.fragment)).rstrip("/")
     if not urlparse(url).path.rstrip("/"):
         # Bare host: assume the near-universal /v1 prefix.
         url = f"{url}/v1"
