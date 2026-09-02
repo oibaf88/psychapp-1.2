@@ -28,6 +28,17 @@ class SecurityTests(unittest.TestCase):
     def test_verify_password_invalid_hash_returns_false(self):
         self.assertFalse(verify_password("password", "invalid_hash_format"))
 
+    def test_verify_password_invalid_hash_variants_return_false(self):
+        invalid_hashes = ("", "not_a_bcrypt_hash", "1234567890" * 3)
+        for invalid_hash in invalid_hashes:
+            with self.subTest(invalid_hash=invalid_hash):
+                self.assertFalse(verify_password("SecretPassword123", invalid_hash))
+
+    def test_verify_password_uses_bcrypt_72_byte_prefix(self):
+        shared_prefix = "A" * 72
+        hashed = hash_password(shared_prefix + "BBB")
+        self.assertTrue(verify_password(shared_prefix + "CCC", hashed))
+
     def test_get_current_user_valid_token(self):
         user_id = uuid.uuid4()
         token = create_access_token(user_id, "patient")
