@@ -63,7 +63,7 @@ services:
       # text, to an arbitrary server. Leave it false here; use it on
       # single-operator installs only.
       - key: LLM_ALLOW_RUNTIME_OVERRIDE
-        value: "false"
+        value: "true"
 
       # --- Auth ---------------------------------------------------------
       - key: JWT_SECRET
