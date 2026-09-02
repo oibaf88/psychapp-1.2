@@ -237,9 +237,11 @@ def normalise_base_url(raw: str) -> str:
         raise LLMConfigError("La URL tiene que empezar por http:// o https://")
     if not parsed.netloc:
         raise LLMConfigError("La URL no incluye un servidor.")
-    # A path of /chat/completions means they pasted the full endpoint.
-    if url.endswith("/chat/completions"):
-        url = url[: -len("/chat/completions")]
+    # Strip common suffixes pasted by operators.
+    for suffix in ("/chat/completions", "/v1/chat/completions", "/v1/chat", "/chat"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+            break
     if not urlparse(url).path.rstrip("/"):
         # Bare host: assume the near-universal /v1 prefix.
         url = f"{url}/v1"

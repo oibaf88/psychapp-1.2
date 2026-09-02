@@ -195,7 +195,7 @@ export default function SettingsPage() {
         analysis_model: form.analysisModel || form.chatModel,
         copilot_model: form.copilotModel || form.chatModel,  // the test needs a concrete name
         api_key: form.apiKey || null,
-        timeout_seconds: Math.min(form.timeoutSeconds, 60),
+        timeout_seconds: form.timeoutSeconds,
       });
       setTestResult(result);
     } catch (e) {

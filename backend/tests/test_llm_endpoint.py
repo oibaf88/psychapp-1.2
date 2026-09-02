@@ -227,6 +227,14 @@ class BaseUrlNormalisationTests(unittest.TestCase):
             llm_config.normalise_base_url("http://localhost:1234/v1/chat/completions"),
             "http://localhost:1234/v1",
         )
+        self.assertEqual(
+            llm_config.normalise_base_url("http://192.168.1.19:1234/v1/chat"),
+            "http://192.168.1.19:1234/v1",
+        )
+        self.assertEqual(
+            llm_config.normalise_base_url("http://192.168.1.19:1234/chat"),
+            "http://192.168.1.19:1234/v1",
+        )
 
     def test_a_scheme_is_required(self):
         with self.assertRaises(llm_config.LLMConfigError):
