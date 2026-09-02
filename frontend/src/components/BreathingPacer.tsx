@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import PsychDeepMark from "./PsychDeepMark";
 
 type BreathPhase = "inhale" | "hold" | "exhale";
 
@@ -38,8 +39,11 @@ export default function BreathingPacer() {
 
   return (
     <div className="breathing-pacer">
-      <div className={`breathing-orb ${running ? phase.id : "idle"}`} aria-hidden="true">
-        <span />
+      {/* The pacer is the PsychDeep mark itself, breathing. The phase logic
+          above stays the only clock: it writes the phase here and the
+          stylesheet does the rest — no timers, audio or state in the mark. */}
+      <div className="breathing-mark" data-phase={running ? phase.id : "rest"} aria-hidden="true">
+        <PsychDeepMark />
       </div>
       <p className="breathing-label">{running ? phase.label : "Pulsa iniciar para comenzar"}</p>
       <p className="breathing-ratio">4 s inspirar - 2 s sostener - 6 s exhalar - {TOTAL_SECONDS}s por ciclo</p>

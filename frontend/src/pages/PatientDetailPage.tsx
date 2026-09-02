@@ -27,7 +27,9 @@ import {
   StructuralExplanationCard,
 } from "../components/ClinicalExplain";
 import CopilotPanel from "../components/CopilotPanel";
+import PatientProfilePanel from "../components/PatientProfilePanel";
 import PsychosocialPanel from "../components/PsychosocialPanel";
+import DailyStatisticsPanel from "../components/DailyStatisticsPanel";
 
 type Tab =
   | "resumen"
@@ -303,6 +305,7 @@ export default function PatientDetailPage() {
               <CheckInChart points={metrics.checkins} />
               <LinguisticSignalChart points={metrics.linguistic} onSelect={openEvidence} />
             </div>
+            <DailyStatisticsPanel data={metrics.daily_statistics} />
           </section>
         )}
 
@@ -321,6 +324,20 @@ export default function PatientDetailPage() {
               canAdjudicate={isTherapist}
               onChanged={load}
             />
+          </section>
+        )}
+
+        {tab === "psicosocial" && (
+          <section className="card">
+            <h2>Perfil acumulado</h2>
+            <p className="subtitle">
+              Lo que el sistema ha ido aprendiendo de esta persona a lo largo de las sesiones: cómo se
+              expresa, qué le sostiene, y qué conviene retomar. El asistente lo usa para juzgar cada texto
+              nuevo <strong>contra ella misma</strong> en vez de contra un umbral igual para todos, y para
+              llegar a la conversación con algo en mente. Es un resumen escrito por un modelo: corrígelo si
+              no encaja.
+            </p>
+            <PatientProfilePanel patientId={p.id} canEdit={isTherapist} />
           </section>
         )}
 

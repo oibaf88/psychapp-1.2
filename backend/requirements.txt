@@ -9,3 +9,5 @@ bcrypt==4.2.0
 # Needs to be recent enough for output_config (effort + structured outputs).
 anthropic==0.121.0
 python-dotenv==1.2.2
+# ZoneInfo needs an IANA timezone database on Windows as well as Render/Linux.
+tzdata>=2025.2,<2027

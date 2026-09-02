@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from typing import Optional
 from datetime import datetime, timedelta
 import uuid
 
@@ -140,7 +139,7 @@ def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     # client-supplied id_token as the user's email, so enabling it lets
     # anyone obtain a session for any account. It stays disabled until
     # real verification is implemented.
-    if not settings.allow_mock_google_login:
+    if settings.is_production or not settings.allow_mock_google_login:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=(

@@ -1,189 +1,278 @@
-"""Tests for the timeline service module (backend/app/services/timeline.py).
-
-Verifies timeline building logic, checkin & structural score signal merging,
-baseline availability checking, date filtering windows, and user isolation.
-"""
+"""Unit and integration tests for timeline service functions in backend/app/services/timeline.py."""
 import unittest
 import uuid
 from datetime import datetime, timedelta
-from types import SimpleNamespace
+from unittest.mock import patch
 
-from app.models import AlfaSignal, Baseline, CheckIn
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.database import Base
+from app.models import AlfaSignal, Baseline, CheckIn, User
 from app.services import timeline
 
-
-class _Query:
-    def __init__(self, rows):
-        self._rows = list(rows)
-        self._filters = []
-
-    def filter(self, *args, **kwargs):
-        # Store filters if needed or return self
-        return self
-
-    def order_by(self, *args):
-        return self
-
-    def all(self):
-        return self._rows
-
-    def first(self):
-        return self._rows[0] if self._rows else None
+NOW = datetime(2026, 8, 31, 18, 0, 0)
 
 
-class MockSQLAlchemySession:
-    """Mock DB session that simulates real SQLAlchemy query filtering for CheckIn, AlfaSignal, Baseline."""
-
-    def __init__(self, checkins=None, scores=None, baselines=None):
-        self.checkins = checkins or []
-        self.scores = scores or []
-        self.baselines = baselines or []
-        self.queries = []
-
-    def query(self, model):
-        self.queries.append(model)
-        if model is CheckIn:
-            return MockQuery(self.checkins, model)
-        if model is AlfaSignal:
-            return MockQuery(self.scores, model)
-        if model is Baseline:
-            return MockQuery(self.baselines, model)
-        return MockQuery([], model)
-
-
-class MockQuery:
-    def __init__(self, items, model):
-        self.items = items
-        self.model = model
-
-    def filter(self, *criterion):
-        # We can implement minimal evaluation of binary expressions if needed,
-        # or filter items based on criteria.
-        filtered = list(self.items)
-        for c in criterion:
-            # SQLAlchemy BinaryExpression evaluation simulation
-            left_col = getattr(c.left, "name", None) if hasattr(c, "left") else None
-            right_val = c.right.value if hasattr(c, "right") and hasattr(c.right, "value") else None
-            operator = getattr(c.operator, "__name__", str(c.operator)) if hasattr(c, "operator") else ""
-
-            if left_col and right_val is not None:
-                if "eq" in operator or operator == "eq":
-                    filtered = [item for item in filtered if getattr(item, left_col, None) == right_val]
-                elif "ge" in operator or operator == "ge":
-                    filtered = [item for item in filtered if getattr(item, left_col, None) >= right_val]
-
-        return MockQuery(filtered, self.model)
-
-    def order_by(self, *criterion):
-        return self
-
-    def all(self):
-        return self.items
-
-    def first(self):
-        for item in self.items:
-            if getattr(item, "is_active", True):
-                return item
-        return self.items[0] if self.items else None
+class _Clock(datetime):
+    @classmethod
+    def utcnow(cls):
+        return NOW
 
 
 class TimelineServiceTests(unittest.TestCase):
     def setUp(self):
-        self.user_id = uuid.uuid4()
-        self.other_user_id = uuid.uuid4()
+        self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(bind=self.engine)
+        self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.db: Session = self.sessions()
 
-    def test_build_timeline_empty_returns_default_structure(self):
-        db = MockSQLAlchemySession()
-        res = timeline.build_timeline(db, self.user_id, window_days=30)
-        self.assertEqual(res["points"], [])
-        self.assertFalse(res["baseline_available"])
-        self.assertEqual(res["window_days"], 30)
+        self.user1 = self._create_user("patient1@example.test")
+        self.user2 = self._create_user("patient2@example.test")
 
-    def test_build_timeline_merges_checkin_and_structural_score_on_same_day(self):
-        d1 = datetime(2026, 8, 10, 14, 30, 0)
-        checkin = SimpleNamespace(
-            user_id=self.user_id,
-            created_at=d1,
-            mood=4.0,
-            craving=2.0,
-            sleep_hours=7.5,
-            self_efficacy=3.0,
+        self.clock_patch = patch.object(timeline, "datetime", _Clock)
+        self.clock_patch.start()
+
+    def tearDown(self):
+        self.clock_patch.stop()
+        self.db.close()
+        self.engine.dispose()
+
+    def _create_user(self, email):
+        user = User(
+            id=uuid.uuid4(),
+            email=email,
+            display_name="Test User",
+            hashed_password="hashed_pw",
+            role="patient",
         )
-        score = SimpleNamespace(
-            user_id=self.user_id,
+        self.db.add(user)
+        self.db.commit()
+        return user
+
+    def _create_checkin(self, user_id, created_at, mood=5, craving=3, sleep_hours=7.5, self_efficacy=6, checkin_id=None):
+        c = CheckIn(
+            id=checkin_id or uuid.uuid4(),
+            user_id=user_id,
+            mood=mood,
+            craving=craving,
+            sleep_hours=sleep_hours,
+            self_efficacy=self_efficacy,
+            created_at=created_at,
+        )
+        self.db.add(c)
+        self.db.commit()
+        return c
+
+    def _create_alfa_signal(self, user_id, timestamp, score=0.85, confidence_band="stable", calc_version=None):
+        val = {"score": score}
+        if calc_version is not None:
+            val["calculation_version"] = calc_version
+        s = AlfaSignal(
+            id=uuid.uuid4(),
+            user_id=user_id,
             signal_type="structural_score",
-            timestamp=d1,
-            value={"score": 0.85},
-            confidence_band="stable",
+            value=val,
+            confidence_band=confidence_band,
+            timestamp=timestamp,
+            is_active=True,
         )
-        db = MockSQLAlchemySession(checkins=[checkin], scores=[score])
+        self.db.add(s)
+        self.db.commit()
+        return s
 
-        res = timeline.build_timeline(db, self.user_id)
-        self.assertEqual(len(res["points"]), 1)
-        pt = res["points"][0]
-        self.assertEqual(pt["date"], "2026-08-10")
-        self.assertEqual(pt["mood"], 4.0)
-        self.assertEqual(pt["craving"], 2.0)
-        self.assertEqual(pt["sleep_hours"], 7.5)
-        self.assertEqual(pt["self_efficacy"], 3.0)
-        self.assertEqual(pt["structural_score"], 0.85)
-        self.assertEqual(pt["confidence_band"], "stable")
+    def _create_baseline(self, user_id, is_active=True):
+        b = Baseline(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            window_start=NOW - timedelta(days=21),
+            window_end=NOW,
+            stats={"mood": {"mean": 5.0, "std": 1.0, "n": 10}},
+            is_active=is_active,
+        )
+        self.db.add(b)
+        self.db.commit()
+        return b
 
-    def test_build_timeline_handles_multiple_days_sorted(self):
-        d1 = datetime(2026, 8, 12, 10, 0, 0)
-        d2 = datetime(2026, 8, 10, 10, 0, 0)
-        c1 = SimpleNamespace(user_id=self.user_id, created_at=d1, mood=5.0, craving=1.0, sleep_hours=8.0, self_efficacy=4.0)
-        c2 = SimpleNamespace(user_id=self.user_id, created_at=d2, mood=2.0, craving=4.0, sleep_hours=5.0, self_efficacy=2.0)
-        db = MockSQLAlchemySession(checkins=[c1, c2])
+    # --- Tests for build_patient_timeline ---
 
-        res = timeline.build_timeline(db, self.user_id)
-        self.assertEqual(len(res["points"]), 2)
-        self.assertEqual(res["points"][0]["date"], "2026-08-10")
-        self.assertEqual(res["points"][1]["date"], "2026-08-12")
-
-    def test_build_timeline_user_isolation_and_date_window_filtering(self):
-        now = datetime.utcnow()
-        recent_date = now - timedelta(days=5)
-        old_date = now - timedelta(days=40)
-
-        # User checkin within window
-        c_user = SimpleNamespace(user_id=self.user_id, created_at=recent_date, mood=3.0, craving=2.0, sleep_hours=7.0, self_efficacy=3.0)
-        # User checkin outside window
-        c_old = SimpleNamespace(user_id=self.user_id, created_at=old_date, mood=1.0, craving=5.0, sleep_hours=4.0, self_efficacy=1.0)
-        # Other user checkin within window
-        c_other = SimpleNamespace(user_id=self.other_user_id, created_at=recent_date, mood=5.0, craving=0.0, sleep_hours=9.0, self_efficacy=5.0)
-
-        db = MockSQLAlchemySession(checkins=[c_user, c_old, c_other])
-        res = timeline.build_timeline(db, self.user_id, window_days=30)
-        self.assertEqual(len(res["points"]), 1)
-        self.assertEqual(res["points"][0]["date"], recent_date.strftime("%Y-%m-%d"))
-
-    def test_build_timeline_reflects_active_baseline_status(self):
-        active_baseline = SimpleNamespace(user_id=self.user_id, is_active=True)
-        db = MockSQLAlchemySession(baselines=[active_baseline])
-        res = timeline.build_timeline(db, self.user_id)
-        self.assertTrue(res["baseline_available"])
-
-    def test_build_timeline_custom_window_days(self):
-        db = MockSQLAlchemySession()
-        res = timeline.build_timeline(db, self.user_id, window_days=14)
+    def test_build_patient_timeline_empty(self):
+        res = timeline.build_patient_timeline(self.db, self.user1.id, window_days=14)
+        self.assertEqual(res["points"], [])
         self.assertEqual(res["window_days"], 14)
 
-    def test_build_timeline_score_with_missing_value_dict(self):
-        d1 = datetime(2026, 8, 11, 12, 0, 0)
-        score = SimpleNamespace(
-            user_id=self.user_id,
-            signal_type="structural_score",
-            timestamp=d1,
-            value=None,
-            confidence_band="transition",
-        )
-        db = MockSQLAlchemySession(scores=[score])
-        res = timeline.build_timeline(db, self.user_id)
+    def test_build_patient_timeline_basic(self):
+        day1 = NOW - timedelta(days=2)
+        day2 = NOW - timedelta(days=1)
+        self._create_checkin(self.user1.id, created_at=day1, mood=4, craving=2, sleep_hours=8.0, self_efficacy=7)
+        self._create_checkin(self.user1.id, created_at=day2, mood=6, craving=5, sleep_hours=6.5, self_efficacy=5)
+
+        res = timeline.build_patient_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(res["window_days"], 7)
+        self.assertEqual(len(res["points"]), 2)
+        self.assertEqual(res["points"][0]["mood"], 4)
+        self.assertEqual(res["points"][0]["craving"], 2)
+        self.assertEqual(res["points"][1]["mood"], 6)
+
+    def test_build_patient_timeline_last_checkin_per_day_wins(self):
+        morning = datetime(2026, 8, 30, 9, 0, 0)
+        afternoon = datetime(2026, 8, 30, 16, 0, 0)
+
+        self._create_checkin(self.user1.id, created_at=morning, mood=2, craving=8, sleep_hours=4.0, self_efficacy=3)
+        self._create_checkin(self.user1.id, created_at=afternoon, mood=7, craving=3, sleep_hours=7.5, self_efficacy=8)
+
+        res = timeline.build_patient_timeline(self.db, self.user1.id, window_days=7)
         self.assertEqual(len(res["points"]), 1)
-        pt = res["points"][0]
-        self.assertIsNone(pt["structural_score"])
-        self.assertEqual(pt["confidence_band"], "transition")
+        point = res["points"][0]
+        self.assertEqual(point["date"], "2026-08-30")
+        self.assertEqual(point["mood"], 7)
+        self.assertEqual(point["craving"], 3)
+        self.assertEqual(point["sleep_hours"], 7.5)
+        self.assertEqual(point["self_efficacy"], 8)
+
+    def test_build_patient_timeline_same_timestamp_id_tiebreaking(self):
+        same_time = datetime(2026, 8, 30, 12, 0, 0)
+        id1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        id2 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
+
+        self._create_checkin(self.user1.id, created_at=same_time, mood=3, checkin_id=id1)
+        self._create_checkin(self.user1.id, created_at=same_time, mood=8, checkin_id=id2)
+
+        res = timeline.build_patient_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(len(res["points"]), 1)
+        self.assertEqual(res["points"][0]["mood"], 8)
+
+    def test_build_patient_timeline_window_days_clamping(self):
+        res_min = timeline.build_patient_timeline(self.db, self.user1.id, window_days=-10)
+        self.assertEqual(res_min["window_days"], 1)
+
+        res_zero = timeline.build_patient_timeline(self.db, self.user1.id, window_days=0)
+        self.assertEqual(res_zero["window_days"], 1)
+
+        res_max = timeline.build_patient_timeline(self.db, self.user1.id, window_days=1000)
+        self.assertEqual(res_max["window_days"], 365)
+
+        res_default = timeline.build_patient_timeline(self.db, self.user1.id)
+        self.assertEqual(res_default["window_days"], timeline.DEFAULT_WINDOW_DAYS)
+
+    def test_build_patient_timeline_user_isolation(self):
+        t = NOW - timedelta(days=1)
+        self._create_checkin(self.user1.id, created_at=t, mood=5)
+        self._create_checkin(self.user2.id, created_at=t, mood=10)
+
+        res1 = timeline.build_patient_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(len(res1["points"]), 1)
+        self.assertEqual(res1["points"][0]["mood"], 5)
+
+        res2 = timeline.build_patient_timeline(self.db, self.user2.id, window_days=7)
+        self.assertEqual(len(res2["points"]), 1)
+        self.assertEqual(res2["points"][0]["mood"], 10)
+
+    def test_build_patient_timeline_date_range_filtering(self):
+        too_old = NOW - timedelta(days=10)
+        in_range = NOW - timedelta(days=2)
+        in_future = NOW + timedelta(days=2)
+
+        self._create_checkin(self.user1.id, created_at=too_old, mood=1)
+        self._create_checkin(self.user1.id, created_at=in_range, mood=5)
+        self._create_checkin(self.user1.id, created_at=in_future, mood=9)
+
+        res = timeline.build_patient_timeline(self.db, self.user1.id, window_days=5)
+        self.assertEqual(len(res["points"]), 1)
+        self.assertEqual(res["points"][0]["mood"], 5)
+
+    # --- Tests for build_timeline ---
+
+    def test_build_timeline_empty(self):
+        res = timeline.build_timeline(self.db, self.user1.id, window_days=14)
+        self.assertEqual(res["points"], [])
+        self.assertFalse(res["baseline_available"])
+        self.assertEqual(res["window_days"], 14)
+        self.assertIn("daily", res["daily_statistics"])
+
+    def test_build_timeline_basic(self):
+        t = NOW - timedelta(days=2)
+        self._create_checkin(self.user1.id, created_at=t, mood=8, craving=2, sleep_hours=8.0, self_efficacy=9)
+        self._create_alfa_signal(self.user1.id, timestamp=t, score=0.92, confidence_band="stable", calc_version="structural-v2")
+        self._create_baseline(self.user1.id, is_active=True)
+
+        res = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertTrue(res["baseline_available"])
+        self.assertEqual(res["window_days"], 7)
+        self.assertEqual(len(res["points"]), 1)
+
+        point = res["points"][0]
+        self.assertEqual(point["mood"], 8)
+        self.assertEqual(point["structural_score"], 0.92)
+        self.assertEqual(point["confidence_band"], "stable")
+        self.assertEqual(point["structural_calculation_version"], "structural-v2")
+
+    def test_build_timeline_window_days_clamping(self):
+        res_min = timeline.build_timeline(self.db, self.user1.id, window_days=0)
+        self.assertEqual(res_min["window_days"], 1)
+
+        res_max = timeline.build_timeline(self.db, self.user1.id, window_days=500)
+        self.assertEqual(res_max["window_days"], 365)
+
+    def test_build_timeline_ignores_future_scores(self):
+        past_t = NOW - timedelta(days=2)
+        future_t = NOW + timedelta(hours=5)
+
+        self._create_checkin(self.user1.id, created_at=past_t, mood=6)
+        self._create_alfa_signal(self.user1.id, timestamp=future_t, score=0.1, confidence_band="unstable")
+
+        res = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(len(res["points"]), 1)
+        self.assertNotIn("structural_score", res["points"][0])
+
+    def test_build_timeline_structural_score_calculation_version_fallback(self):
+        t = NOW - timedelta(days=1)
+        self._create_checkin(self.user1.id, created_at=t, mood=5)
+
+        s = AlfaSignal(
+            id=uuid.uuid4(),
+            user_id=self.user1.id,
+            signal_type="structural_score",
+            value={"score": 0.75},
+            confidence_band="stable",
+            timestamp=t,
+            is_active=True,
+        )
+        self.db.add(s)
+        self.db.commit()
+
+        res = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(len(res["points"]), 1)
+        point = res["points"][0]
+        self.assertEqual(point["structural_score"], 0.75)
+        self.assertEqual(point["structural_calculation_version"], "structural-v1")
+
+    def test_build_timeline_baseline_available_flag(self):
+        res_no_baseline = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertFalse(res_no_baseline["baseline_available"])
+
+        self._create_baseline(self.user1.id, is_active=True)
+        res_with_baseline = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertTrue(res_with_baseline["baseline_available"])
+
+    def test_build_timeline_user_isolation(self):
+        t = NOW - timedelta(days=1)
+        self._create_checkin(self.user1.id, created_at=t, mood=3)
+        self._create_checkin(self.user2.id, created_at=t, mood=9)
+
+        self._create_alfa_signal(self.user1.id, timestamp=t, score=0.4, confidence_band="unstable")
+        self._create_alfa_signal(self.user2.id, timestamp=t, score=0.9, confidence_band="stable")
+
+        res1 = timeline.build_timeline(self.db, self.user1.id, window_days=7)
+        self.assertEqual(len(res1["points"]), 1)
+        self.assertEqual(res1["points"][0]["mood"], 3)
+        self.assertEqual(res1["points"][0]["structural_score"], 0.4)
+
+        res2 = timeline.build_timeline(self.db, self.user2.id, window_days=7)
+        self.assertEqual(len(res2["points"]), 1)
+        self.assertEqual(res2["points"][0]["mood"], 9)
+        self.assertEqual(res2["points"][0]["structural_score"], 0.9)
 
 
 if __name__ == "__main__":

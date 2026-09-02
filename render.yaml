@@ -47,8 +47,23 @@ services:
         value: claude-opus-5
       - key: ANTHROPIC_ANALYSIS_EFFORT
         value: high
+      # Agent 3, the clinical copilot. Blank means "same as chat", which is
+      # what it silently did before it had a setting; naming it here makes
+      # that visible and lets it be pinned without touching code.
+      - key: ANTHROPIC_COPILOT_MODEL
+        value: claude-opus-5
+      - key: ANTHROPIC_COPILOT_EFFORT
+        value: high
+      # Shared fallback; _CHAT and _ANALYSIS override it per role when set.
       - key: ANTHROPIC_MAX_TOKENS
         value: "8192"
+      # Runtime endpoint override: OFF. This is a shared deployment — the
+      # people using the app are not the people running it — and the feature
+      # lets a signed-in account redirect the agents, and therefore patient
+      # text, to an arbitrary server. Leave it false here; use it on
+      # single-operator installs only.
+      - key: LLM_ALLOW_RUNTIME_OVERRIDE
+        value: "false"
 
       # --- Auth ---------------------------------------------------------
       - key: JWT_SECRET

@@ -55,11 +55,13 @@ from app.schemas import (
     PatientDossierOut,
     PatientMetricsOut,
     PsychosocialAdjudicationIn,
+    PatientProfileIn,
+    PatientProfileOut,
+    SignalRefutationIn,
+    SignalRefutationOut,
     PsychosocialExplanationOut,
     PsychosocialObservationOut,
     DeepStatisticalAnalysisOut,
-    BiometricDataOut,
-    AppUsageDataOut,
     PatientSummaryOut,
     RiskAssessmentOut,
     SafetyPlanOut,
@@ -68,7 +70,9 @@ from app.schemas import (
     TimelineOut,
 )
 from app.security import require_professional
-from app.services import audit, clinical_copilot, clinical_view, psychosocial, risk_engine
+from app.services import agent2_trace, audit, clinical_copilot, clinical_view, psychosocial, risk_engine
+from app.services import profile as profile_service
+from app.services import signals as signals_service
 from app.services.timeline import build_timeline
 
 router = APIRouter(prefix="/api/v1/professional", tags=["professional"])
@@ -561,6 +565,138 @@ def patient_signals(
     )
 
 
+@router.get("/patients/{patient_id}/profile", response_model=PatientProfileOut)
+def patient_profile(
+    patient_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """What the system has accumulated about this person, and what it plans
+    to bring up next.
+
+    Read-only for most of the panel, but the point of showing it is that a
+    clinician can disagree with it: a portrait is a model's summary of a
+    patient, and one nobody can correct is one nobody should trust.
+    """
+    _require_clinical_read(db, professional, patient_id)
+    return PatientProfileOut(**profile_service.as_dict(profile_service.get(db, patient_id)))
+
+
+@router.put("/patients/{patient_id}/profile", response_model=PatientProfileOut)
+def update_patient_profile(
+    patient_id: uuid.UUID,
+    payload: PatientProfileIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Correct the portrait, or set what to explore next.
+
+    Requires the same access as adjudicating an observation: this shapes
+    what the conversational agent brings up with the patient, so it belongs
+    to the assigned therapist rather than to anyone with read access.
+    """
+    _require_fact_access(professional, db, patient_id)
+    changed = []
+    if payload.portrait is not None:
+        profile_service.set_portrait_by_clinician(
+            db, patient_id, portrait=payload.portrait, actor_id=professional.id
+        )
+        changed.append("portrait")
+    if payload.open_threads is not None:
+        profile_service.set_open_threads(
+            db, patient_id, [t.model_dump() for t in payload.open_threads]
+        )
+        changed.append("open_threads")
+
+    if changed:
+        audit.log(
+            db,
+            actor_id=professional.id,
+            actor_role=professional.role,
+            action="patient_profile_edited",
+            entity_type="patient_profile",
+            entity_id=patient_id,
+            extra={"patient_id": str(patient_id), "changed": changed},
+        )
+    # No re-evaluation: the profile shapes conversation and comparison, and
+    # nothing here is an input the deterministic engine reads as evidence.
+    return PatientProfileOut(**profile_service.as_dict(profile_service.get(db, patient_id)))
+
+
+@router.post(
+    "/patients/{patient_id}/signals/{signal_id}/refute",
+    response_model=SignalRefutationOut,
+)
+def refute_linguistic_signal(
+    patient_id: uuid.UUID,
+    signal_id: uuid.UUID,
+    payload: SignalRefutationIn,
+    db: Session = Depends(get_db),
+    professional: User = Depends(require_professional),
+):
+    """Mark a linguistic inference as wrong, and re-evaluate immediately.
+
+    Psychosocial observations have had this since they existed; linguistic
+    signals never did. A wrong flag kept firing its rule on every evaluation
+    for the whole freshness window with no way to say so — which is how an
+    emergency alert for someone announcing a decision to change their life
+    stayed on the record.
+
+    The signal row is kept and deactivated, never deleted: the trace, the
+    source text and the alert it produced are the reason a clinician can
+    review the decision at all. The reason becomes a `correction` fact, and
+    the engine picks the change up on the next evaluation without any rule
+    changing, because every query it makes already filters `is_active`.
+    """
+    _require_fact_access(professional, db, patient_id)
+    signal = db.get(AlfaSignal, signal_id)
+    if signal is None or signal.user_id != patient_id:
+        raise HTTPException(status_code=404, detail="Señal no encontrada")
+    if not signal.is_active:
+        raise HTTPException(status_code=409, detail="Esta señal ya estaba refutada")
+
+    before = _latest_assessment(db, patient_id)
+    level_before = before.alert_level if before else 0
+
+    try:
+        result = signals_service.refute(
+            db,
+            signal,
+            actor_id=professional.id,
+            actor_role=professional.role,
+            reason=payload.reason,
+        )
+    except signals_service.SignalNotRefutable as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    audit.log(
+        db,
+        actor_id=professional.id,
+        actor_role=professional.role,
+        action="linguistic_signal_refuted",
+        entity_type="alfa_signal",
+        entity_id=signal.id,
+        extra={
+            "patient_id": str(patient_id),
+            "signal_type": signal.signal_type,
+            "correction_fact_id": str(result.fact.id),
+        },
+    )
+
+    # Immediate re-evaluation, for the same reason adjudication re-runs it:
+    # leaving the panel showing a level the system no longer stands behind
+    # is worse than the wrong level was.
+    assessment = risk_engine.run_and_persist(db, patient_id)
+    return SignalRefutationOut(
+        signal_id=signal.id,
+        is_active=signal.is_active,
+        superseded_by_fact=signal.superseded_by_fact,
+        correction_fact_id=result.fact.id,
+        alert_level_before=level_before,
+        alert_level_after=assessment.alert_level,
+    )
+
+
 @router.get("/patients/{patient_id}/agent2-analyses", response_model=list[Agent2AnalysisTraceOut])
 def patient_agent2_analyses(
     patient_id: uuid.UUID,
@@ -575,7 +711,7 @@ def patient_agent2_analyses(
         db.query(Agent2AnalysisTrace)
         .filter(
             Agent2AnalysisTrace.user_id == patient_id,
-            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+            Agent2AnalysisTrace.agent_role.in_(agent2_trace.LINGUISTIC_ROLES),
         )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .offset(offset)
@@ -677,7 +813,7 @@ def patient_dossier(
         db.query(Agent2AnalysisTrace)
         .filter(
             Agent2AnalysisTrace.user_id == patient_id,
-            Agent2AnalysisTrace.agent_role == "agent2_linguistic",
+            Agent2AnalysisTrace.agent_role.in_(agent2_trace.LINGUISTIC_ROLES),
         )
         .order_by(Agent2AnalysisTrace.started_at.desc())
         .limit(50)

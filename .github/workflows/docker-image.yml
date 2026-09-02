@@ -4,7 +4,9 @@ on:
   push:
     branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+    # `claude/**` too: a stacked PR targets the branch below it, so a
+    # master-only filter left every PR in a stack with no checks at all.
+    branches: [ "master", "claude/**" ]
 
 jobs:
 
@@ -14,5 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+    - name: Build the Backend Docker image
+      run: docker build ./backend --file backend/Dockerfile --tag psychapp-backend:$(date +%s)
+    - name: Build the Frontend Docker image
+      run: docker build ./frontend --file frontend/Dockerfile --tag psychapp-frontend:$(date +%s)

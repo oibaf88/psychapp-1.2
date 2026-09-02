@@ -78,16 +78,15 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.content.prompts import AGENT4_SYSTEM_PROMPT, AGENT4_TOOL_SCHEMA
 from app.content.psychosocial_catalog import (
     ACUTE_CHANGE_CATEGORIES,
     CATEGORY_DOMAIN,
     CATEGORY_LABELS,
     DOMAIN_BY_KEY,
     DOMAIN_CATEGORIES,
-    DOMAIN_KEYS,
     DOMAIN_LABELS,
     DOMAIN_WEIGHTS,
+    PROTECTIVE_CATEGORIES,
     GROUP_LABELS,
     INTERPERSONAL_DOMAINS,
     LEAVE_TAKING_DOMAIN,
@@ -95,12 +94,13 @@ from app.content.psychosocial_catalog import (
     risk_value,
 )
 from app.models import PsychosocialObservation
-from app.services import agent2_trace
-from app.services.llm import StructuredAnalysisError, get_llm_provider
 
 logger = logging.getLogger("psychapp.psychosocial")
 
-AGENT_ROLE = "agent4_psychosocial"
+# The role its traces carried while it was a separate agent. Kept so the
+# rows already in the database still name something the code knows about;
+# new traces use the merged analyzer's role.
+LEGACY_AGENT_ROLE = "agent4_psychosocial"
 MAX_QUOTE_CHARS = 300
 MAX_SUMMARY_CHARS = 400
 MAX_OBSERVATIONS_PER_TEXT = 8
@@ -121,8 +121,10 @@ STALE_AFTER_DAYS = 120
 # which a 0.1-confidence guess still nudged every index it touched.
 MIN_CONFIDENCE_FOR_SCORING = 0.50
 
-# Agent 4 costs one extra provider call per patient message. Very short texts
-# ("ok", "gracias") cannot carry social context worth the round trip.
+# Very short texts ("ok", "gracias") cannot carry social context, so the
+# psychosocial block of a merged analysis is not even looked at below this.
+# It no longer saves a provider call — the linguistic read happens anyway —
+# but it still avoids inventing observations out of two words.
 MIN_TEXT_CHARS_FOR_EXTRACTION = 15
 
 # Index thresholds. Named here, consumed by the risk engine, rendered in the
@@ -156,7 +158,7 @@ __all__ = [
     "PsychosocialAssessment",
     "adjudicate",
     "assess",
-    "extract_and_store",
+    "build_observation_rows",
 ]
 
 
@@ -183,21 +185,25 @@ class PsychosocialExtraction(BaseModel):
     observations: list[PsychosocialObservationIn] = Field(max_length=8)
 
 
-@dataclass(frozen=True)
-class ExtractionOutcome:
-    trace_id: uuid.UUID | None
-    status: str
-    observation_ids: list[uuid.UUID] = field(default_factory=list)
-
-
 def _coherent(observation: PsychosocialObservationIn) -> bool:
     """Drop observations whose category does not belong to their domain.
 
-    The JSON schema constrains both fields independently, so the model can
-    still emit a valid-but-incoherent pair. Rather than guess which half was
-    meant, the row is discarded.
+    The JSON schema constrains the fields independently, so the model can
+    still emit a valid-but-incoherent combination. Rather than guess which
+    part was meant, the row is discarded.
+
+    Two things are checked. The category must belong to the domain. And a
+    category that is protective *by definition* — having future plans,
+    having stable housing, having support — may not be reported as adverse:
+    that reading is the one which moves an index upward, so a model that
+    got the valence backwards would raise a patient's risk for the very
+    things that lower it.
     """
-    return CATEGORY_DOMAIN.get(observation.category) == observation.domain
+    if CATEGORY_DOMAIN.get(observation.category) != observation.domain:
+        return False
+    if observation.category in PROTECTIVE_CATEGORIES and observation.valence == "risk":
+        return False
+    return True
 
 
 def _quote_is_grounded(quote: str, source_text: str) -> bool:
@@ -230,52 +236,30 @@ def _deduplicate(observations: list[PsychosocialObservationIn]) -> list[Psychoso
     return ordered[:MAX_OBSERVATIONS_PER_TEXT]
 
 
-def extract_and_store(
-    db: Session,
+def build_observation_rows(
+    block: dict,
+    *,
     user_id,
     text: str,
-    *,
     source_type: str,
     source_id: uuid.UUID,
     correlation_id: uuid.UUID,
+    trace_id: uuid.UUID,
     observed_at: datetime | None = None,
-) -> ExtractionOutcome:
-    """Run Agent 4 over one text and persist what it found.
+) -> list[PsychosocialObservation]:
+    """Validate one psychosocial block and turn it into unsaved rows.
 
-    Never raises into the patient-facing flow. Every failure mode — the
-    trace not committing, the provider erroring, invalid output — leaves the
-    conversation and the deterministic risk engine untouched.
+    Split out of the provider call so the merged analyzer can hand over a
+    block it already has. Everything that made the extraction trustworthy
+    stays here and stays in the same order: strict validation, one
+    observation per domain, the domain/category coherence check, and the
+    requirement that the quote appear verbatim in the patient's own text.
+
+    Raises ``ValidationError`` when the block does not satisfy the schema.
+    The caller decides what that costs — under the merged analyzer it costs
+    the psychosocial half only, not the linguistic one.
     """
-    if not text or len(text.strip()) < MIN_TEXT_CHARS_FOR_EXTRACTION:
-        # Not worth a provider round trip, and nothing is lost: a text this
-        # short cannot carry social context the next message will not repeat.
-        return ExtractionOutcome(None, "skipped_short_text")
-
-    try:
-        trace = agent2_trace.start(
-            db,
-            user_id=user_id,
-            source_type=source_type,
-            source_id=source_id,
-            correlation_id=correlation_id,
-            agent_role=AGENT_ROLE,
-        )
-    except agent2_trace.TracePersistenceError:
-        logger.error("Agent 4 skipped because its trace could not be persisted")
-        return ExtractionOutcome(None, "trace_persistence_error")
-
-    try:
-        provider_result = get_llm_provider(db).analyze_structured(
-            AGENT4_SYSTEM_PROMPT,
-            text,
-            AGENT4_TOOL_SCHEMA,
-        )
-        extraction = PsychosocialExtraction.model_validate(provider_result.value)
-    except Exception as exc:  # noqa: BLE001
-        agent2_trace.mark_failed(db, trace, exc)
-        logger.error("Agent 4 extraction failed safely: %s", type(exc).__name__)
-        return ExtractionOutcome(trace.id, trace.status)
-
+    extraction = PsychosocialExtraction.model_validate(block)
     when = observed_at or datetime.utcnow()
     rows: list[PsychosocialObservation] = []
     for item in _deduplicate(extraction.observations):
@@ -291,7 +275,7 @@ def extract_and_store(
                 id=uuid.uuid4(),
                 user_id=user_id,
                 correlation_id=correlation_id,
-                trace_id=trace.id,
+                trace_id=trace_id,
                 source_type=source_type,
                 chat_message_id=source_id if source_type == "chat_message" else None,
                 diary_entry_id=source_id if source_type == "diary_entry" else None,
@@ -309,23 +293,7 @@ def extract_and_store(
             )
         )
 
-    try:
-        agent2_trace.mark_succeeded(trace, provider_result.metadata)
-        db.add(trace)
-        for row in rows:
-            db.add(row)
-        db.commit()
-    except Exception:  # noqa: BLE001
-        db.rollback()
-        agent2_trace.mark_failed(
-            db,
-            trace,
-            StructuredAnalysisError("provider_error", error_code="result_persistence_failed"),
-        )
-        logger.error("Agent 4 result could not be persisted")
-        return ExtractionOutcome(trace.id, trace.status)
-
-    return ExtractionOutcome(trace.id, "succeeded", [row.id for row in rows])
+    return rows
 
 
 # -------------------------------------------------- deterministic scoring ---

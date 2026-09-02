@@ -3,11 +3,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from pydantic import ValidationError
 
-from app.models import PsychosocialObservation
+from app.models import PatientProfile, PsychosocialObservation
 from app.schemas import RiskAssessmentOut
 from app.services import baseline, conversation, risk_engine
 from app.services.conversation import AnalysisOutcome, LinguisticAnalysis
@@ -43,6 +43,9 @@ class _FakeQuery:
     def all(self):
         return self.rows
 
+    def first(self):
+        return self.rows[0] if self.rows else None
+
     def count(self):
         return len(self.rows)
 
@@ -56,13 +59,19 @@ class _FakeDb:
     check-ins into that path, so the mapping is explicit.
     """
 
-    def __init__(self, checkins=None, psychosocial=None):
+    def __init__(self, checkins=None, psychosocial=None, profile=None):
         self.checkins = checkins or []
         self.psychosocial = psychosocial or []
+        # No profile by default, which is the case that must be preserved:
+        # a patient the system has never met is evaluated on the absolute
+        # constants, exactly as every patient was before profiles existed.
+        self.profile = profile
 
     def query(self, model):
         if model is PsychosocialObservation:
             return _FakeQuery(self.psychosocial)
+        if model is PatientProfile:
+            return _FakeQuery([self.profile] if self.profile is not None else [])
         return _FakeQuery(self.checkins)
 
 
@@ -79,6 +88,9 @@ def _structural(score=0.8, band="stable"):
         },
         recent_means={key: 4.8 for key in baseline.VARIABLES},
         composite_z=0.15,
+        deterioration_band=band,
+        deterioration_score=score,
+        adverse_composite_z=(1 / score - 1) if score else 8.0,
     )
 
 
@@ -199,6 +211,58 @@ class LinguisticBoundaryTests(unittest.TestCase):
         self.assertEqual(reply["ui_mode"], "normal")
         self.assertIn("ANTHROPIC_API_KEY", reply["reply"])
 
+    def test_the_stored_turn_names_the_model_that_actually_answered(self):
+        """Provenance comes from the call, not from re-reading the config.
+
+        Re-resolving names the model the app would ask for now; the call's
+        own metadata names the one the server said produced this text. On a
+        local runtime those differ whenever the loaded weights are not the
+        configured ones — which is the case the provenance exists for.
+        """
+        from app.services.llm.base import ChatResult, ProviderMetadata
+
+        patient_id = uuid.uuid4()
+        db = MagicMock()
+        db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        db.refresh.side_effect = lambda i: None
+
+        provider = SimpleNamespace(
+            chat=MagicMock(
+                return_value=ChatResult(
+                    text="Te leo.",
+                    metadata=ProviderMetadata(
+                        provider="openai_compatible",
+                        requested_model="llama-3.1-8b",
+                        response_model="llama-3.1-70b-actually-loaded",
+                        base_url="http://localhost:1234/v1",
+                    ),
+                )
+            )
+        )
+        assessment = SimpleNamespace(alert_level=0, assessment_reason="stable", input_signals={})
+        analysis = AnalysisOutcome(uuid.uuid4(), None, None, "succeeded", None)
+
+        with (
+            patch.object(conversation, "analyze_text_and_store", return_value=analysis),
+            patch.object(risk_engine, "run_and_persist", return_value=assessment),
+            patch.object(conversation, "get_llm_provider", return_value=provider),
+        ):
+            conversation.get_reply(db, SimpleNamespace(id=patient_id), "hola")
+
+        stored = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if getattr(call.args[0], "role", None) == "assistant"
+        ]
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0].model, "llama-3.1-70b-actually-loaded")
+        self.assertEqual(stored[0].provider, "openai_compatible")
+        self.assertEqual(stored[0].provider_base_url, "http://localhost:1234/v1")
+
+    def test_a_template_only_reply_still_records_no_model(self):
+        """A turn with no model behind it must keep saying so."""
+        self.assertEqual(conversation._reply_provenance(MagicMock(), from_model=False), {})
+
     def test_risk_assessment_timestamp_serializes_with_explicit_utc_offset(self):
         output = RiskAssessmentOut(
             id=uuid.uuid4(),
@@ -266,7 +330,7 @@ class _CalculationHarness:
                 patient_id,
                 linguistic_signal_id=preferred_signal_id,
             )
-        linguistic_lookup.assert_called_once_with(fake_db, patient_id, signal_id=preferred_signal_id)
+        linguistic_lookup.assert_called_once_with(fake_db, patient_id, signal_id=preferred_signal_id, now=ANY)
         return decision
 
 
@@ -277,12 +341,12 @@ class DeterministicExplanationTests(_CalculationHarness, unittest.TestCase):
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 17)
+        self.assertEqual(len(trace["rules"]), 18)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])
         self.assertFalse(trace["rules"][-1]["matched"])
-        self.assertIn("clamp(1 - composite_z / 3", trace["inputs"]["structural"]["composite"]["score_formula"])
+        self.assertEqual("1 / (1 + composite_z)", trace["inputs"]["structural"]["composite"]["score_formula"])
         self.assertEqual(trace["inputs"]["sleep_trend"]["classification"], "empeorando")
 
     def test_priority_is_visible_when_multiple_rules_match(self):
@@ -592,7 +656,7 @@ class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
         """
         decision = self._calculate(
             structural=_structural(score=0.9, band="stable"),
-            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            linguistic=_linguistic(ideation_indirect=False, rumination=0.2),
             psychosocial=self._interpersonal_context(days_ago=90),
         )
         self.assertLess(decision.level, 3)
@@ -618,7 +682,7 @@ class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
         ]
         decision = self._calculate(
             structural=_structural(score=0.9, band="stable"),
-            linguistic=_linguistic(ideation_indirect=True, rumination=0.2),
+            linguistic=_linguistic(ideation_indirect=False, rumination=0.2),
             psychosocial=rows,
         )
         self.assertLess(decision.level, 3)

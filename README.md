@@ -3,8 +3,9 @@
 A locally-run self-regulation and risk-monitoring app for people navigating stimulant
 use / chemsex patterns and associated suicide risk (Madrid/Spain context), built from
 ~20 spec/documentation PDFs provided for this project. It pairs a **deterministic,
-fully local risk engine** with a **Claude-powered two-agent LLM layer** for
-conversation and free-text linguistic analysis.
+fully local risk engine** with a **Claude-powered three-agent LLM layer** for
+conversation, free-text analysis and a read-only clinical copilot — none of
+which can decide a risk level.
 
 This README covers what was built, how it maps to the source docs, how to run it,
 and — importantly — everywhere this implementation had to fill a gap or deviate from
@@ -24,7 +25,7 @@ that was just the working filename. Core ideas from the docs:
   and a personal safety plan.
 - A **professional app**: assigned therapists and supervisors can inspect a
   longitudinal timeline, every deterministic risk calculation, and the exact
-  input/output lineage of Agent 2. Clinical administrators manage assignments
+  input/output lineage of the analyser. Clinical administrators manage assignments
   but do not receive clinical signal or trace visibility.
 - A **strict separation between facts and inferences**: things a person or clinician
   has explicitly stated (`ConfirmedFact`) are never silently overwritten by anything
@@ -33,11 +34,23 @@ that was just the working filename. Core ideas from the docs:
   into an `alert_level` 0–4 through an explicit, auditable rule cascade — because
   risk classification in a system like this must be traceable and reproducible, not
   a black box.
-- A **two-agent LLM architecture**: one agent talks to the patient (empathetic,
+- A **three-agent LLM architecture**: one agent talks to the patient (empathetic,
   grounded in MI/CBT/DBT-STOP/urge-surfing techniques, always redirecting to crisis
   resources when needed, and explicitly never allowed to compute or state a risk
-  level itself); a second, separate agent only ever reads free text the user wrote
-  and returns structured data about it — it never talks to the user.
+  level itself); a second, separate **analyser** only ever reads free text the user
+  wrote and returns structured data about it, never talking to anyone; a third is a
+  read-only **copilot** for the therapist, which can create no records at all.
+- **What is normal is normal *for this person*.** The analyser used to judge every
+  patient against the same constants, so `rumination > 0.60` meant the same thing
+  for someone who writes in long anxious spirals and someone who answers in four
+  words. A per-patient linguistic baseline now sits alongside those constants — a
+  reading counts as notable if it is high in absolute terms **or** unusual for that
+  person. Never instead of: a patient whose baseline is genuinely alarming must not
+  become invisible because it has become normal for them.
+- **The clinician can overrule the model.** Both an extracted social observation and
+  a linguistic signal can be refuted, which records a `correction` fact and removes
+  the inference from the next evaluation. An inference nobody can contradict is one
+  nobody should have to act on.
 - **Server-owned, static Spanish crisis messaging** for Level 3/4 escalations —
   these are never LLM-generated, so a crisis response never depends on API
   availability or model behavior. They include Línea 024, 112, and Madrid-specific
@@ -55,11 +68,15 @@ that was just the working filename. Core ideas from the docs:
 - **Frontend**: React 18 + TypeScript + Vite, Recharts for timeline charts.
 - **LLM**: Anthropic Python SDK, calling Claude via the Messages API, or any
   OpenAI-compatible server for a model you host yourself (see below). Each
-  agent has its own configurable model:
-  `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation) and
-  `ANTHROPIC_ANALYSIS_MODEL` for Agent 2 (linguistic analysis). Agent 2 uses
-  **structured outputs** (`output_config.format`), so its result is always a
-  JSON object matching a fixed schema, never free text.
+  role has its own configurable model and effort:
+  `ANTHROPIC_CHAT_MODEL` for Agent 1 (conversation),
+  `ANTHROPIC_ANALYSIS_MODEL` for the analyst, and
+  `ANTHROPIC_COPILOT_MODEL` for Agent 3 (the therapist's copilot — blank
+  reuses the Agent 1 values). One endpoint serves all three; the model is
+  chosen per call, so there is a single active configuration rather than
+  three that can drift apart. The analyst uses **structured outputs**
+  (`output_config.format`), so its result is always a JSON object matching a
+  fixed schema, never free text.
 - **Orchestration**: Docker Compose locally (db + backend + frontend). For a
   hosted deployment — Render for the services, Supabase for Postgres — see
   [DEPLOY.md](./DEPLOY.md).
@@ -75,9 +92,16 @@ The LLM call sits behind a small `LLMProvider` interface
 (`backend/app/services/llm/`), and there are now two implementations: Claude
 over the Anthropic API, and any server speaking the OpenAI chat-completions
 API — llama.cpp, Ollama, LM Studio, vLLM, LocalAI. **Ajustes → Modelo de
-lenguaje** switches between them at runtime, in every profile, so you can see
-how the app behaves on a model you host yourself without redeploying. Set
-`LLM_ALLOW_RUNTIME_OVERRIDE=false` to lock the choice to the environment.
+lenguaje** switches between them at runtime, so you can see how the app
+behaves on a model you host yourself without redeploying.
+
+That switch is **off unless you turn it on**: set
+`LLM_ALLOW_RUNTIME_OVERRIDE=true`, and sign in as an `admin_clinical`
+account. Both gates exist for the same reason — redirecting the agents makes
+the server send patient text to whatever URL is named, so it belongs to
+whoever runs the deployment, not to whoever happens to be signed in. Everyone
+else can still see which model is answering; they just cannot change it. The
+hosted blueprint (`render.yaml`) pins it to `false`.
 
 Three things are worth knowing before pointing it somewhere else:
 
@@ -90,18 +114,54 @@ Three things are worth knowing before pointing it somewhere else:
 - **The risk engine does not change.** Alert levels come from deterministic
   rules over stored data. No model — Claude or otherwise — has ever decided
   one, and none does now.
-- **Linguistic detection does change.** Agent 2's ability to spot a marker is
+- **Linguistic detection does change.** The analyser's ability to spot a marker is
   a property of the model reading the text. A weaker model can miss a signal
   that would have raised a level; the signals it does emit go through exactly
   the same cascade. That cost is real, and the Settings screen states it.
+
+### The analyser knows who is writing
+
+The change that most affects what a clinician sees. Originally each agent read
+one message with no idea who wrote it, judged against constants identical for
+every patient. A person announcing they had decided to change their life for the
+better was read as a suicide crisis: with no history, a model cannot tell a
+turning point from a euphemism for closure, and the prompt only ever pushed it
+to look for what was being hidden.
+
+Five things changed, and none of them lowers the ceiling of any rule:
+
+- **One analyser instead of two agents.** The linguistic and social reads were
+  two calls over the same text with disjoint schemas and nothing to reconcile.
+  They are one call now: chat went from 3 provider calls per message to 2, the
+  diary from 2 to 1.
+- **A personal baseline.** `patient_profiles` holds the mean and σ of that
+  patient's own scores. The engine asks "high, **or** unusual for them?" — an OR,
+  because replacing the constant would let an alarming baseline become invisible.
+  A patient with no profile is evaluated exactly as before.
+- **A counterweight in the prompt.** Change talk, plans with a future and asking
+  for help are named as *not* ideation, with worked examples, and the cost of a
+  false positive is stated: a wrong emergency alert teaches a person that saying
+  good things here has consequences.
+- **A way to disagree.** A therapist can refute a linguistic signal; it stops
+  counting from the next evaluation and the reason is stored as a `correction`
+  fact. The risk engine needed no change for this — it already filtered inactive
+  signals.
+- **Direction, not interrogation.** Agent 1 arrives with one or two threads worth
+  returning to, offers rather than asks, and drops the agenda entirely at alert
+  level 3 or 4.
+
+The therapist panel shows the portrait, the agenda and the baseline, and lets the
+assigned therapist correct all three. A model's summary of a patient that nobody
+can correct is one nobody should trust.
 
 ## 3. How it maps to the spec docs
 
 | Area | What's implemented | Source material |
 |---|---|---|
 | Fact vs. inference model | `ConfirmedFact` / `AlfaSignal` tables, facts immutable except via versioned correction | "Muro de Hechos vs Inferencias" docs |
-| Deterministic risk engine | `app/services/risk_engine.py` — evaluates all 11 rules, persists an immutable `calculation_trace` with formulas, z-scores, thresholds, evidence, matched/selected rules and the final conclusion; the professional UI renders this snapshot without recalculating it | risk-engine pseudocode/schema docs |
-| Two-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, never computes risk) + Agent 2 (strict structured analysis). `agent2_analysis_traces` links exact chat/diary source, validated output signal, provider metadata and the risk assessment that consumed it | final two-agent architecture summary docs |
+| Deterministic risk engine | `app/services/risk_engine.py` — evaluates all 17 rules, persists an immutable `calculation_trace` with formulas, z-scores, thresholds, evidence, matched/selected rules and the final conclusion; the professional UI renders this snapshot without recalculating it | risk-engine pseudocode/schema docs |
+| Three-agent LLM architecture | Agent 1 (`AGENT1_SYSTEM_PROMPT`, conversational, never computes risk), the analyser (`ANALYZER_SYSTEM_PROMPT`, strict structured output, never talks to anyone) and Agent 3 (`clinical_copilot.py`, read-only for the therapist). `agent2_analysis_traces` links exact chat/diary source, validated output signal, provider metadata and the risk assessment that consumed it | final two-agent architecture summary docs, extended |
+| Accumulated knowledge of the patient | `patient_profiles`: a personal linguistic baseline (mean/σ of that patient's own scores) plus a narrative portrait and a live agenda of open threads, both correctable by the therapist. The engine reads the baseline only to ask "is this unusual for them?" | beyond the docs — see **The analyser knows who is writing** below |
 | Escalation messaging | Static, server-owned Spanish templates for Level 3 (professional alarm) and Level 4 (emergency/crisis), in `app/content/safety_resources.py` | escalation-copy docs |
 | Local structural baseline | Rolling Z-score `structural_score` (1.0 = matches personal baseline → 0 = severe deviation) + `confidence_band` (stable/transition/unstable), computed locally in `app/services/baseline.py` | see **Assumption (a)** below — this deliberately replaces a third-party service mentioned in one doc |
 | RBAC | Role-scoped permissions (signal visibility, fact visibility, alert/assignment management, audit log access) for `therapist` / `supervisor` / `admin_clinical` in `security.py` + router-level dependencies | RBAC matrix doc |
@@ -176,12 +236,12 @@ Three things are worth knowing before pointing it somewhere else:
 To stop: `Ctrl+C`, then `docker compose down` (add `-v` to also drop the Postgres
 volume and start clean next time).
 
-### Checking that both Claude agents work
+### Checking that the Claude agents work
 
-Agent 2 fails safely by design: if the analysis call breaks, the deterministic
+The analyser fails safely by design: if the analysis call breaks, the deterministic
 risk engine and server-owned crisis path continue. Every new attempt is recorded
 as `started` and finalized with an allow-listed status; therapists and supervisors
-can see successful and failed attempts in the Agent 2 tracking screen. A direct
+can see successful and failed attempts in the analysis-tracking screen. A direct
 provider smoke check is also available:
 
 ```bash
@@ -192,12 +252,12 @@ docker compose exec backend python scripts/smoke_llm.py
 python scripts/smoke_llm.py
 ```
 
-It calls both agents once, prints Agent 1's reply and Agent 2's parsed JSON,
+It calls both agents once, prints Agent 1's reply and the analyser's parsed JSON,
 and exits non-zero if either fails. It writes nothing to the database and
 seeds no data. On a hosted deployment, run it from the service shell (on
 Render: the service's **Shell** tab, `python scripts/smoke_llm.py`).
 
-Runtime failures of Agent 2 are logged only with a sanitized exception class;
+Runtime failures of the analyser are logged only with a sanitized exception class;
 raw provider bodies, clinical prompts, API keys and stack traces are not copied
 into trace records or logs.
 
@@ -223,20 +283,25 @@ or carry it in the URL, which is what a hosted deployment usually does:
 DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:5432/postgres?sslmode=require&options=-csearch_path%3Dpsychdeep_v12
 ```
 
-Use one or the other, not both. **The schema must already exist** —
-`create_all()` creates tables, not schemas:
+Use one or the other, not both. On Supabase the schema, the backend role and
+every table come from `supabase/migrations/`, applied with `supabase/deploy.sh`
+before the release that needs them — `create_all()` never runs in production.
+For a local Postgres, `create_all()` still creates the tables but not the
+schema, so create that first:
 
 ```sql
 create schema if not exists psychdeep_v12;
 ```
 
-Whichever you choose, `supabase/harden.sql` has a `TARGET_SCHEMA` at the top
-that must be edited to match, or it will report success against an empty
-`public` schema.
+`supabase/verify.sql` checks a Supabase deployment against the contract the API
+enforces at startup. `supabase/harden.sql` is the fallback for tables that did
+not come from these migrations; it has a `TARGET_SCHEMA` at the top that must
+be edited to match, or it will report success against an empty `public`
+schema.
 
 ## 5. Verification status
 
-The current risk-explanation and Agent 2 tracking release is machine-verified
+The current risk-explanation and analysis-tracking release is machine-verified
 before publication:
 
 - the React/TypeScript production build completes;
@@ -247,12 +312,12 @@ before publication:
   replica, including a forced-failure rollback test;
 - the deterministic engine produced the same level and selected rule as the
   previous implementation across 300 generated input combinations; and
-- an interleaving test confirmed two simultaneous Agent 2 signals cannot cross
+- an interleaving test confirmed two simultaneous analysis signals cannot cross
   their clinical lineage.
 
 These checks do not replace the post-deployment checks in [DEPLOY.md](./DEPLOY.md):
 the Supabase migration must be applied before the Render release, then the live
-health endpoint, one synthetic Agent 2 call, RBAC, RLS and the rendered clinical
+health endpoint, one synthetic analysis call, RBAC, RLS and the rendered clinical
 screens must be verified again.
 
 ## 6. Assumptions and gaps
@@ -288,7 +353,7 @@ FCM/APNs (push) integrations described in the docs are not implemented.
 some notion of team-scoped visibility for supervisors; there's no team/org
 modeling in this build, so `supervisor` currently has clinical read visibility
 across the patient roster. `admin_clinical` is separately blocked from clinical
-facts, signals, risk calculations and Agent 2 traces.
+facts, signals, risk calculations and analysis traces.
 
 **(e) `structural_score` persistence uses distinct calendar days.** Multiple
 evaluations on the same day do not satisfy a multi-day persistence rule. The
@@ -297,19 +362,23 @@ snapshot records the observed dates and the required 1/3/5-day threshold.
 **(f) Explicit production migrations.** Local/dev still uses
 `Base.metadata.create_all()`, but production never mutates the schema at startup.
 Supabase changes live under `supabase/migrations/`; the API refuses to start if
-the required Agent 2/risk-explanation columns, owner, FORCE RLS and backend policy
+the required analysis/risk-explanation columns, owner, FORCE RLS and backend policy
 are missing.
 
-**(g) Both LLM agents run on Claude by default, not separate fine-tuned open
-models** — though either can now be pointed at a model you host, from Ajustes. An
+**(g) Every LLM agent runs on Claude by default, not separate fine-tuned open
+models** — though they can now be pointed at a model you host, from Ajustes. An
 earlier doc explored fine-tuning distinct open models per agent. Per the explicit
-brief for this build, both Agent 1 (conversation) and Agent 2 (linguistic
-analysis) call Claude via the Anthropic API by default, distinguished only by
-system prompt and (for Agent 2) forced tool-use schema. The `LLMProvider`
-abstraction in `app/services/llm/` is the seam that makes the alternative
-possible: a second implementation talks to any OpenAI-compatible server, and
-Ajustes switches between them at runtime. What has not changed is that both
-agents share one model per role — this is still not per-agent fine-tuning.
+brief for this build, all three call Claude via the Anthropic API by default,
+distinguished only by system prompt and (for the analyser) a forced
+structured-output schema. Each role has its own model and effort setting
+(`ANTHROPIC_CHAT_MODEL`, `_ANALYSIS_MODEL`, `_COPILOT_MODEL`) and the model is
+chosen per call, so one endpoint serves all three rather than three
+configurations that can drift apart. The `LLMProvider` abstraction in
+`app/services/llm/` is the seam that makes the alternative possible: a second
+implementation talks to any OpenAI-compatible server, and Ajustes switches
+between them at runtime — for an `admin_clinical` account, on a deployment that
+opted in. What has not changed is that a role is a prompt plus a model setting;
+this is still not per-agent fine-tuning.
 
 **(h) MVP scope stops at Level A/B, deliberately excludes Level C/D.** One doc
 explicitly recommended *not* building clinical-prediction / medical-device-territory
@@ -378,10 +447,13 @@ psychapp/
 │   │   │   ├── llm_config.py       # which model serves the app, and since when
 │   │   │   ├── baseline.py         # local structural_score / confidence_band
 │   │   │   ├── risk_engine.py      # deterministic alert_level cascade
-│   │   │   ├── psychosocial.py     # Agent 4 extraction + deterministic vulnerability index
+│   │   │   ├── psychosocial.py     # social-determinant rows + deterministic vulnerability index
+│   │   │   ├── profile.py           # per-patient linguistic baseline, portrait, open threads
+│   │   │   ├── agent1_context.py    # what Agent 1 is told before it answers
+│   │   │   ├── signals.py           # refuting a linguistic inference (writes a `correction` fact)
 │   │   │   ├── clinical_view.py    # Spanish explanations, metric series, evidence feed
 │   │   │   ├── clinical_copilot.py # Agent 3: therapist <-> LLM, read-only over the record
-│   │   │   ├── agent2_trace.py     # privacy-preserving Agent 2 lineage
+│   │   │   ├── agent2_trace.py     # privacy-preserving analysis lineage (historic table name)
 │   │   │   ├── conversation.py     # Agent2 -> risk_engine -> Agent1 orchestration
 │   │   │   ├── notifications.py
 │   │   │   ├── audit.py
@@ -391,7 +463,7 @@ psychapp/
 │   │                            #   notifications, audit
 │   └── requirements.txt
 ├── docs/MANUAL_TERAPEUTA.md    # full therapist manual (also in-app at /professional/manual)
-├── supabase/migrations/        # explicit production schema changes
+├── supabase/                   # production schema (migrations/), deploy.sh, verify.sql
 └── frontend/
     └── src/
         ├── api.ts
@@ -415,11 +487,13 @@ returned pre-explained, and the raw trace is available but demoted to a
 |---|---|
 | `GET /professional/patients/{id}/dossier` | Everything below, in one call |
 | `GET /professional/patients/{id}/explanation` | Why this patient is at this level, in Spanish, naming the evidence family that drove it |
-| `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, Agent 2 signals, event markers |
-| `GET /professional/patients/{id}/evidence` | One row per analysed text: what the patient wrote, what Agent 2 read in it, which level it produced and which alert it generated |
+| `GET /professional/patients/{id}/metrics` | Chart-ready series: level history, structural score, per-variable z-scores, check-ins, linguistic signals, event markers |
+| `GET /professional/patients/{id}/evidence` | One row per analysed text: what the patient wrote, what the analyser read in it, which level it produced and which alert it generated |
 | `GET /professional/patients/{id}/chat` | The patient's own conversation with Agent 1 |
 | `GET /professional/patients/{id}/psychosocial` | Social-determinants index, per-domain breakdown and the literal quotes behind it |
 | `POST /professional/patients/{id}/psychosocial/observations/{obs}` | Confirm or refute one extracted observation |
+| `POST /professional/patients/{id}/signals/{signal}/refute` | Mark a linguistic inference as wrong. Records a `correction` fact, deactivates the signal and re-evaluates immediately |
+| `GET/PUT /professional/patients/{id}/profile` | The accumulated portrait, the open-thread agenda and the personal linguistic baseline — the first two editable by the assigned therapist |
 | `GET/POST /professional/patients/{id}/copilot/messages` | Agent 3, the read-only clinical copilot |
 | `POST /professional/patients/{id}/copilot/summary` | Fresh situation summary from what the patient has said |
 
@@ -433,7 +507,7 @@ Three design points worth knowing:
 - **The composite is a mean of absolute z-scores**, so a large improvement also
   lowers the score. The API therefore also returns an adverse/favourable split
   and a per-variable direction, and the UI leads with those.
-- **Chat and diary are both sources.** Agent 2 analyses both, so both are
+- **Chat and diary are both sources.** The analyser reads both, so both are
   readable by the assigned professional and both appear in the evidence feed.
 
 Agent 3 is strictly read-only: it can create no facts, signals, assessments or

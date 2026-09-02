@@ -31,7 +31,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.content.prompts import (
     AGENT3_PROMPT_VERSION,
     AGENT3_SUMMARY_REQUEST,
@@ -368,8 +367,6 @@ def ask(
     A provider failure is stored as an assistant turn carrying the reason,
     so the therapist sees why the panel is silent instead of an empty box.
     """
-    settings = get_settings()
-
     stored_question = TherapistCopilotMessage(
         id=uuid.uuid4(),
         professional_id=professional.id,
@@ -396,12 +393,23 @@ def ask(
     active = llm_config.resolve(db)
 
     error_kind: str | None = None
+    response_model: str | None = None
+    provider_instance = build_provider(active)
+    # Agent 3 reads a ~90k-character dossier for a clinician who is not
+    # watching a chat bubble fill in, so it gets its own model and effort
+    # rather than inheriting Agent 1's latency-shaped ones.
+    requested_model = provider_instance.copilot_model
     try:
-        content = build_provider(active).chat(
+        result = provider_instance.chat(
             system_prompt,
             _recent_turns(db, professional.id, patient.id),
             max_tokens=MAX_ANSWER_TOKENS,
-        ).strip()
+            model=requested_model,
+            effort=provider_instance.copilot_effort or None,
+        )
+        content = result.text.strip()
+        # What the server said answered, falling back to what we asked for.
+        response_model = result.metadata.response_model or requested_model
         if not content:
             raise RuntimeError("empty_reply")
     except Exception as exc:  # noqa: BLE001
@@ -427,9 +435,16 @@ def ask(
         content=content,
         kind="summary" if kind == "summary" else "answer",
         provider=active.provider,
-        requested_model=active.chat_model,
+        requested_model=requested_model,
         context_window_days=window_days,
-        context_counts={**counts, "prompt_version": AGENT3_PROMPT_VERSION},
+        context_counts={
+            **counts,
+            "prompt_version": AGENT3_PROMPT_VERSION,
+            # Recorded separately from requested_model: on a local runtime
+            # the two disagree whenever the loaded weights are not the ones
+            # the operator configured, and that is worth being able to see.
+            "response_model": response_model,
+        },
         error_kind=error_kind,
     )
     db.add(answer)

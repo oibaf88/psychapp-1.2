@@ -24,6 +24,8 @@ interface NormalizedRule {
 }
 
 const RULE_LABELS: Record<string, string> = {
+  N3_senal_linguistica_ideacion_indirecta: "Posible ideación no explicitada: valoración pendiente",
+  N3_convergencia_critica_extrema: "Deterioro concurrente: revisión profesional",
   N4_declaracion_ideacion_o_plan: "Declaración confirmada de ideación activa o planificación",
   N4_senal_linguistica_ideacion_directa: "Agent 2 detecta ideación directa reciente",
   N4_convergencia_critica_extrema: "Convergencia extrema de estructura, rumiación y sueño",
@@ -415,7 +417,15 @@ function RiskAssessmentCard({ assessment, featured }: { assessment: RiskAssessme
   const zScoresValue = firstDefined(trace, ["z_scores"]) ?? inputSignals.z_scores;
   const zScores = isRecord(zScoresValue) ? zScoresValue : {};
   const traceInputs = isRecord(trace.inputs) ? trace.inputs : {};
+  const structuralInput = isRecord(traceInputs.structural) ? traceInputs.structural : {};
+  const structuralVersion = stringValue(structuralInput, ["calculation_version"]) || stringValue(inputSignals, ["structural_calculation_version"]) || "structural-v1";
+  const meterThresholds = structuralVersion === "structural-v2"
+    ? { low: 1 / 2.95, high: 1 / 2.2 }
+    : structuralVersion === "structural-v1" ? { low: 0.35, high: 0.6 } : null;
   const agent2Input = isRecord(traceInputs.agent2) ? traceInputs.agent2 : {};
+  const safetyReview = isRecord(agent2Input.recent_safety_review) ? agent2Input.recent_safety_review : isRecord(inputSignals.safety_review) ? inputSignals.safety_review : null;
+  const safetyEvidence = Array.isArray(safetyReview?.evidence) ? safetyReview.evidence.filter(isRecord) : [];
+  const safetyDriverId = stringValue(inputSignals, ["safety_driver_signal_id"]);
   const hasAgent2UsageSnapshot = Object.prototype.hasOwnProperty.call(agent2Input, "eligible_for_risk");
   const agent2WasUsed = agent2Input.eligible_for_risk === true && Boolean(assessment.linguistic_signal_id_used);
   const linguisticValue = firstDefined(agent2Input, ["values_used"]) ??
@@ -457,26 +467,27 @@ function RiskAssessmentCard({ assessment, featured }: { assessment: RiskAssessme
           <div className="score-visual">
             <span className="meta">Score estructural registrado</span>
             <strong>{structuralScore === null ? "—" : formatNumber(structuralScore)}</strong>
-            {structuralScore !== null && structuralScore >= 0 && structuralScore <= 1 && (
+            {structuralScore !== null && structuralScore >= 0 && structuralScore <= 1 && meterThresholds && (
               <meter
                 aria-label={`Score estructural: ${formatNumber(structuralScore)}`}
                 min={0}
                 max={1}
                 value={structuralScore}
-                low={0.2}
-                high={0.65}
+                low={meterThresholds.low}
+                high={meterThresholds.high}
                 optimum={1}
               >
                 {structuralScore}
               </meter>
             )}
-            <span className="meta">Banda: {confidenceBand || "—"}</span>
+            <span className="meta">Banda: {confidenceBand || "—"} · {structuralVersion}</span>
           </div>
           <dl className="trace-identifiers">
             <div><dt>Regla concluyente</dt><dd><code>{selectedRule || "—"}</code></dd></div>
             <div><dt>Correlación</dt><dd title={assessment.correlation_id || undefined}><code>{shortId(assessment.correlation_id)}</code></dd></div>
             <div><dt>Traza Agent 2</dt><dd title={(assessment.agent2_trace_id || assessment.analysis_trace_id) ?? undefined}><code>{shortId(assessment.agent2_trace_id || assessment.analysis_trace_id)}</code></dd></div>
-            <div><dt>Señal Agent 2 usada</dt><dd title={assessment.linguistic_signal_id_used || undefined}><code>{shortId(assessment.linguistic_signal_id_used)}</code></dd></div>
+            <div><dt>Señal registrada en el ciclo</dt><dd title={assessment.linguistic_signal_id_used || undefined}><code>{shortId(assessment.linguistic_signal_id_used)}</code></dd></div>
+            {safetyDriverId && <div><dt>Señal determinante de seguridad</dt><dd title={safetyDriverId}><code>{shortId(safetyDriverId)}</code></dd></div>}
           </dl>
         </div>
 
@@ -501,14 +512,41 @@ function RiskAssessmentCard({ assessment, featured }: { assessment: RiskAssessme
             <MetricGrid values={zScores} />
           </section>
           <section className="trace-section">
-            <h3>{agent2WasUsed ? "Señales de Agent 2 evaluadas" : "Señales de Agent 2"}</h3>
+            <h3>Análisis de Agent 2 del ciclo</h3>
             {hasAgent2UsageSnapshot && !agent2WasUsed ? (
-              <p className="trace-empty">No hubo una señal vigente de Agent 2 utilizada en esta evaluación.</p>
+              <p className="trace-empty">El análisis de este ciclo no aportó una señal utilizable. {safetyReview ? "Esto no descarta las señales anteriores de seguridad que figuran debajo." : "Esta evaluación histórica no incluye el desglose de señales previas de seguridad."}</p>
             ) : (
               <MetricGrid values={linguistic} />
             )}
           </section>
         </div>
+
+        {safetyReview && (
+          <section className="trace-section" aria-labelledby={`safety-${assessment.id}`}>
+            <h3 id={`safety-${assessment.id}`}>Señales de seguridad revisadas</h3>
+            <p className="meta">
+              Ventana registrada: {formatValue(safetyReview.window_hours)} h. Un texto posterior neutro o un fallo del análisis
+              no elimina estas señales previas. Son inferencias, no confirmaciones de intención o plan.
+              La marca «determinante» identifica la fuente que activó la regla de seguridad; el texto original está en Evidencia.
+            </p>
+            {safetyEvidence.length ? <div className="table-wrap">
+              <table className="table">
+                <thead><tr><th scope="col">Fecha</th><th scope="col">Señal</th><th scope="col">Indicios registrados</th><th scope="col">Papel en esta decisión</th></tr></thead>
+                <tbody>{safetyEvidence.map((item, index) => {
+                  const signalId = stringValue(item, ["signal_id"]);
+                  const isDriver = Boolean(signalId && safetyDriverId && signalId === safetyDriverId);
+                  const flags = ["ideation_direct", "ideation_indirect", "consumption_crisis"].filter((key) => item[key] === true).map((key) => ANALYSIS_LABELS[key]);
+                  return <tr key={signalId ?? index} className={isDriver ? "row-highlight" : undefined}>
+                    <td>{formatDate(stringValue(item, ["timestamp"]))}</td>
+                    <td title={signalId ?? undefined}><code>{shortId(signalId)}</code></td>
+                    <td>{flags.join(" · ") || "—"}</td>
+                    <td>{isDriver ? "Determinante de seguridad" : "Revisada"}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div> : <p className="trace-empty">No constan señales textuales de seguridad activas en la ventana revisada. Esto no equivale a ausencia de riesgo.</p>}
+          </section>
+        )}
 
         <section className="trace-section">
           <h3>Hechos confirmados considerados</h3>

@@ -53,16 +53,14 @@ _cors_kwargs: dict = {
     "allow_headers": ["*"],
 }
 if settings.app_env in ("local", "dev", "development"):
-    # LAN + Cloudflare quick tunnels (https://*.trycloudflare.com) + common tunnel hosts
+    # LAN origins (phone on same Wi-Fi via http://192.168.x.x:5173 or private IPs).
+    # Specific tunnel hosts should be configured via CORS_ORIGINS.
     _cors_kwargs["allow_origin_regex"] = (
         r"https?://("
         r"localhost|127\.0\.0\.1|"
         r"192\.168\.\d{1,3}\.\d{1,3}|"
         r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
-        r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
-        r"[\w-]+\.trycloudflare\.com|"
-        r"[\w-]+\.ngrok(-free)?\.app|"
-        r"[\w-]+\.ngrok\.io"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
         r")(:\d+)?$"
     )
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
@@ -92,8 +90,11 @@ def _verify_production_schema() -> None:
         ("risk_assessments", "calculation_trace"),
         ("therapist_copilot_messages", "id"),
         ("agent2_analysis_traces", "agent_role"),
+        ("llm_endpoint_configs", "copilot_model"),
         ("psychosocial_observations", "id"),
         ("psychosocial_observations", "evidence_quote"),
+        ("patient_profiles", "id"),
+        ("patient_profiles", "linguistic_baseline"),
     }
     with engine.connect() as conn:
         rows = conn.execute(
@@ -147,6 +148,10 @@ def on_startup():
     else:
         Base.metadata.create_all(bind=engine)
         logger.info("Local database schema ensured (create_all).")
+
+    from app.maintenance.refresh_risk_v14 import run_configured_startup_refresh
+
+    run_configured_startup_refresh()
 
     from app.services.agent2_trace import mark_stale_started_as_abandoned
 

@@ -206,8 +206,19 @@ main {
 }
 
 .navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   font-weight: 700;
   font-size: 1.2rem;
+}
+
+/* At 26px the master's 13 curves fill in, so the chrome takes the compact
+   drawing — the same shape, read at the size it was cut for. */
+.navbar-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
 }
 
 .navbar-links {
@@ -420,61 +431,97 @@ button:disabled {
   text-align: center;
 }
 
-.breathing-orb {
-  position: relative;
+/* --- the breathing mark -------------------------------------------------
+ * PRODUCT: the pacer is the PsychDeep mark, not an ornament next to it. The
+ * patient learns one shape — the wave disc on their home screen — and that
+ * same shape is what breathes with them here.
+ *
+ * The whole disc dilates a little; inside it each curve travels outward from
+ * the core by its own --pd-mark-shift, inner curves further than outer ones.
+ * That difference is what makes the movement read as depth rather than as a
+ * plain scale. The wave keeps its own water hues, as the metaphor always has,
+ * rather than becoming accent-blue furniture.
+ *
+ * The stylesheet decides nothing about rhythm: BreathingPacer writes
+ * data-phase and the durations below only mirror the phase lengths it uses.
+ * ----------------------------------------------------------------------- */
+.breathing-mark {
   width: 132px;
   height: 132px;
-  border-radius: 50%;
   margin: 20px auto 14px;
-  /* PRODUCT: the breathing orb and the wave below stay water-coloured.
-     They are a therapeutic metaphor the patient is taught to recognise,
-     not decoration, so they keep their own hues rather than becoming
-     accent-blue furniture. What changes is the calibration: the ramp now
-     runs along the system's own blue-to-teal axis (accent #6c98f4 toward
-     #7fd8c2, the tone the grounding surface resolves to) and is pitched to
-     read against the dark page instead of a white one. */
-  background:
-    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.9) 0 9%, rgba(255, 255, 255, 0) 25%),
-    radial-gradient(circle at 62% 72%, rgba(127, 216, 194, 0.55) 0 16%, rgba(127, 216, 194, 0) 36%),
-    conic-gradient(from 210deg, #d6e6ff, #7fd8c2, #6c98f4, #2f4f9e, #8fb0f7, #d6e6ff);
-  /* The system uses flat fills for depth, so the orb's lift comes from a
-     single soft halo rather than the previous drop-shadow stack. */
+  /* The system builds depth from flat fills, so the mark's lift is one soft
+     halo rather than a shadow stack. */
+  border-radius: 50%;
   box-shadow: 0 0 0 10px rgba(108, 152, 244, 0.08);
-  transform: scale(0.72);
-  transition: transform 4000ms cubic-bezier(0.22, 0.9, 0.36, 1), filter 1200ms ease;
-  overflow: hidden;
 }
 
-.breathing-orb span {
-  position: absolute;
-  inset: 14px;
-  border-radius: inherit;
-  background:
-    repeating-radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.22) 0 2px, rgba(255, 255, 255, 0) 2px 12px),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0));
-  mix-blend-mode: screen;
-  animation: breath-ripple 12s ease-in-out infinite;
+.pd-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.breathing-orb.idle span {
-  animation-play-state: paused;
+.breathing-mark .pd-mark {
+  transform: scale(var(--pd-mark-scale, 1));
+  transform-origin: 50% 50%;
+  transition: transform var(--pd-mark-duration, 4000ms) cubic-bezier(0.22, 0.9, 0.36, 1);
 }
 
-.breathing-orb.inhale {
-  transform: scale(1.18);
-  filter: saturate(1.12) brightness(1.08);
+/* Lengths are in the mark's own 64-unit viewBox, not screen pixels, so the
+   travel holds its proportions at every size the mark is drawn at. */
+.breathing-mark .pd-mark__curve {
+  transform: translateY(calc(var(--pd-mark-shift, 0) * var(--pd-mark-travel, 0px)));
+  transition:
+    transform var(--pd-mark-duration, 4000ms) cubic-bezier(0.22, 0.9, 0.36, 1),
+    opacity var(--pd-mark-duration, 4000ms) ease;
 }
 
-.breathing-orb.hold {
-  transform: scale(1.18);
-  filter: saturate(1.05) brightness(1.04);
-  transition-duration: 2000ms;
+.breathing-mark[data-phase="rest"] {
+  --pd-mark-scale: 0.94;
+  --pd-mark-travel: 0px;
+  --pd-mark-duration: 1200ms;
+  opacity: 0.86;
 }
 
-.breathing-orb.exhale {
-  transform: scale(0.72);
-  filter: saturate(0.92) brightness(0.96);
-  transition-duration: 6000ms;
+.breathing-mark[data-phase="inhale"] {
+  --pd-mark-scale: 1.06;
+  --pd-mark-travel: 2.2px;
+  --pd-mark-duration: 4000ms;
+}
+
+.breathing-mark[data-phase="hold"] {
+  --pd-mark-scale: 1.06;
+  --pd-mark-travel: 2.2px;
+  --pd-mark-duration: 2000ms;
+}
+
+.breathing-mark[data-phase="exhale"] {
+  --pd-mark-scale: 0.92;
+  --pd-mark-travel: 0px;
+  --pd-mark-duration: 6000ms;
+}
+
+/* A11Y: vestibular migraine, vestibulopathy and movement-sensitive anxiety
+   are common in this population, so under a reduced-motion preference the
+   rhythm is carried by brightness alone — nothing moves, and the phase is
+   still announced in the text below the mark. */
+@media (prefers-reduced-motion: reduce) {
+  .breathing-mark .pd-mark,
+  .breathing-mark .pd-mark__curve {
+    transform: none;
+    transition: opacity var(--pd-mark-duration, 4000ms) ease;
+  }
+
+  .breathing-mark[data-phase="inhale"],
+  .breathing-mark[data-phase="hold"] {
+    opacity: 1;
+  }
+
+  .breathing-mark[data-phase="exhale"],
+  .breathing-mark[data-phase="rest"] {
+    opacity: 0.6;
+  }
 }
 
 .breathing-label {
@@ -536,18 +583,6 @@ button:disabled {
   }
   to {
     transform: translateX(-96px);
-  }
-}
-
-@keyframes breath-ripple {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scale(0.84) rotate(0deg);
-  }
-  50% {
-    opacity: 0.92;
-    transform: scale(1.08) rotate(18deg);
   }
 }
 
@@ -1632,6 +1667,51 @@ tr.direction-peor td:first-child {
   border-radius: var(--radius-control);
 }
 
+.statistics-panel {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.statistics-heading,
+.statistics-date-controls,
+.statistics-pair-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.statistics-heading h3 { margin: 0; }
+.statistics-badge {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.statistics-caution { padding: 10px 14px; background: var(--surface-2); border-left: 3px solid var(--primary-ink); }
+.statistics-filter { display: grid; gap: 5px; max-width: 420px; }
+.statistics-table caption { text-align: left; color: var(--ink-muted); font-size: 0.86rem; padding: 8px 0; }
+.statistics-table th[scope="row"] { min-width: 180px; font-weight: 500; }
+.statistics-table th small { display: block; font-weight: 400; color: var(--ink-muted); font-size: 0.78rem; max-width: 300px; }
+.statistics-table td { font-variant-numeric: tabular-nums; }
+.statistics-category-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.statistics-category-counts span { white-space: nowrap; }
+.statistics-details { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 12px; }
+.statistics-details summary { cursor: pointer; font-weight: 600; margin-bottom: 12px; }
+.statistics-date-controls { align-items: flex-end; }
+.statistics-date-controls label,
+.statistics-pair-controls label { display: grid; gap: 5px; min-width: 0; }
+.statistics-pair-controls label { flex: 1 1 240px; }
+.statistics-pair-controls select { width: 100%; }
+.statistics-pair-result { padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-control); font-variant-numeric: tabular-nums; }
+.statistics-scatter { max-width: 780px; }
+.statistics-tooltip { padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--card-bg); font-size: 0.85rem; }
+.statistics-tooltip p { margin: 4px 0 0; }
+.direction-pill.direction-cambio { background: var(--surface-2); color: var(--ink-soft); }
+
 /* --- event timeline -------------------------------------------------- */
 .event-timeline {
   list-style: none;
@@ -2590,4 +2670,42 @@ tr.row-highlight {
 
 .recharts-tooltip-label {
   color: var(--ink-muted) !important;
+}
+
+/* Accumulated patient profile: portrait, agenda and personal baseline. */
+.profile-panel textarea {
+  /* Width, padding, border, fill and colour already come from the base
+     input rule above; only the growth direction is specific to this one. */
+  resize: vertical;
+}
+
+.profile-panel h3 {
+  margin: 1.5rem 0 0.35rem;
+}
+
+.profile-panel h3:first-child {
+  margin-top: 0;
+}
+
+.thread-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.thread-list li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.thread-list li button {
+  margin-left: auto;
 }

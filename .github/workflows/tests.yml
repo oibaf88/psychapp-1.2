@@ -1,0 +1,120 @@
+# The test suite, on every pull request.
+#
+# Until this existed the repository had CodeQL, a Docker build and a DAST
+# scan, and nothing that ran the tests: a change could break every assertion
+# in the suite and still show a green PR. The suite is the only check that
+# knows anything about the risk engine, so it is the one that matters most
+# here.
+#
+# `claude/**` is in the branch filter on purpose. Stacked pull requests
+# target the branch below them rather than master, and with a master-only
+# filter every PR in a stack ran no checks at all.
+name: Tests
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master", "claude/**" ]
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run the suite
+        working-directory: backend
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Frontend (tsc + vite build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # `npm run build` is `tsc -b && vite build`, so this is the type check
+      # and the bundle in one step.
+      - name: Type-check and build
+        working-directory: frontend
+        run: npm run build
+
+  migrations:
+    name: Supabase migrations (apply, re-apply, verify)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start a Postgres with the Supabase role model
+        run: |
+          # supabase_admin is the bootstrap superuser and postgres is NOT one,
+          # which is what the real project looks like. Running these as a
+          # superuser hides exactly the failure the migrations assert against:
+          # grants issued by a superuser are attributed to the bootstrap role.
+          docker run -d --name pg \
+            -e POSTGRES_USER=supabase_admin \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 postgres:16
+          for i in $(seq 1 30); do
+            docker exec pg pg_isready -U supabase_admin && break
+            sleep 2
+          done
+          docker exec pg psql -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "
+            create role anon nologin;
+            create role authenticated nologin;
+            create role service_role nologin;
+            create role psychdeep_backend nologin;
+            create role postgres login createdb createrole;
+            grant psychdeep_backend to postgres with admin option, inherit false, set false;
+            alter database postgres owner to postgres;"
+
+      - name: Apply every migration in order
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "--- $(basename "$f")"
+            docker exec -i pg psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q < "$f"
+          done
+
+      # Every file claims to be idempotent, so every file is re-applied,
+      # not just the recent ones. A migration that only works once is a
+      # migration that fails the first time a deploy is retried.
+      - name: Re-apply them all (they must be idempotent)
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "--- re-apply $(basename "$f")"
+            docker exec -i pg psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q < "$f"
+          done
+
+      - name: Verify the deployment contract
+        run: |
+          # Every row must read `ok`; the grep fails the job if any does not.
+          docker exec -i pg psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            < supabase/verify.sql | tee /tmp/verify.txt
+          if grep -q "FAILED" /tmp/verify.txt; then
+            echo "::error::supabase/verify.sql reported a failing check"
+            exit 1
+          fi

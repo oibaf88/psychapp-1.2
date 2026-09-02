@@ -41,6 +41,27 @@ class StructuredAnalysisResult:
     metadata: ProviderMetadata
 
 
+@dataclass(frozen=True)
+class ChatResult:
+    """A conversational reply plus the provenance of the call that made it.
+
+    ``chat()`` used to return a bare string, so an assistant turn recorded
+    the model the app *asked* for rather than the one the server said
+    answered. On a hosted API those agree; on a local runtime they routinely
+    do not, which is exactly the case the provenance exists for.
+    """
+
+    text: str
+    metadata: ProviderMetadata
+
+    def strip(self) -> str:
+        """So `provider.chat(...).strip()` keeps reading the way it did."""
+        return self.text.strip()
+
+    def __bool__(self) -> bool:
+        return bool(self.text)
+
+
 class StructuredAnalysisError(RuntimeError):
     """Safe Agent 2 failure with optional provider metadata.
 
@@ -64,9 +85,33 @@ class StructuredAnalysisError(RuntimeError):
 
 
 class LLMProvider(ABC):
+    """One endpoint, serving every agent.
+
+    ``model``, ``effort`` and ``max_tokens`` are per-call overrides. Omit
+    them and the call uses what the provider was constructed with — the
+    behaviour every existing call site relies on. They exist because the
+    three agents want different settings while sharing one endpoint, and
+    building three providers to say so would mean three clients, three
+    resolutions of the active configuration, and three chances for them to
+    disagree about which endpoint is in force.
+    """
+
     @abstractmethod
-    def chat(self, system_prompt: str, messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
-        """Agent 1 (conversational). `messages` is a list of {"role": "user"|"assistant", "content": str}."""
+    def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> ChatResult:
+        """A conversational turn. `messages` is [{"role": "user"|"assistant", "content": str}].
+
+        ``max_tokens`` defaults to None rather than a number: a truthy
+        default here silently shadowed the configured value for every caller
+        that did not pass one.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -75,10 +120,15 @@ class LLMProvider(ABC):
         system_prompt: str,
         user_text: str,
         tool_schema: dict[str, Any],
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+        max_tokens: int | None = None,
     ) -> StructuredAnalysisResult:
         """
-        Agent 2 (linguistic analyst). Must return a dict matching
-        tool_schema["input_schema"], forced via tool-use / function
-        calling so the output is reliably parseable JSON, never free text.
+        The analytic agent. Must return a dict matching
+        tool_schema["input_schema"], forced via structured outputs /
+        function calling so the result is reliably parseable JSON, never
+        free text.
         """
         raise NotImplementedError

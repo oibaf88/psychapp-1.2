@@ -33,8 +33,8 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
@@ -437,7 +437,11 @@ class TherapistCopilotMessage(Base):
     kind: Mapped[str] = mapped_column(String(24), nullable=False, default="question")
     # question | answer | summary
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    requested_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 160 to match llm_endpoint_configs.chat_model/analysis_model/copilot_model.
+    # At 128 a valid configured model name could produce a reply and then be
+    # rejected on INSERT, leaving the professional's question committed with
+    # no answer beside it.
+    requested_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     context_window_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     context_counts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -484,9 +488,11 @@ class Agent2AnalysisTrace(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     agent_role: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="agent2_linguistic", index=True
+        String(32), nullable=False, default="analyzer_merged", index=True
     )
-    # agent2_linguistic | agent4_psychosocial
+    # analyzer_merged (current) | agent2_linguistic | agent4_psychosocial
+    # The two agent* values are retired. Rows carrying them stay, so the
+    # constraint keeps accepting them.
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -504,8 +510,9 @@ class Agent2AnalysisTrace(Base):
     # alone stops identifying anything: two deployments can both say
     # "llama-3.1-8b" and mean different weights on different machines.
     provider_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
-    response_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 160, matching the model names llm_endpoint_configs accepts.
+    requested_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    response_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     effort: Mapped[str] = mapped_column(String(16), nullable=False)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -547,7 +554,8 @@ class Agent2AnalysisTrace(Base):
         CheckConstraint("output_tokens IS NULL OR output_tokens >= 0", name="ck_agent2_trace_output_tokens"),
         CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="ck_agent2_trace_latency"),
         CheckConstraint(
-            "agent_role IN ('agent2_linguistic','agent4_psychosocial')", name="ck_agent2_trace_agent_role"
+            "agent_role IN ('analyzer_merged','agent2_linguistic','agent4_psychosocial')",
+            name="ck_agent2_trace_agent_role",
         ),
         Index("ix_agent2_trace_user_started", "user_id", "started_at"),
         Index("ix_agent2_trace_status_started", "status", "started_at"),
@@ -580,6 +588,10 @@ class LLMEndpointConfig(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     chat_model: Mapped[str] = mapped_column(String(160), nullable=False)
     analysis_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Agent 3, the clinical copilot. Nullable, and NULL means "same as
+    # chat_model" — the behaviour of every row written before this column
+    # existed, so old rows keep meaning exactly what they meant.
+    copilot_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
@@ -612,4 +624,79 @@ class LLMEndpointConfig(Base):
             postgresql_where=text("is_active"),
             sqlite_where=text("is_active"),
         ),
+    )
+
+
+class PatientProfile(Base):
+    """What is known about one patient, accumulated across sessions.
+
+    The analytic agents used to see one message at a time, judged against
+    constants identical for every patient. `rumination > 0.60` meant the
+    same thing for someone who writes in long anxious spirals as for someone
+    who answers in four words — which is how a person announcing they had
+    decided to change their life ended up treated as a crisis.
+
+    This row is the other half of that comparison: who this person is, and
+    what is normal *for them*.
+
+    On the inference side of the fact/inference wall, without exception.
+    Nothing here is a ConfirmedFact, nothing here decides an alert level,
+    and the deterministic engine reads it only to ask "is this unusual for
+    them?" — never to conclude anything on its own. A therapist can correct
+    the portrait; the model can never overwrite what a person declared.
+
+    Exactly one row per patient, kept current rather than versioned as a
+    series: the drift that matters is auditable through `previous_portrait`
+    plus the trace of the analysis that changed it, and a full history table
+    would collect a rewritten paragraph per message for no clinical gain.
+    """
+
+    __tablename__ = "patient_profiles"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+
+    # Mean and standard deviation of this patient's own linguistic scores,
+    # so a reading can be judged against them instead of against a constant.
+    # Shape: {"rumination_score": {"mean": .., "std": .., "n": ..}, ...}
+    #
+    # jsonb on Postgres, json on SQLite. The older JSON columns in this file
+    # are plain `json`, which quietly disagrees with the `jsonb` their
+    # migrations create; matching explicitly here keeps create_all and the
+    # production migration describing the same table.
+    linguistic_baseline: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    linguistic_baseline_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    linguistic_baseline_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # How this person talks, what keeps coming up, what holds them together.
+    # Bounded in length so it cannot grow into the prompt's whole budget.
+    portrait: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The version before the current one, kept so a drifting portrait can be
+    # compared against what it drifted from. One step back is enough to see
+    # a rewrite that went wrong; nobody audits the twentieth.
+    previous_portrait: Mapped[str | None] = mapped_column(Text, nullable=True)
+    portrait_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    portrait_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when a clinician edited the portrait by hand. The analyser may add
+    # to a hand-edited portrait but is told not to contradict it.
+    portrait_edited_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Topics left half-finished, or worth returning to. A live agenda, not a
+    # questionnaire: [{"topic": .., "note": .., "opened_at": .., "source": ..}]
+    open_threads: Mapped[list | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("portrait_version >= 0", name="ck_patient_profile_portrait_version"),
+        CheckConstraint("linguistic_baseline_n >= 0", name="ck_patient_profile_baseline_n"),
     )

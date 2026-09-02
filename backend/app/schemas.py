@@ -169,20 +169,45 @@ class SafetyPlanOut(SafetyPlanIn):
 
 
 # ------------------------------------------------------------- timeline ----
-class TimelinePoint(BaseModel):
+class DailyStatisticsOut(BaseModel):
+    version: str
+    timezone: str
+    window_days: int
+    start_date: str
+    end_date: str
+    generated_at: str
+    daily: list[dict[str, Any]] = Field(default_factory=list)
+    variables: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    correlations: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: dict[str, int] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class PatientTimelinePoint(BaseModel):
     date: str
     mood: Optional[float] = None
     craving: Optional[float] = None
     sleep_hours: Optional[float] = None
     self_efficacy: Optional[float] = None
+
+
+class PatientTimelineOut(BaseModel):
+    points: list[PatientTimelinePoint]
+    window_days: int
+
+
+class TimelinePoint(PatientTimelinePoint):
     structural_score: Optional[float] = None
     confidence_band: Optional[str] = None
+    structural_calculation_version: Optional[str] = None
 
 
 class TimelineOut(BaseModel):
     points: list[TimelinePoint]
     baseline_available: bool
     window_days: int
+    daily_statistics: Optional[DailyStatisticsOut] = None
 
 
 # ---------------------------------------------------------------- chat -----
@@ -452,6 +477,10 @@ class StructuralVariableOut(BaseModel):
 
 
 class StructuralExplanationOut(BaseModel):
+    deterioration_score: Optional[float] = None
+    deterioration_band: Optional[str] = None
+    calculation_version: Optional[str] = None
+    baseline_is_stale: bool = False
     score: Optional[float] = None
     band: Optional[str] = None
     band_label: Optional[str] = None
@@ -630,9 +659,61 @@ class PsychosocialAdjudicationIn(BaseModel):
     note: Optional[str] = Field(default=None, max_length=1000)
 
 
+class OpenThreadIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=120)
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
+class PatientProfileIn(BaseModel):
+    """What a clinician may change about the accumulated portrait.
+
+    Both fields are optional and independent: correcting the portrait and
+    setting what to explore next are different acts, and a panel that made
+    you do both at once would make one of them accidental.
+    """
+
+    portrait: Optional[str] = Field(default=None, max_length=1500)
+    open_threads: Optional[list[OpenThreadIn]] = None
+
+
+class PatientProfileOut(BaseModel):
+    portrait: Optional[str] = None
+    previous_portrait: Optional[str] = None
+    portrait_version: int = 0
+    portrait_updated_at: Optional[str] = None
+    portrait_edited_by_clinician: bool = False
+    open_threads: list[dict[str, Any]] = []
+    linguistic_baseline: Optional[dict[str, Any]] = None
+    linguistic_baseline_n: int = 0
+    baseline_is_usable: bool = False
+    minimum_signals_for_baseline: int = 0
+
+
+class SignalRefutationIn(BaseModel):
+    """A clinician overruling a linguistic inference.
+
+    The reason is mandatory and has no default. It becomes a `correction`
+    fact on the patient's record, so "the model was wrong about this" has to
+    say what it was wrong about — an unexplained refutation would be
+    indistinguishable from a mis-click when someone reviews the case later.
+    """
+
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class SignalRefutationOut(BaseModel):
+    signal_id: uuid.UUID
+    is_active: bool
+    superseded_by_fact: Optional[uuid.UUID] = None
+    correction_fact_id: Optional[uuid.UUID] = None
+    alert_level_after: int
+    alert_level_before: int
+
+
 class PatientMetricsOut(BaseModel):
     window_days: int
     generated_at: Optional[str] = None
+    daily_statistics: Optional[DailyStatisticsOut] = None
     checkins: list[dict[str, Any]] = []
     structural: list[dict[str, Any]] = []
     daily_structural: list[dict[str, Any]] = []
@@ -708,6 +789,9 @@ class LLMEndpointConfigIn(BaseModel):
     base_url: Optional[str] = None
     chat_model: str = Field(min_length=1, max_length=160)
     analysis_model: str = Field(min_length=1, max_length=160)
+    # Agent 3. Blank is meaningful: it means "same model as the chat agent",
+    # which is what the copilot used before it had a setting of its own.
+    copilot_model: Optional[str] = Field(default=None, max_length=160)
     # null keeps the stored key, "" clears it. The current key is never
     # returned, so the UI cannot echo it back by accident.
     api_key: Optional[str] = Field(default=None, max_length=400)
@@ -721,6 +805,7 @@ class LLMEndpointTestIn(BaseModel):
     base_url: Optional[str] = None
     chat_model: str = Field(min_length=1, max_length=160)
     analysis_model: Optional[str] = Field(default=None, max_length=160)
+    copilot_model: Optional[str] = Field(default=None, max_length=160)
     api_key: Optional[str] = Field(default=None, max_length=400)
     timeout_seconds: int = Field(default=30, ge=5, le=600)
 
@@ -736,6 +821,10 @@ class LLMEndpointTestOut(BaseModel):
 class LLMEndpointStatusOut(BaseModel):
     active: dict[str, Any]
     environment_default: dict[str, Any]
+    # The deployment allows a runtime override at all.
     override_allowed: bool
+    # ...and *this* account may actually perform one (admin_clinical only).
+    # The UI locks the form on either, so it needs both to say which.
+    can_edit: bool = False
     is_local: bool
     notice: Optional[str] = None
