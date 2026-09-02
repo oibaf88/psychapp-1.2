@@ -1,38 +1,127 @@
 import unittest
+import uuid
+from unittest.mock import MagicMock
 
-from app.security import hash_password, verify_password
+from fastapi import HTTPException
+from jose import jwt
+
+from app.config import get_settings
+from app.models import User
+from app.security import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    require_roles,
+    verify_password,
+)
+
+settings = get_settings()
 
 
-class SecurityTestCase(unittest.TestCase):
-    def test_verify_password_success(self):
-        password = "SecretPassword123"
-        hashed = hash_password(password)
-        self.assertTrue(verify_password(password, hashed))
-
-    def test_verify_password_wrong_password(self):
-        password = "SecretPassword123"
-        hashed = hash_password(password)
+class SecurityTests(unittest.TestCase):
+    def test_hash_and_verify_password(self):
+        pw = "SuperSecret123"
+        hashed = hash_password(pw)
+        self.assertTrue(verify_password(pw, hashed))
         self.assertFalse(verify_password("WrongPassword", hashed))
 
-    def test_verify_password_invalid_hash_raises_value_error_internally(self):
-        invalid_hashes = [
-            "invalid_hash",
-            "not_a_bcrypt_hash",
-            "1234567890" * 3,
-            "",
-        ]
+    def test_verify_password_invalid_hash_returns_false(self):
+        self.assertFalse(verify_password("password", "invalid_hash_format"))
+
+    def test_verify_password_invalid_hash_variants_return_false(self):
+        invalid_hashes = ("", "not_a_bcrypt_hash", "1234567890" * 3)
         for invalid_hash in invalid_hashes:
             with self.subTest(invalid_hash=invalid_hash):
                 self.assertFalse(verify_password("SecretPassword123", invalid_hash))
 
-    def test_password_truncation_max_bytes(self):
-        long_password_prefix = "A" * 72
-        long_password_1 = long_password_prefix + "BBB"
-        long_password_2 = long_password_prefix + "CCC"
+    def test_verify_password_uses_bcrypt_72_byte_prefix(self):
+        shared_prefix = "A" * 72
+        hashed = hash_password(shared_prefix + "BBB")
+        self.assertTrue(verify_password(shared_prefix + "CCC", hashed))
 
-        hashed = hash_password(long_password_1)
-        # Because password is truncated to first 72 bytes, long_password_2 will match hashed long_password_1
-        self.assertTrue(verify_password(long_password_2, hashed))
+    def test_get_current_user_valid_token(self):
+        user_id = uuid.uuid4()
+        token = create_access_token(user_id, "patient")
+
+        mock_user = MagicMock(spec=User)
+        mock_user.id = user_id
+        mock_user.is_active = True
+        mock_user.role = "patient"
+
+        mock_db = MagicMock()
+        mock_db.get.return_value = mock_user
+
+        user = get_current_user(token=token, db=mock_db)
+        self.assertEqual(user, mock_user)
+        mock_db.get.assert_called_once_with(User, user_id)
+
+    def test_get_current_user_jwt_error_malformed_token(self):
+        mock_db = MagicMock()
+        with self.assertRaises(HTTPException) as ctx:
+            get_current_user(token="not.a.valid.jwt.token", db=mock_db)
+
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(ctx.exception.detail, "Could not validate credentials")
+        mock_db.get.assert_not_called()
+
+    def test_get_current_user_jwt_error_invalid_signature(self):
+        user_id = uuid.uuid4()
+        token = jwt.encode({"sub": str(user_id)}, "wrong_secret", algorithm=settings.jwt_algorithm)
+        mock_db = MagicMock()
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_current_user(token=token, db=mock_db)
+
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(ctx.exception.detail, "Could not validate credentials")
+        mock_db.get.assert_not_called()
+
+    def test_get_current_user_missing_sub_claim(self):
+        token = jwt.encode({"role": "patient"}, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        mock_db = MagicMock()
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_current_user(token=token, db=mock_db)
+
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(ctx.exception.detail, "Could not validate credentials")
+        mock_db.get.assert_not_called()
+
+    def test_get_current_user_not_found_or_inactive(self):
+        user_id = uuid.uuid4()
+        token = create_access_token(user_id, "patient")
+
+        # Case 1: User not found in DB
+        mock_db = MagicMock()
+        mock_db.get.return_value = None
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_current_user(token=token, db=mock_db)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        # Case 2: User found but inactive
+        mock_user = MagicMock(spec=User)
+        mock_user.is_active = False
+        mock_db.get.return_value = mock_user
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_current_user(token=token, db=mock_db)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_require_roles_permission(self):
+        user_patient = MagicMock(spec=User, role="patient")
+        user_therapist = MagicMock(spec=User, role="therapist")
+
+        dep = require_roles("therapist", "admin_clinical")
+
+        # Allowed role
+        self.assertEqual(dep(user=user_therapist), user_therapist)
+
+        # Denied role raises 403
+        with self.assertRaises(HTTPException) as ctx:
+            dep(user=user_patient)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "Insufficient permissions")
 
 
 if __name__ == "__main__":

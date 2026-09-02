@@ -83,7 +83,7 @@ def start(
     source_type: str,
     source_id: uuid.UUID,
     correlation_id: uuid.UUID | None = None,
-    agent_role: str = "agent2_linguistic",
+    agent_role: str = ANALYZER_ROLE,
 ) -> Agent2AnalysisTrace:
     """Commit ``started`` before contacting Anthropic.
 
