@@ -387,5 +387,85 @@ class RuleCatalogTests(unittest.TestCase):
             self.assertEqual(int(code[1]), info["level"], code)
 
 
+
+
+class EvidenceBatchingTests(unittest.TestCase):
+    def test_evidence_for_assessments_matches_individual_calls(self):
+        from app.database import Base
+        from app.models import User, ChatMessage, Agent2AnalysisTrace, AlfaSignal, RiskAssessment
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from datetime import timezone
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+
+        patient = User(id=uuid.uuid4(), email="p@example.com", display_name="P1", role="patient", hashed_password="x")
+        db.add(patient)
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+        assessments = []
+        for i in range(5):
+            msg = ChatMessage(id=uuid.uuid4(), user_id=patient.id, role="user", content=f"Test message {i}", created_at=now)
+            db.add(msg)
+            db.commit()
+
+            trace = Agent2AnalysisTrace(
+                id=uuid.uuid4(),
+                correlation_id=uuid.uuid4(),
+                user_id=patient.id,
+                agent_role="analyzer_merged",
+                source_type="chat_message",
+                chat_message_id=msg.id,
+                status="succeeded",
+                requested_model="m",
+                response_model="m",
+                effort="none",
+                max_tokens=100,
+                prompt_version="v1",
+                prompt_sha256="p",
+                schema_version="v1",
+                schema_sha256="s",
+                started_at=now,
+                created_at=now
+            )
+            db.add(trace)
+            db.commit()
+
+            signal = AlfaSignal(
+                id=uuid.uuid4(),
+                user_id=patient.id,
+                agent2_trace_id=trace.id,
+                signal_type="linguistic",
+                value={"short_rationale": "batch test"},
+                timestamp=now
+            )
+            db.add(signal)
+            db.commit()
+
+            assessment = RiskAssessment(
+                id=uuid.uuid4(),
+                user_id=patient.id,
+                agent2_trace_id=trace.id,
+                linguistic_signal_id_used=signal.id,
+                triggering_rules=["N2_marcadore_ling_prioritarios"],
+                input_signals={},
+                assessment_reason="test",
+                alert_level=2,
+                calculated_at=now
+            )
+            db.add(assessment)
+            db.commit()
+            assessments.append(assessment)
+
+        individual_results = {a.id: clinical_view.evidence_for_assessment(db, a) for a in assessments}
+        batch_results = clinical_view.evidence_for_assessments(db, assessments)
+
+        self.assertEqual(batch_results, individual_results)
+
+
 if __name__ == "__main__":
     unittest.main()

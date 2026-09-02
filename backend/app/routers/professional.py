@@ -62,8 +62,6 @@ from app.schemas import (
     PsychosocialExplanationOut,
     PsychosocialObservationOut,
     DeepStatisticalAnalysisOut,
-    BiometricDataOut,
-    AppUsageDataOut,
     PatientSummaryOut,
     RiskAssessmentOut,
     SafetyPlanOut,
