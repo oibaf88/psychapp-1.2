@@ -265,14 +265,16 @@ def test_llm_endpoint(
 def _test_failure_detail(safe_kind: str, error_code: str | None) -> str:
     if error_code == "local_endpoint_unreachable":
         return (
-            "No se llegó al servidor. Comprueba que está arrancado y que la URL es accesible desde "
-            "el backend (dentro de Docker, 'localhost' es el contenedor: usa host.docker.internal "
-            "o la IP de tu equipo)."
+            "No se llegó al servidor local. Asegúrate de que el servidor (LM Studio, Ollama, etc.) "
+            "está arrancado y escuchando en la URL configurada."
         )
     if error_code == "local_endpoint_timeout":
-        return "El servidor no respondió a tiempo. Sube el tiempo de espera o usa un modelo más pequeño."
+        return (
+            "El servidor no respondió a tiempo. Si el servidor está cargando el modelo en memoria (RAM/VRAM), "
+            "sube el tiempo de espera o intenta la prueba de nuevo."
+        )
     if error_code == "http_404":
-        return "El servidor respondió 404. Suele faltar el sufijo /v1 en la URL."
+        return "El servidor respondió 404. Suele faltar el sufijo /v1 en la URL o el modelo no existe."
     if error_code in ("http_401", "http_403"):
         return "El servidor pide autenticación. Rellena la API key."
     if safe_kind == "configuration_error":

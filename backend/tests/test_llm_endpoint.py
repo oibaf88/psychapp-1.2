@@ -916,3 +916,63 @@ class ReviewFindingTests(unittest.TestCase):
         source = page.read_text(encoding="utf-8")
         self.assertIn("active.copilot_model_explicit", source)
         self.assertNotIn("copilotModel: active.copilot_model ", source)
+
+
+class LocalEndpointCandidateTests(unittest.TestCase):
+    """Test candidate URL generation and fallback for local endpoints (LM Studio, Ollama, etc.)."""
+
+    def test_candidate_urls_outside_docker(self):
+        from app.services.llm.openai_compatible import get_candidate_base_urls
+
+        with patch("os.path.exists", return_value=False), patch("os.environ.get", return_value=""):
+            cands = get_candidate_base_urls("http://localhost:1234/v1")
+            self.assertEqual(cands[0], "http://localhost:1234/v1")
+            self.assertEqual(cands[1], "http://127.0.0.1:1234/v1")
+            self.assertEqual(cands[2], "http://host.docker.internal:1234/v1")
+
+    def test_candidate_urls_inside_docker(self):
+        from app.services.llm.openai_compatible import get_candidate_base_urls
+
+        with patch("os.environ.get", side_effect=lambda k, d="": "true" if k == "RUNNING_IN_DOCKER" else d):
+            cands = get_candidate_base_urls("http://localhost:1234/v1")
+            self.assertEqual(cands[0], "http://host.docker.internal:1234/v1")
+            self.assertEqual(cands[1], "http://127.0.0.1:1234/v1")
+            self.assertEqual(cands[2], "http://localhost:1234/v1")
+
+    def test_non_local_url_returns_single_candidate(self):
+        from app.services.llm.openai_compatible import get_candidate_base_urls
+
+        cands = get_candidate_base_urls("https://api.openai.com/v1")
+        self.assertEqual(cands, ["https://api.openai.com/v1"])
+
+    def test_provider_falls_back_to_working_candidate(self):
+        from unittest.mock import MagicMock
+        from app.services.llm.openai_compatible import OpenAICompatibleProvider
+        import httpx
+
+        provider = OpenAICompatibleProvider(
+            base_url="http://localhost:1234/v1",
+            chat_model="local-model",
+            analysis_model="local-model",
+            timeout_seconds=10,
+        )
+
+        def mock_post(url, headers=None, json=None):
+            if "127.0.0.1" in url:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "id": "chatcmpl-1",
+                    "model": "local-model",
+                    "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+                }
+                return mock_resp
+            raise httpx.ConnectTimeout("Connect timeout")
+
+        with patch("app.services.llm.openai_compatible.get_candidate_base_urls", return_value=[
+            "http://localhost:1234/v1",
+            "http://127.0.0.1:1234/v1",
+        ]), patch("httpx.Client.post", side_effect=mock_post):
+            result = provider.chat("Hi", [{"role": "user", "content": "Hello"}])
+            self.assertEqual(result.text, "OK")
+            self.assertEqual(provider.base_url, "http://127.0.0.1:1234/v1")

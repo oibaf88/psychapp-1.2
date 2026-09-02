@@ -17,7 +17,7 @@ What is deliberately different from the Anthropic provider
 ----------------------------------------------------------
 **Structured output is not assumed.** The Anthropic provider can demand a
 JSON schema and rely on the API to honour it. A local 8B model asked for
-JSON will happily return it wrapped in a ``​```json`` fence, prefixed with
+JSON will happily return it wrapped in a `````json`` fence, prefixed with
 "Sure! Here's the JSON:", or followed by an explanation. Refusing all of
 that would make the analytic agents fail constantly on exactly the setups
 this provider exists to support. So the request asks for JSON three ways —
@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -83,55 +85,110 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
     Raises ``ValueError`` when no object can be recovered.
     """
-    for candidate in (text, _strip_code_fences(text)):
-        stripped = candidate.strip()
-        if not stripped:
+    cleaned = _strip_code_fences(text.strip())
+    try:
+        val = json.loads(cleaned)
+        if isinstance(val, dict):
+            return val
+    except ValueError:
+        pass
+
+    # Balanced bracket scanner. Simple string-aware state machine.
+    in_string = False
+    escape = False
+    depth = 0
+    start = -1
+
+    for i, char in enumerate(text):
+        if escape:
+            escape = False
             continue
-        try:
-            parsed = json.loads(stripped)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        if char == "\\" and in_string:
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+
+        if char == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                candidate = text[start : i + 1]
+                try:
+                    val = json.loads(candidate)
+                    if isinstance(val, dict):
+                        return val
+                except ValueError:
+                    # Keep scanning in case a later balanced block is valid JSON
+                    start = -1
+
+    raise ValueError("No valid JSON object found in response")
+
+
+def get_candidate_base_urls(base_url: str) -> list[str]:
+    """Generate candidate URLs to try for local endpoints.
+
+    When running inside a Docker container, 'localhost' and '127.0.0.1' refer
+    to the container itself, while LM Studio / Ollama run on the host machine.
+    Translating 'localhost' / '127.0.0.1' to 'host.docker.internal' allows
+    seamless access.
+
+    When running on the host, IPv6 ('localhost' -> ::1) might fail or time out
+    if the local server binds strictly to IPv4 (127.0.0.1). Falling back across
+    variants ensures connection succeeds regardless of network setup.
+    """
+    raw = (base_url or "").strip().rstrip("/")
+    if not raw:
+        return [raw]
+
+    parsed = urlparse(raw)
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return [raw]
+
+    local_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}
+    if hostname not in local_hosts:
+        return [raw]
+
+    in_docker = (
+        os.path.exists("/.dockerenv")
+        or os.environ.get("RUNNING_IN_DOCKER") == "true"
+        or os.environ.get("CONTAINER") == "true"
+        or os.path.exists("/run/.containerenv")
+    )
+
+    if in_docker:
+        host_order = ["host.docker.internal", "127.0.0.1", "localhost"]
+    else:
+        if hostname == "127.0.0.1":
+            host_order = ["127.0.0.1", "localhost", "host.docker.internal"]
+        elif hostname == "localhost":
+            host_order = ["localhost", "127.0.0.1", "host.docker.internal"]
+        elif hostname == "host.docker.internal":
+            host_order = ["host.docker.internal", "127.0.0.1", "localhost"]
         else:
-            if isinstance(parsed, dict):
-                return parsed
+            host_order = [hostname, "127.0.0.1", "localhost", "host.docker.internal"]
 
-    source = _strip_code_fences(text)
-    start = source.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(source)):
-            char = source[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        parsed = json.loads(source[start : index + 1])
-                    except (json.JSONDecodeError, TypeError):
-                        break
-                    if isinstance(parsed, dict):
-                        return parsed
-                    break
-        start = source.find("{", start + 1)
-
-    raise ValueError("no JSON object found in model output")
+    candidates = []
+    for h in host_order:
+        netloc = f"{h}:{parsed.port}" if parsed.port else h
+        if parsed.username or parsed.password:
+            auth = f"{parsed.username}:{parsed.password}@" if parsed.password else f"{parsed.username}@"
+            netloc = f"{auth}{netloc}"
+        cand = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)).rstrip("/")
+        if cand not in candidates:
+            candidates.append(cand)
+    return candidates
 
 
 def _schema_instruction(tool_schema: dict[str, Any]) -> str:
-    """Restate the contract in the prompt, for servers that ignore response_format.
+    """Append the schema to the system prompt as an unambiguous format.
 
     Many local runtimes accept ``response_format`` and quietly do nothing
     with it. Putting the schema in the system prompt is the only instruction
@@ -161,17 +218,18 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self._base_url = base_url.rstrip("/")
+        self._effective_base_url: str | None = None
         self._chat_model = chat_model
         self._analysis_model = analysis_model
         self._copilot_model = copilot_model or chat_model
         self._api_key = api_key
         self._max_tokens = max_tokens
-        self._timeout = httpx.Timeout(timeout_seconds, connect=CONNECT_TIMEOUT_SECONDS)
+        self._timeout_seconds = timeout_seconds
 
     # ------------------------------------------------------------- plumbing --
     @property
     def base_url(self) -> str:
-        return self._base_url
+        return self._effective_base_url or self._base_url
 
     @property
     def copilot_model(self) -> str:
@@ -188,37 +246,71 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        # Most local servers ignore auth entirely; some (vLLM behind a proxy,
-        # LiteLLM) require it. Sent only when the operator configured one.
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
     def _post(self, payload: dict[str, Any], requested_model: str) -> tuple[dict[str, Any], int]:
         started = time.perf_counter()
-        try:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=payload,
-                )
-        except httpx.TimeoutException:
-            raise StructuredAnalysisError(
-                "timeout",
-                metadata=self._error_metadata(requested_model, started),
-                error_code="local_endpoint_timeout",
-            ) from None
-        except httpx.HTTPError:
-            # Wrong URL, server down, TLS problem, DNS. The operator needs to
-            # know it was the endpoint, not the model.
+        if self._effective_base_url:
+            candidates = [self._effective_base_url]
+        else:
+            candidates = get_candidate_base_urls(self._base_url)
+
+        last_exc: Exception | None = None
+        body: dict[str, Any] | None = None
+        response: httpx.Response | None = None
+        working_url: str | None = None
+
+        for idx, cand_url in enumerate(candidates):
+            conn_timeout = 3.0 if len(candidates) > 1 and idx < len(candidates) - 1 else CONNECT_TIMEOUT_SECONDS
+            timeout = httpx.Timeout(self._timeout_seconds, connect=conn_timeout)
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(
+                        f"{cand_url}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+                response = resp
+                working_url = cand_url
+                break
+            except (httpx.ConnectTimeout, httpx.ConnectError, httpx.NetworkError) as exc:
+                last_exc = exc
+                logger.debug("Failed connecting to local candidate %s: %s", cand_url, exc)
+                continue
+            except httpx.ReadTimeout:
+                raise StructuredAnalysisError(
+                    "timeout",
+                    metadata=self._error_metadata(requested_model, started, base_url=cand_url),
+                    error_code="local_endpoint_timeout",
+                ) from None
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                continue
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                logger.debug("HTTP error connecting to local candidate %s: %s", cand_url, exc)
+                continue
+
+        if response is None:
+            if isinstance(last_exc, httpx.TimeoutException):
+                raise StructuredAnalysisError(
+                    "timeout",
+                    metadata=self._error_metadata(requested_model, started),
+                    error_code="local_endpoint_timeout",
+                ) from None
             raise StructuredAnalysisError(
                 "provider_error",
                 metadata=self._error_metadata(requested_model, started),
                 error_code="local_endpoint_unreachable",
             ) from None
 
+        if working_url:
+            self._effective_base_url = working_url
+
         latency_ms = round((time.perf_counter() - started) * 1000)
+        current_base_url = self.base_url
         if response.status_code >= 400:
             safe_kind = "configuration_error" if response.status_code in (401, 403, 404) else "provider_error"
             raise StructuredAnalysisError(
@@ -226,7 +318,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 metadata=ProviderMetadata(
                     provider=PROVIDER_NAME,
                     requested_model=requested_model,
-                    base_url=self._base_url,
+                    base_url=current_base_url,
                     latency_ms=latency_ms,
                 ),
                 error_code=f"http_{response.status_code}",
@@ -240,18 +332,18 @@ class OpenAICompatibleProvider(LLMProvider):
                 metadata=ProviderMetadata(
                     provider=PROVIDER_NAME,
                     requested_model=requested_model,
-                    base_url=self._base_url,
+                    base_url=current_base_url,
                     latency_ms=latency_ms,
                 ),
                 error_code="non_json_response",
             ) from None
         return body, latency_ms
 
-    def _error_metadata(self, requested_model: str, started: float) -> ProviderMetadata:
+    def _error_metadata(self, requested_model: str, started: float, base_url: str | None = None) -> ProviderMetadata:
         return ProviderMetadata(
             provider=PROVIDER_NAME,
             requested_model=requested_model,
-            base_url=self._base_url,
+            base_url=base_url or self.base_url,
             latency_ms=round((time.perf_counter() - started) * 1000),
         )
 
@@ -262,9 +354,6 @@ class OpenAICompatibleProvider(LLMProvider):
         return ProviderMetadata(
             provider=PROVIDER_NAME,
             requested_model=requested_model,
-            # The server reports which model actually answered. On a local
-            # runtime this is the only way to notice that the loaded weights
-            # are not the ones the operator thinks they configured.
             response_model=body.get("model") or requested_model,
             base_url=base_url,
             message_id=body.get("id"),
@@ -283,7 +372,6 @@ class OpenAICompatibleProvider(LLMProvider):
         content = message.get("content")
         if isinstance(content, str):
             return content.strip()
-        # Some servers return the multimodal content-part array.
         if isinstance(content, list):
             parts = [part.get("text", "") for part in content if isinstance(part, dict)]
             return "\n".join(parts).strip()
@@ -297,7 +385,7 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int | None = None,
         *,
         model: str | None = None,
-        effort: str | None = None,  # noqa: ARG002 — no local runtime has one
+        effort: str | None = None,
     ) -> ChatResult:
         requested_model = model or self._chat_model
         payload = {
@@ -308,7 +396,7 @@ class OpenAICompatibleProvider(LLMProvider):
         body, latency_ms = self._post(payload, requested_model)
         return ChatResult(
             text=self._first_message(body),
-            metadata=self._metadata(body, requested_model, self._base_url, latency_ms),
+            metadata=self._metadata(body, requested_model, self.base_url, latency_ms),
         )
 
     def analyze_structured(
@@ -318,16 +406,13 @@ class OpenAICompatibleProvider(LLMProvider):
         tool_schema: dict[str, Any],
         *,
         model: str | None = None,
-        effort: str | None = None,  # noqa: ARG002 — no local runtime has one
+        effort: str | None = None,
         max_tokens: int | None = None,
     ) -> StructuredAnalysisResult:
         requested_model = model or self._analysis_model
         payload = {
             "model": requested_model,
             "max_tokens": max_tokens or self._max_tokens,
-            # Deterministic decoding: this is an extraction task, and two
-            # different readings of the same sentence would make a historic
-            # decision impossible to reproduce.
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": system_prompt + _schema_instruction(tool_schema)},
@@ -345,10 +430,6 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             body, latency_ms = self._post(payload, requested_model)
         except StructuredAnalysisError as exc:
-            # Servers that do not implement json_schema reject the whole
-            # request rather than ignoring the field. Retry once in the
-            # dialect every one of them supports; the schema is still in the
-            # system prompt, and the strict Pydantic boundary is unchanged.
             if exc.http_status not in (400, 422):
                 raise
             logger.info("Local endpoint rejected json_schema; retrying with json_object")
@@ -362,7 +443,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 payload.pop("response_format", None)
                 body, latency_ms = self._post(payload, requested_model)
 
-        metadata = self._metadata(body, requested_model, self._base_url, latency_ms)
+        metadata = self._metadata(body, requested_model, self.base_url, latency_ms)
         text = self._first_message(body)
         if not text:
             raise StructuredAnalysisError("invalid_output", metadata=metadata, error_code="empty_response")
