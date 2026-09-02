@@ -19,6 +19,11 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(verify_password("MySecurePassword123!", ""))
         self.assertFalse(verify_password("MySecurePassword123!", "not_a_bcrypt_hash"))
 
+    def test_verify_password_invalid_types(self):
+        self.assertFalse(verify_password("MySecurePassword123!", None))
+        self.assertFalse(verify_password(None, "invalid_hash"))
+        self.assertFalse(verify_password(12345, "invalid_hash"))
+
     def test_verify_password_long_password_truncation(self):
         # Password longer than 72 bytes
         long_password = "a" * 100
