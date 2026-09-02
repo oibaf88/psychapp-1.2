@@ -1265,7 +1265,107 @@ def build_evidence_feed(db: Session, patient_id, limit: int = 60) -> list[dict[s
     return feed
 
 
-def evidence_for_assessment(db: Session, assessment: RiskAssessment | None) -> dict[str, Any] | None:
+
+
+def evidence_for_assessments(
+    db: Session,
+    assessments: list[RiskAssessment],
+) -> dict[uuid.UUID, dict[str, Any] | None]:
+    """Batch version of evidence_for_assessment to avoid N+1 queries when
+    rendering evidence for multiple assessments.
+    """
+    if not assessments:
+        return {}
+
+    # Gather all signal IDs and trace IDs that might be needed
+    signal_uuids: set[uuid.UUID] = set()
+    trace_uuids: set[uuid.UUID] = set()
+
+    for assessment in assessments:
+        if assessment is None:
+            continue
+        code = selected_rule_code(assessment)
+        family = rule_info(code)["family"]
+        if family == FAMILY_LINGUISTIC or code == "N4_convergencia_interpersonal_despedida":
+            driver_id = _as_dict(assessment.input_signals).get("safety_driver_signal_id")
+            signal_id_raw = driver_id or assessment.linguistic_signal_id_used
+            if signal_id_raw:
+                try:
+                    signal_uuids.add(uuid.UUID(str(signal_id_raw)))
+                except (ValueError, TypeError):
+                    pass
+            if assessment.agent2_trace_id:
+                trace_uuids.add(assessment.agent2_trace_id)
+
+    signals_by_id = {
+        s.id: s
+        for s in (
+            db.query(AlfaSignal).filter(AlfaSignal.id.in_(list(signal_uuids))).all()
+            if signal_uuids
+            else []
+        )
+    }
+
+    # Signals might point to additional trace IDs
+    for s in signals_by_id.values():
+        if s.agent2_trace_id:
+            trace_uuids.add(s.agent2_trace_id)
+
+    traces_by_id = {
+        t.id: t
+        for t in (
+            db.query(Agent2AnalysisTrace).filter(Agent2AnalysisTrace.id.in_(list(trace_uuids))).all()
+            if trace_uuids
+            else []
+        )
+    }
+
+    chat_uuids: set[uuid.UUID] = set()
+    diary_uuids: set[uuid.UUID] = set()
+    for trace in traces_by_id.values():
+        if trace.source_type == "chat_message" and trace.chat_message_id:
+            chat_uuids.add(trace.chat_message_id)
+        elif trace.source_type != "chat_message" and trace.diary_entry_id:
+            diary_uuids.add(trace.diary_entry_id)
+
+    chats_by_id = {
+        c.id: c
+        for c in (
+            db.query(ChatMessage).filter(ChatMessage.id.in_(list(chat_uuids))).all()
+            if chat_uuids
+            else []
+        )
+    }
+    diaries_by_id = {
+        d.id: d
+        for d in (
+            db.query(DiaryEntry).filter(DiaryEntry.id.in_(list(diary_uuids))).all()
+            if diary_uuids
+            else []
+        )
+    }
+
+    results = {}
+    for assessment in assessments:
+        results[assessment.id] = evidence_for_assessment(
+            db,
+            assessment,
+            signals_by_id=signals_by_id,
+            traces_by_id=traces_by_id,
+            chats_by_id=chats_by_id,
+            diaries_by_id=diaries_by_id,
+        )
+    return results
+
+def evidence_for_assessment(
+    db: Session,
+    assessment: RiskAssessment | None,
+    *,
+    signals_by_id: dict[uuid.UUID, AlfaSignal] | None = None,
+    traces_by_id: dict[uuid.UUID, Agent2AnalysisTrace] | None = None,
+    chats_by_id: dict[uuid.UUID, ChatMessage] | None = None,
+    diaries_by_id: dict[uuid.UUID, DiaryEntry] | None = None,
+) -> dict[str, Any] | None:
     """Resolve the concrete piece of evidence behind one decision.
 
     For a linguistic rule this is the exact chat message or diary entry the
@@ -1280,16 +1380,39 @@ def evidence_for_assessment(db: Session, assessment: RiskAssessment | None) -> d
         # A recent safety signal can retain priority through a later neutral
         # message. Show the source that drove the rule, not that neutral text.
         driver_id = _as_dict(assessment.input_signals).get("safety_driver_signal_id")
-        signal_id = driver_id or assessment.linguistic_signal_id_used
-        signal = db.get(AlfaSignal, uuid.UUID(str(signal_id))) if signal_id else None
+        signal_id_raw = driver_id or assessment.linguistic_signal_id_used
+        signal_uuid = uuid.UUID(str(signal_id_raw)) if signal_id_raw else None
+
+        if signal_uuid:
+            if signals_by_id is not None:
+                signal = signals_by_id.get(signal_uuid)
+            else:
+                signal = db.get(AlfaSignal, signal_uuid)
+        else:
+            signal = None
+
         if signal is not None and signal.user_id != assessment.user_id:
             signal = None
+
         trace_id = signal.agent2_trace_id if signal is not None else assessment.agent2_trace_id
-        trace = db.get(Agent2AnalysisTrace, trace_id) if trace_id else None
+        if trace_id:
+            if traces_by_id is not None:
+                trace = traces_by_id.get(trace_id)
+            else:
+                trace = db.get(Agent2AnalysisTrace, trace_id)
+        else:
+            trace = None
+
         if trace and trace.user_id == assessment.user_id:
             source_model = ChatMessage if trace.source_type == "chat_message" else DiaryEntry
             source_id = trace.chat_message_id or trace.diary_entry_id
-            row = db.get(source_model, source_id) if source_id else None
+            if source_id:
+                if trace.source_type == "chat_message":
+                    row = chats_by_id.get(source_id) if chats_by_id is not None else db.get(ChatMessage, source_id)
+                else:
+                    row = diaries_by_id.get(source_id) if diaries_by_id is not None else db.get(DiaryEntry, source_id)
+            else:
+                row = None
             content = row.content if row is not None and row.user_id == trace.user_id else ""
             return {
                 "kind": "texto",
