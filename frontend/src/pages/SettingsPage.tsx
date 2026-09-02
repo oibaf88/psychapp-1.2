@@ -53,7 +53,7 @@ const PRESETS: { id: string; name: string; baseUrl: string; model: string; hint:
     name: "LM Studio",
     baseUrl: "http://localhost:1234/v1",
     model: "local-model",
-    hint: "Arranca el servidor local desde la pestaña «Developer».",
+    hint: "Activa el servidor local en LM Studio (Developer / Local Server).",
   },
   {
     id: "llamacpp",
@@ -378,8 +378,8 @@ export default function SettingsPage() {
                     onChange={(e) => patch({ baseUrl: e.target.value })}
                   />
                   <span className="meta">
-                    Si el backend corre en Docker, <code>localhost</code> es el contenedor: usa{" "}
-                    <code>host.docker.internal</code> o la IP de tu equipo.
+                    Puedes usar <code>http://localhost:1234/v1</code>. Si el backend corre en Docker,
+                    se conectará automáticamente a tu equipo (vía <code>host.docker.internal</code>).
                   </span>
                 </label>
               </>

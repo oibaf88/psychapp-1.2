@@ -23,6 +23,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://psychapp:psychapp@db:5432/psychapp
+      RUNNING_IN_DOCKER: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
