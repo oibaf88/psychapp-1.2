@@ -30,6 +30,7 @@ const RULE_LABELS: Record<string, string> = {
   N4_senal_linguistica_ideacion_directa: "Agent 2 detecta ideación directa reciente",
   N4_convergencia_critica_extrema: "Convergencia extrema de estructura, rumiación y sueño",
   N3_declaracion_crisis_consumo: "Crisis de consumo confirmada",
+  N3_declaracion_recaida: "Recaída confirmada: revisión profesional, no emergencia",
   N3_senal_linguistica_crisis_consumo: "Agent 2 detecta crisis de consumo",
   N3_unstable_persistente_con_convergencia: "Inestabilidad persistente con señales convergentes",
   N3_unstable_persistente: "Banda inestable persistente",

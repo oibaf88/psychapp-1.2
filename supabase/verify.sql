@@ -26,8 +26,8 @@ app_tables as (
      where relation.relkind = 'r'
 ),
 expected_tables(table_name) as (values
-    ('agent2_analysis_traces'), ('alfa_signals'), ('app_usage_data'),
-    ('audit_log'), ('baselines'), ('biometric_data'), ('chat_messages'),
+    ('agent2_analysis_traces'), ('alfa_signals'),
+    ('audit_log'), ('baselines'), ('chat_messages'),
     ('check_ins'), ('confirmed_facts'), ('diary_entries'),
     ('llm_endpoint_configs'), ('notifications'), ('password_reset_tokens'),
     ('patient_professional_assignments'), ('patient_profiles'),
@@ -138,6 +138,19 @@ checks(sort_key, check_name, failures) as (
              where namespace.nspname = 'public'
                and relation.relkind = 'r'
                and relation.relname in (select table_name from expected_tables))
+
+    union all
+    select 11, 'llm timeout ceiling is 5000s',
+           (select count(*) from (select 1) as one
+             where not exists (
+                 select 1
+                   from pg_constraint c
+                   join pg_class relation on relation.oid = c.conrelid
+                   join pg_namespace namespace on namespace.oid = relation.relnamespace
+                   join settings on namespace.nspname = settings.target_schema
+                  where relation.relname = 'llm_endpoint_configs'
+                    and c.conname = 'ck_llm_endpoint_timeout'
+                    and pg_get_constraintdef(c.oid) like '%5000%'))
 )
 select check_name,
        case when failures = 0 then 'ok' else 'FAILED' end as status,

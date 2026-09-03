@@ -73,7 +73,11 @@ export default function CopilotPage() {
                 {patients.map((row) => (
                   <option key={row.id} value={row.id}>
                     {row.display_name} ({row.email})
-                    {row.latest_alert_level != null ? ` — nivel ${row.latest_alert_level}` : ""}
+                    {row.pending_alert_level != null
+                      ? ` — alerta pendiente N${row.pending_alert_level}`
+                      : row.latest_alert_level != null
+                        ? ` — última eval. N${row.latest_alert_level}`
+                        : ""}
                   </option>
                 ))}
               </select>
@@ -87,12 +91,23 @@ export default function CopilotPage() {
                   </strong>
                 </span>
                 <span>
-                  Nivel actual:{" "}
-                  <strong className={`level-pill level-${patient.latest_alert_level ?? "na"}`}>
-                    {patient.latest_alert_level != null
-                      ? `N${patient.latest_alert_level} · ${LEVEL_SHORT_LABELS[patient.latest_alert_level]}`
-                      : "sin evaluación"}
+                  Nivel operativo:{" "}
+                  <strong
+                    className={`level-pill level-${patient.pending_alert_level ?? patient.latest_alert_level ?? "na"}`}
+                  >
+                    {patient.pending_alert_level != null
+                      ? `N${patient.pending_alert_level} pendiente${
+                          patient.pending_alert_status === "acknowledged" ? " (reconocida)" : ""
+                        }`
+                      : patient.latest_alert_level != null
+                        ? `N${patient.latest_alert_level} · ${LEVEL_SHORT_LABELS[patient.latest_alert_level]}`
+                        : "sin evaluación"}
                   </strong>
+                  {patient.pending_alert_level != null &&
+                    patient.latest_alert_level != null &&
+                    patient.latest_alert_level !== patient.pending_alert_level && (
+                      <span className="meta"> · última eval. auto. N{patient.latest_alert_level}</span>
+                    )}
                 </span>
                 <span>
                   Score estructural:{" "}

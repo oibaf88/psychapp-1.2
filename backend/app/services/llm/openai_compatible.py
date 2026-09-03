@@ -132,16 +132,13 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
 
 def get_candidate_base_urls(base_url: str) -> list[str]:
-    """Generate candidate URLs to try for local endpoints.
+    """Generate candidate URLs to try for loopback endpoints.
 
-    When running inside a Docker container, 'localhost' and '127.0.0.1' refer
-    to the container itself, while LM Studio / Ollama run on the host machine.
-    Translating 'localhost' / '127.0.0.1' to 'host.docker.internal' allows
-    seamless access.
-
-    When running on the host, IPv6 ('localhost' -> ::1) might fail or time out
-    if the local server binds strictly to IPv4 (127.0.0.1). Falling back across
-    variants ensures connection succeeds regardless of network setup.
+    The contract is the URI the operator typed. We only rewrite loopback
+    aliases (localhost ↔ 127.0.0.1) so an IPv6-only bind or an IPv4-only
+    bind still connects. host.docker.internal is used exclusively when
+    this process is actually inside Docker Compose — never on Render,
+    where that name is the container itself, not the operator's laptop.
     """
     raw = (base_url or "").strip().rstrip("/")
     if not raw:
@@ -156,7 +153,8 @@ def get_candidate_base_urls(base_url: str) -> list[str]:
     if hostname not in local_hosts:
         return [raw]
 
-    in_docker = (
+    on_render = bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
+    in_docker = (not on_render) and (
         os.path.exists("/.dockerenv")
         or os.environ.get("RUNNING_IN_DOCKER") == "true"
         or os.environ.get("CONTAINER") == "true"
@@ -165,15 +163,12 @@ def get_candidate_base_urls(base_url: str) -> list[str]:
 
     if in_docker:
         host_order = ["host.docker.internal", "127.0.0.1", "localhost"]
+    elif hostname == "127.0.0.1":
+        host_order = ["127.0.0.1", "localhost"]
+    elif hostname == "localhost":
+        host_order = ["localhost", "127.0.0.1"]
     else:
-        if hostname == "127.0.0.1":
-            host_order = ["127.0.0.1", "localhost", "host.docker.internal"]
-        elif hostname == "localhost":
-            host_order = ["localhost", "127.0.0.1", "host.docker.internal"]
-        elif hostname == "host.docker.internal":
-            host_order = ["host.docker.internal", "127.0.0.1", "localhost"]
-        else:
-            host_order = [hostname, "127.0.0.1", "localhost", "host.docker.internal"]
+        host_order = [hostname, "127.0.0.1", "localhost"]
 
     candidates = []
     for h in host_order:

@@ -31,10 +31,12 @@ every model call.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -51,7 +53,12 @@ PROVIDERS = (PROVIDER_ANTHROPIC, PROVIDER_LOCAL)
 CACHE_TTL_SECONDS = 30.0
 
 MAX_TOKENS_MIN, MAX_TOKENS_MAX = 256, 32768
-TIMEOUT_MIN, TIMEOUT_MAX = 5, 600
+# Connection establishment stays fail-fast (see CONNECT_TIMEOUT_SECONDS on
+# the local provider). This ceiling is the inference wait once the TCP
+# handshake has succeeded — a local model loading into VRAM can take minutes.
+TIMEOUT_MIN, TIMEOUT_MAX = 5, 5000
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}
 
 
 @dataclass(frozen=True)
@@ -104,6 +111,12 @@ class ResolvedConfig:
 
     def public_dict(self) -> dict:
         """Everything the UI may see. Never the key."""
+        settings = get_settings()
+        anthropic_key_present = bool(settings.anthropic_api_key)
+        if self.provider == PROVIDER_ANTHROPIC:
+            has_key = anthropic_key_present
+        else:
+            has_key = bool(self.api_key)
         return {
             "provider": self.provider,
             "provider_label": (
@@ -121,12 +134,111 @@ class ResolvedConfig:
             "source": self.source,
             "config_id": self.config_id,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "has_api_key": bool(self.api_key),
+            "has_api_key": has_key,
+            "uses_server_api_key": self.provider == PROVIDER_ANTHROPIC,
         }
 
 
 class LLMConfigError(ValueError):
     """The submitted configuration cannot be used."""
+
+
+def backend_runtime() -> str:
+    """Where this FastAPI process is actually running.
+
+    Render sets RENDER / RENDER_SERVICE_ID. Production APP_ENV is treated
+    the same: the process is not on the operator's LAN, so a 192.168/10/127
+    address is unroutable from here.
+    """
+    if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"):
+        return "cloud"
+    if get_settings().is_production:
+        return "cloud"
+    return "local"
+
+
+def backend_runtime_label() -> str:
+    if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"):
+        region = os.environ.get("RENDER_REGION") or "frankfurt"
+        return f"Render ({region})"
+    if get_settings().is_production:
+        return "servidor en la nube"
+    return "este equipo (proceso local de FastAPI)"
+
+
+def _hostname_is_private(hostname: str) -> bool:
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return True
+    if host in LOOPBACK_HOSTS or host.endswith(".local") or host.endswith(".internal"):
+        return True
+    try:
+        ip = ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast)
+
+
+def endpoint_reachability(url: str | None) -> dict:
+    """Can THIS FastAPI process open a TCP connection to that URI?
+
+    A 10 s connect timeout is the wrong answer when the address is a
+    private LAN IP and we are in Frankfurt: there is no route, so we
+    refuse immediately rather than hanging.
+    """
+    runtime = backend_runtime()
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower()
+    private = _hostname_is_private(host)
+    if runtime == "local":
+        return {
+            "ok": True,
+            "runtime": runtime,
+            "private_target": private,
+            "reason": None,
+        }
+    if not url:
+        return {
+            "ok": False,
+            "runtime": runtime,
+            "private_target": True,
+            "reason": "Falta la URL del modelo.",
+        }
+    if private:
+        return {
+            "ok": False,
+            "runtime": runtime,
+            "private_target": True,
+            "reason": (
+                f"Este backend corre en {backend_runtime_label()} y no tiene ruta a "
+                f"{host}. Una IP de LAN (127.0.0.1, 192.168.x, 10.x) no es un endpoint "
+                "alcanzable desde Frankfurt. Usa Claude (la clave ANTHROPIC_API_KEY ya "
+                "está en el servidor) o un túnel HTTPS público autenticado "
+                "(Cloudflare Tunnel, ngrok) que apunte a tu LM Studio."
+            ),
+        }
+    if parsed.scheme != "https":
+        return {
+            "ok": False,
+            "runtime": runtime,
+            "private_target": False,
+            "reason": (
+                "Desde un despliegue en la nube el endpoint del modelo tiene que ser "
+                "HTTPS público. HTTP en claro enviaría texto clínico sin cifrar."
+            ),
+        }
+    return {
+        "ok": True,
+        "runtime": runtime,
+        "private_target": False,
+        "reason": None,
+    }
+
+
+def _is_unreachable_local(config: "ResolvedConfig") -> bool:
+    if not config.is_local:
+        return False
+    return not endpoint_reachability(config.base_url)["ok"]
 
 
 # ----------------------------------------------------------------- cache ---
@@ -182,6 +294,17 @@ def active_row(db: Session) -> LLMEndpointConfig | None:
     )
 
 
+def stored_override(db: Session | None) -> ResolvedConfig | None:
+    """The row the operator last saved, even if this host cannot reach it."""
+    if db is None:
+        return None
+    try:
+        row = active_row(db)
+    except Exception:  # noqa: BLE001
+        return None
+    return _from_row(row) if row else None
+
+
 def resolve(db: Session | None = None) -> ResolvedConfig:
     """The configuration in force right now.
 
@@ -210,7 +333,21 @@ def resolve(db: Session | None = None) -> ResolvedConfig:
 
     try:
         row = active_row(db)
-        config = _from_row(row) if row else environment_config()
+        stored = _from_row(row) if row else None
+        if stored is None:
+            config = environment_config()
+        elif _is_unreachable_local(stored):
+            # Keep the stored row (the Settings screen still shows it) but do
+            # not send inference there: hanging for minutes on an unroutable
+            # LAN address is how production looked broken.
+            logger.warning(
+                "Ignoring unreachable local LLM endpoint %s from %s; using the environment default",
+                stored.base_url,
+                backend_runtime_label(),
+            )
+            config = environment_config()
+        else:
+            config = stored
     except Exception:  # noqa: BLE001
         logger.exception("Could not read the active LLM configuration; using the environment default")
         return environment_config()
@@ -240,6 +377,11 @@ def normalise_base_url(raw: str) -> str:
     # A path of /chat/completions means they pasted the full endpoint.
     if url.endswith("/chat/completions"):
         url = url[: -len("/chat/completions")]
+    # LM Studio's "copy server URL" sometimes yields /api/v1/chat instead of /v1.
+    if url.endswith("/api/v1/chat"):
+        url = url[: -len("/api/v1/chat")] + "/v1"
+    elif url.endswith("/api/v1"):
+        url = url[: -len("/api/v1")] + "/v1"
     if not urlparse(url).path.rstrip("/"):
         # Bare host: assume the near-universal /v1 prefix.
         url = f"{url}/v1"
@@ -267,6 +409,9 @@ def validate(
 
     if provider == PROVIDER_LOCAL:
         normalised = normalise_base_url(base_url or "")
+        reach = endpoint_reachability(normalised)
+        if not reach["ok"]:
+            raise LLMConfigError(reach["reason"])
     else:
         normalised = None
     return {
@@ -312,9 +457,15 @@ def set_active(
     )
 
     previous = active_row(db)
-    # An empty key on an update means "leave it alone", not "clear it": the
-    # UI never receives the stored key, so it cannot echo it back.
-    effective_key = api_key if api_key is not None else (previous.api_key if previous else None)
+    # Anthropic always authenticates with ANTHROPIC_API_KEY from the server
+    # environment (Render secret). A key typed in the browser is ignored so
+    # it can never shadow or leak the deployment credential.
+    if fields["provider"] == PROVIDER_ANTHROPIC:
+        effective_key = None
+    else:
+        # An empty key on an update means "leave it alone", not "clear it": the
+        # UI never receives the stored key, so it cannot echo it back.
+        effective_key = api_key if api_key is not None else (previous.api_key if previous else None)
 
     now = datetime.utcnow()
     for row in (

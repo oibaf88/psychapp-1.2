@@ -32,8 +32,12 @@ CLINICAL_BASIS = {
 
 # N4 (emergencia): only explicit self-harm crisis declarations / ideation.
 N4_FACT_CATEGORIES = {"ideation_active", "planning"}
-# N3 (alarma profesional): consumption crisis alone is professional review, not 112.
-N3_FACT_CATEGORIES = {"consumption_crisis"}
+# N3 (alarma profesional): consumption crisis and a confirmed recent relapse
+# are professional review, not 112. They are separate rules so a relapse is
+# never labelled as a consumption crisis.
+N3_CONSUMPTION_FACT_CATEGORIES = {"consumption_crisis"}
+N3_RELAPSE_FACT_CATEGORIES = {"relapse"}
+N3_FACT_CATEGORIES = N3_CONSUMPTION_FACT_CATEGORIES | N3_RELAPSE_FACT_CATEGORIES
 CRITICAL_DECLARATION_WINDOW_HOURS = 48
 STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT = 3
 STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE = 5
@@ -511,6 +515,8 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
 
     n4_facts = _facts_in_categories(db, user_id, N4_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
     n3_facts = _facts_in_categories(db, user_id, N3_FACT_CATEGORIES, CRITICAL_DECLARATION_WINDOW_HOURS)
+    consumption_facts = [f for f in n3_facts if f.get("category") in N3_CONSUMPTION_FACT_CATEGORIES]
+    relapse_facts = [f for f in n3_facts if f.get("category") in N3_RELAPSE_FACT_CATEGORIES]
     persistence_1 = _persistence_detail(db, user_id, "unstable", 1)
     persistence_3 = _persistence_detail(db, user_id, "unstable", STRUCTURAL_PERSISTENCE_DAYS_N3_CONVERGENT)
     persistence_5 = _persistence_detail(db, user_id, "unstable", STRUCTURAL_PERSISTENCE_DAYS_N3_ALONE)
@@ -644,8 +650,15 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             "N3_declaracion_crisis_consumo",
             3,
             "Hecho confirmado reciente de crisis de consumo",
-            [_trace_condition("Hechos N3 en 48 h", len(n3_facts), "gt", 0, bool(n3_facts))],
-            bool(n3_facts),
+            [_trace_condition("Hechos de crisis de consumo en 48 h", len(consumption_facts), "gt", 0, bool(consumption_facts))],
+            bool(consumption_facts),
+        ),
+        _trace_rule(
+            "N3_declaracion_recaida",
+            3,
+            "Hecho confirmado reciente de recaída",
+            [_trace_condition("Hechos de recaída en 48 h", len(relapse_facts), "gt", 0, bool(relapse_facts))],
+            bool(relapse_facts),
         ),
         _trace_rule(
             "N3_senal_linguistica_crisis_consumo",
@@ -906,6 +919,10 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             "es justamente su coincidencia lo que se vigila"
         ),
         "N3_declaracion_crisis_consumo": "Declaración de crisis de consumo (alarma profesional, no emergencia 112 automática)",
+        "N3_declaracion_recaida": (
+            "Recaída confirmada en las últimas 48 horas: prioridad operativa N3 para revisión "
+            "profesional. No es una probabilidad de recaída ni una emergencia automática"
+        ),
         "N3_senal_linguistica_crisis_consumo": "Señal lingüística de crisis de consumo (inferencia; revisión profesional)",
         "N3_unstable_persistente_con_convergencia": "Desviación estructural persistente (≥3 días inestable) con convergencia de señales",
         "N3_unstable_persistente": "structural_score en banda inestable de forma sostenida (≥5 días)",
@@ -1007,6 +1024,8 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
     input_facts = {
         "n4_declarations": n4_facts,
         "n3_declarations": n3_facts,
+        "n3_consumption_declarations": consumption_facts,
+        "n3_relapse_declarations": relapse_facts,
         "critical_declarations": n4_facts + n3_facts,
     }
 
@@ -1216,6 +1235,8 @@ def calculate_risk_level(db: Session, user_id, *, linguistic_signal_id=None) -> 
             "agent2_signal_available": agent2_available,
             "n4_fact_count": len(n4_facts),
             "n3_fact_count": len(n3_facts),
+            "n3_consumption_fact_count": len(consumption_facts),
+            "n3_relapse_fact_count": len(relapse_facts),
             "psychosocial_index": psycho_index,
             "psychosocial_support_is_low": psychosocial.support_is_low,
             "psychosocial_material_adversity_is_high": psychosocial.material_adversity_is_high,
@@ -1386,6 +1407,8 @@ def _alert_title(decision: RiskDecision) -> str:
             return "Alerta Nivel 3 – Deterioro concurrente: revisión profesional"
         if "N3_declaracion_crisis_consumo" in decision.triggering_rules:
             return "Alerta Nivel 3 – Crisis de consumo declarada"
+        if "N3_declaracion_recaida" in decision.triggering_rules:
+            return "Alerta Nivel 3 – Recaída confirmada (revisión profesional, no emergencia)"
         if "N3_senal_linguistica_crisis_consumo" in decision.triggering_rules:
             return "Alerta Nivel 3 – Señal lingüística de crisis de consumo"
         if "N3_unstable_persistente_con_convergencia" in decision.triggering_rules:

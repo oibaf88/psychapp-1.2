@@ -91,7 +91,7 @@ export default function ProfessionalDashboard() {
               <th>Paciente</th>
               <th>Email</th>
               <th>Asignación</th>
-              {canSeeClinicalColumns && <th>Nivel riesgo actual</th>}
+              {canSeeClinicalColumns && <th>Nivel operativo</th>}
               {canSeeClinicalColumns && (
                 <th title="Similitud de sus check-ins de 7 días con su línea base de 21 días. 1.00 = sin cambios. NO es una escala de riesgo.">
                   Estabilidad de check-ins ⓘ
@@ -110,8 +110,26 @@ export default function ProfessionalDashboard() {
                 <td>{ASSIGNMENT_STATUS_LABELS[p.assignment_status] || p.assignment_status}</td>
                 {canSeeClinicalColumns && (
                   <td>
-                    {p.latest_alert_level != null ? (
-                      <strong className={`level-pill level-${p.latest_alert_level}`}>L{p.latest_alert_level}</strong>
+                    {p.pending_alert_level != null ? (
+                      <>
+                        <strong className={`level-pill level-${p.pending_alert_level}`}>
+                          N{p.pending_alert_level}
+                        </strong>
+                        <div className="meta">
+                          Alerta pendiente
+                          {p.pending_alert_status === "acknowledged" ? " (reconocida)" : " (abierta)"}
+                          {p.latest_alert_level != null && p.latest_alert_level !== p.pending_alert_level
+                            ? ` · última eval. auto. N${p.latest_alert_level}`
+                            : ""}
+                        </div>
+                      </>
+                    ) : p.latest_alert_level != null ? (
+                      <>
+                        <strong className={`level-pill level-${p.latest_alert_level}`}>
+                          N{p.latest_alert_level}
+                        </strong>
+                        <div className="meta">Última evaluación automática</div>
+                      </>
                     ) : (
                       "—"
                     )}

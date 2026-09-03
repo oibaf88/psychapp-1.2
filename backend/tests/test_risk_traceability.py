@@ -341,7 +341,7 @@ class DeterministicExplanationTests(_CalculationHarness, unittest.TestCase):
         self.assertEqual(decision.level, 0)
         trace = decision.calculation_trace
         self.assertEqual(trace["schema_version"], "risk-explanation-v1")
-        self.assertEqual(len(trace["rules"]), 18)
+        self.assertEqual(len(trace["rules"]), 19)
         self.assertEqual(sum(1 for rule in trace["rules"] if rule["selected"]), 1)
         self.assertEqual(trace["conclusion"]["selected_rule_code"], "N0_estable")
         self.assertEqual(trace["conclusion"]["matched_rule_codes"], ["N0_estable"])
@@ -746,3 +746,62 @@ class InterpersonalConvergenceRuleTests(unittest.TestCase, _CalculationHarness):
             psychosocial=self._interpersonal_context(),
         )
         self.assertEqual(decision.triggering_rules, ["N4_declaracion_ideacion_o_plan"])
+
+
+class ConfirmedRelapseDeclarationTests(_CalculationHarness, unittest.TestCase):
+    """A recent confirmed relapse is N3 review, never an emergency or a probability."""
+
+    def test_confirmed_relapse_reaches_level_three_without_becoming_an_emergency(self):
+        fact = {
+            "id": str(uuid.uuid4()),
+            "category": "relapse",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(rumination=0.1, negative_valence=0.1),
+            n3=[fact],
+        )
+        self.assertEqual(decision.level, 3)
+        self.assertEqual(decision.triggering_rules, ["N3_declaracion_recaida"])
+        self.assertNotEqual(decision.level, 4)
+        self.assertIn("probabilidad", decision.reason.lower())
+        self.assertIn("emergencia automática", decision.reason.lower())
+        self.assertEqual(decision.input_facts["n3_relapse_declarations"], [fact])
+        self.assertEqual(decision.input_facts["n3_consumption_declarations"], [])
+        selected = next(rule for rule in decision.calculation_trace["rules"] if rule["selected"])
+        self.assertEqual(selected["code"], "N3_declaracion_recaida")
+        self.assertEqual(selected["target_level"], 3)
+
+    def test_confirmed_relapse_is_not_labelled_as_consumption_crisis(self):
+        fact = {
+            "id": str(uuid.uuid4()),
+            "category": "relapse",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(rumination=0.1),
+            n3=[fact],
+        )
+        self.assertEqual(decision.triggering_rules, ["N3_declaracion_recaida"])
+        self.assertNotIn("N3_declaracion_crisis_consumo", decision.triggering_rules)
+        matched = decision.calculation_trace["conclusion"]["matched_rule_codes"]
+        self.assertIn("N3_declaracion_recaida", matched)
+        self.assertNotIn("N3_declaracion_crisis_consumo", matched)
+
+    def test_consumption_crisis_declaration_still_uses_its_own_rule(self):
+        fact = {
+            "id": str(uuid.uuid4()),
+            "category": "consumption_crisis",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        decision = self._calculate(
+            structural=_structural(score=0.9, band="stable"),
+            linguistic=_linguistic(rumination=0.1),
+            n3=[fact],
+        )
+        self.assertEqual(decision.level, 3)
+        self.assertEqual(decision.triggering_rules, ["N3_declaracion_crisis_consumo"])
+        self.assertEqual(decision.input_facts["n3_consumption_declarations"], [fact])
+        self.assertEqual(decision.input_facts["n3_relapse_declarations"], [])

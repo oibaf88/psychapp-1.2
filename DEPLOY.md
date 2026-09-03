@@ -12,8 +12,13 @@ Architecture:
 | Agent 1 — conversation | **Anthropic API** | `ANTHROPIC_CHAT_MODEL` |
 | Agent 2 — linguistic analysis | **Anthropic API** | `ANTHROPIC_ANALYSIS_MODEL` |
 
-Both agents run on the Claude API. There is no local/offline model path
-any more — the OpenAI-compatible provider was removed.
+Both agents default to the Claude API (`ANTHROPIC_API_KEY` is a Render
+secret, never a field in the Settings form). A local OpenAI-compatible
+model can be selected from Settings **only if FastAPI can actually reach
+that URI**. Render Frankfurt has no route to `127.0.0.1` / `192.168.x`;
+those URLs are rejected immediately instead of hanging until timeout.
+A public HTTPS tunnel (Cloudflare Tunnel, ngrok) is the only way to
+point production at a model running on your laptop.
 
 ---
 
@@ -44,7 +49,7 @@ instance alive.
 
 ### What is in `supabase/migrations/`
 
-Filename order is apply order, and the nine files together are the whole
+Filename order is apply order, and the eleven files together are the whole
 schema:
 
 | File | Adds |
@@ -58,10 +63,12 @@ schema:
 | `20260825130000_widen_provenance_model_columns.sql` | Widens `requested_model` / `response_model` to `varchar(160)` — the length the endpoint config already accepts. At 128 a valid long model name produced a reply the database then refused to record. |
 | `20260825140000_widen_agent_role_for_merged_analyzer.sql` | Lets `agent2_analysis_traces.agent_role` hold `analyzer_merged`, the single analyser that replaced Agents 2 and 4. Still accepts the two retired values, which existing rows carry. |
 | `20260825160000_add_patient_profiles.sql` | `patient_profiles`: the per-patient linguistic baseline and accumulated portrait, so a reading is judged against that person rather than a constant. |
+| `20260903190000_expand_llm_timeout_to_5000.sql` | Raises `llm_endpoint_configs.timeout_seconds` CHECK from 600 s to 5.000 s (inference wait; connect stays fail-fast). |
+| `20260903191000_drop_unused_mobile_telemetry.sql` | Drops empty `biometric_data` and `app_usage_data`. Aborts if either table has rows. |
 
 Every file is idempotent and opens its own transaction: re-running is a no-op,
 and a failure rolls that file back instead of leaving the schema half applied.
-Applying all nine to an empty database reproduces exactly the model graph in
+Applying all eleven to an empty database reproduces exactly the model graph in
 `backend/app/models.py`.
 
 All four of the `20260825*` files are expand-only — a nullable column, three
@@ -72,8 +79,8 @@ backfilled, because an absent value in these columns already means something
 exact and writing a guess into it would turn that absence into a decision
 nobody made.
 
-The `Tests` workflow applies all nine to a throwaway Postgres on every pull
-request, re-applies the newest four to prove they are idempotent, and runs
+The `Tests` workflow applies all eleven to a throwaway Postgres on every pull
+request, re-applies every file to prove they are idempotent, and runs
 `verify.sql` against the result — under the same role model as the real
 project, with `postgres` deliberately not a superuser.
 
