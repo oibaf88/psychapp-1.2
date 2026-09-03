@@ -5,6 +5,9 @@
 -- run if any row appeared between the last check and the DROP, so it cannot
 -- silently destroy data.
 --
+-- The COUNT and DROP run as psychdeep_backend: postgres is not the owner
+-- and FORCE RLS would deny SELECT otherwise.
+--
 -- Same role dance as the rest of this folder.
 
 begin;
@@ -12,8 +15,6 @@ begin;
 do $$
 declare
     membership_is_expected boolean;
-    biometric_rows bigint;
-    app_usage_rows bigint;
 begin
     select count(*) = 1
        and bool_and(m.admin_option)
@@ -31,7 +32,17 @@ begin
     if not coalesce(membership_is_expected, false) then
         raise exception 'Unexpected postgres -> psychdeep_backend membership; migration stopped safely';
     end if;
+end
+$$;
 
+grant psychdeep_backend to postgres with set true;
+set local role psychdeep_backend;
+
+do $$
+declare
+    biometric_rows bigint;
+    app_usage_rows bigint;
+begin
     if to_regclass('psychdeep_v12.biometric_data') is not null then
         execute 'select count(*) from psychdeep_v12.biometric_data' into biometric_rows;
         if biometric_rows > 0 then
@@ -46,9 +57,6 @@ begin
     end if;
 end
 $$;
-
-grant psychdeep_backend to postgres with set true;
-set local role psychdeep_backend;
 
 drop table if exists psychdeep_v12.biometric_data;
 drop table if exists psychdeep_v12.app_usage_data;
