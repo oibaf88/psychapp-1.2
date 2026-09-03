@@ -324,6 +324,8 @@ class PatientSummaryOut(BaseModel):
     latest_alert_level: Optional[int] = None
     latest_structural_score: Optional[float] = None
     latest_confidence_band: Optional[str] = None
+    pending_alert_level: Optional[int] = None
+    pending_alert_status: Optional[str] = None
     open_alerts: int = 0
     checkin_count: int = 0
     last_checkin_at: Optional[datetime] = None
@@ -796,7 +798,7 @@ class LLMEndpointConfigIn(BaseModel):
     # returned, so the UI cannot echo it back by accident.
     api_key: Optional[str] = Field(default=None, max_length=400)
     max_tokens: int = Field(default=4096, ge=256, le=32768)
-    timeout_seconds: int = Field(default=120, ge=5, le=600)
+    timeout_seconds: int = Field(default=120, ge=5, le=5000)
     label: Optional[str] = Field(default=None, max_length=120)
 
 
@@ -807,7 +809,7 @@ class LLMEndpointTestIn(BaseModel):
     analysis_model: Optional[str] = Field(default=None, max_length=160)
     copilot_model: Optional[str] = Field(default=None, max_length=160)
     api_key: Optional[str] = Field(default=None, max_length=400)
-    timeout_seconds: int = Field(default=30, ge=5, le=600)
+    timeout_seconds: int = Field(default=30, ge=5, le=5000)
 
 
 class LLMEndpointTestOut(BaseModel):
@@ -828,3 +830,8 @@ class LLMEndpointStatusOut(BaseModel):
     can_edit: bool = False
     is_local: bool
     notice: Optional[str] = None
+    backend_runtime: str = "local"
+    backend_runtime_label: str = "este equipo"
+    local_endpoint_supported: bool = True
+    ignored_override: Optional[dict[str, Any]] = None
+    anthropic_api_key_configured: bool = False

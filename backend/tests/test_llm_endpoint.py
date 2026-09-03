@@ -10,7 +10,7 @@ model answered.
 import copy
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.services import llm_config
 from app.services.llm import build_provider
@@ -473,6 +473,20 @@ class ActiveConfigWriteTests(unittest.TestCase):
         self._set(db, api_key="")
         self.assertIsNone(db.added[0].api_key)
 
+    def test_anthropic_ignores_a_frontend_api_key(self):
+        db = _RecordingSession([])
+        self._set(
+            db,
+            provider="anthropic",
+            base_url=None,
+            api_key="sk-from-the-browser",
+            chat_model="claude-opus-5",
+            analysis_model="claude-opus-5",
+            label="Claude",
+        )
+        self.assertIsNone(db.added[0].api_key)
+        self.assertEqual(db.added[0].provider, "anthropic")
+
     def test_an_invalid_configuration_writes_nothing(self):
         previous = _ExistingRow()
         db = _RecordingSession([previous])
@@ -501,6 +515,8 @@ class OverrideGateTests(unittest.TestCase):
             anthropic_max_tokens=8192,
             copilot_model="claude-opus-5",
             anthropic_copilot_model="",
+            anthropic_api_key="sk-test-env",
+            is_production=False,
         )
 
     def test_the_shipped_default_is_off(self):
@@ -513,15 +529,19 @@ class OverrideGateTests(unittest.TestCase):
 
         self.assertFalse(Settings.model_fields["llm_allow_runtime_override"].default)
 
-    def test_render_blueprint_pins_it_off(self):
+    def test_render_blueprint_keeps_override_on_for_this_install(self):
+        """Single-operator production: the Settings screen has to work.
+
+        A shared multi-tenant deploy should pin this false. This repository's
+        hosted install is the operator's own app, so the blueprint keeps it on.
+        """
         import pathlib
 
         blueprint = pathlib.Path(__file__).resolve().parents[2] / "render.yaml"
         text = blueprint.read_text(encoding="utf-8")
         self.assertIn("LLM_ALLOW_RUNTIME_OVERRIDE", text)
-        # The value is on the line after the key in Render's env-var shape.
         key_line = text.index("LLM_ALLOW_RUNTIME_OVERRIDE")
-        self.assertIn('value: "false"', text[key_line : key_line + 120])
+        self.assertIn('value: "true"', text[key_line : key_line + 120])
 
     def test_writes_are_admin_only(self):
         """The role check is a dependency, so assert the dependency itself."""
@@ -928,7 +948,7 @@ class LocalEndpointCandidateTests(unittest.TestCase):
             cands = get_candidate_base_urls("http://localhost:1234/v1")
             self.assertEqual(cands[0], "http://localhost:1234/v1")
             self.assertEqual(cands[1], "http://127.0.0.1:1234/v1")
-            self.assertEqual(cands[2], "http://host.docker.internal:1234/v1")
+            self.assertEqual(len(cands), 2)
 
     def test_candidate_urls_inside_docker(self):
         from app.services.llm.openai_compatible import get_candidate_base_urls
@@ -938,6 +958,20 @@ class LocalEndpointCandidateTests(unittest.TestCase):
             self.assertEqual(cands[0], "http://host.docker.internal:1234/v1")
             self.assertEqual(cands[1], "http://127.0.0.1:1234/v1")
             self.assertEqual(cands[2], "http://localhost:1234/v1")
+
+    def test_candidate_urls_on_render_never_rewrite_to_docker_internal(self):
+        from app.services.llm.openai_compatible import get_candidate_base_urls
+
+        def _env(key, default=""):
+            if key in ("RENDER", "RENDER_SERVICE_ID"):
+                return "srv-frankfurt"
+            return default
+
+        with patch("os.environ.get", side_effect=_env):
+            cands = get_candidate_base_urls("http://localhost:1234/v1")
+        self.assertEqual(cands[0], "http://localhost:1234/v1")
+        self.assertEqual(cands[1], "http://127.0.0.1:1234/v1")
+        self.assertNotIn("host.docker.internal", "".join(cands))
 
     def test_non_local_url_returns_single_candidate(self):
         from app.services.llm.openai_compatible import get_candidate_base_urls
@@ -976,3 +1010,151 @@ class LocalEndpointCandidateTests(unittest.TestCase):
             result = provider.chat("Hi", [{"role": "user", "content": "Hello"}])
             self.assertEqual(result.text, "OK")
             self.assertEqual(provider.base_url, "http://127.0.0.1:1234/v1")
+
+
+class TimeoutAndReachabilityTests(unittest.TestCase):
+    def test_five_thousand_seconds_is_accepted(self):
+        fields = llm_config.validate(
+            provider="openai_compatible",
+            base_url="http://127.0.0.1:1234/v1",
+            chat_model="m",
+            analysis_model="m",
+            max_tokens=4096,
+            timeout_seconds=5000,
+        )
+        self.assertEqual(fields["timeout_seconds"], 5000)
+
+    def test_five_thousand_and_one_is_rejected(self):
+        with self.assertRaises(llm_config.LLMConfigError):
+            llm_config.validate(
+                provider="openai_compatible",
+                base_url="http://127.0.0.1:1234/v1",
+                chat_model="m",
+                analysis_model="m",
+                max_tokens=4096,
+                timeout_seconds=5001,
+            )
+
+    def test_api_v1_chat_path_is_normalised_to_v1(self):
+        self.assertEqual(
+            llm_config.normalise_base_url("http://127.0.0.1:1234/api/v1/chat"),
+            "http://127.0.0.1:1234/v1",
+        )
+
+    def test_lan_ip_is_rejected_from_the_cloud(self):
+        with patch.object(llm_config, "backend_runtime", return_value="cloud"), patch.object(
+            llm_config, "backend_runtime_label", return_value="Render (frankfurt)"
+        ):
+            with self.assertRaises(llm_config.LLMConfigError) as caught:
+                llm_config.validate(
+                    provider="openai_compatible",
+                    base_url="http://192.168.1.19:1234/v1",
+                    chat_model="m",
+                    analysis_model="m",
+                    max_tokens=4096,
+                    timeout_seconds=120,
+                )
+        self.assertIn("Frankfurt", str(caught.exception))
+        self.assertIn("192.168.1.19", str(caught.exception))
+
+    def test_lan_ip_is_allowed_when_fastapi_is_local(self):
+        with patch.object(llm_config, "backend_runtime", return_value="local"):
+            fields = llm_config.validate(
+                provider="openai_compatible",
+                base_url="http://192.168.1.19:1234/v1",
+                chat_model="m",
+                analysis_model="m",
+                max_tokens=4096,
+                timeout_seconds=120,
+            )
+        self.assertEqual(fields["base_url"], "http://192.168.1.19:1234/v1")
+
+    def test_https_public_host_is_allowed_from_the_cloud(self):
+        with patch.object(llm_config, "backend_runtime", return_value="cloud"):
+            fields = llm_config.validate(
+                provider="openai_compatible",
+                base_url="https://lmstudio.example.com/v1",
+                chat_model="m",
+                analysis_model="m",
+                max_tokens=4096,
+                timeout_seconds=120,
+            )
+        self.assertEqual(fields["base_url"], "https://lmstudio.example.com/v1")
+
+    def test_anthropic_environment_reports_the_server_key(self):
+        settings = SimpleNamespace(
+            anthropic_chat_model="claude-opus-5",
+            anthropic_analysis_model="claude-opus-5",
+            copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
+            anthropic_max_tokens=8192,
+            anthropic_api_key="sk-from-render",
+            is_production=False,
+        )
+        with patch.object(llm_config, "get_settings", return_value=settings):
+            public = llm_config.environment_config().public_dict()
+        self.assertTrue(public["has_api_key"])
+        self.assertTrue(public["uses_server_api_key"])
+        self.assertIsNone(public["base_url"])
+
+    def test_stored_lan_override_is_ignored_from_the_cloud(self):
+        llm_config.invalidate_cache()
+        row = SimpleNamespace(
+            provider="openai_compatible",
+            chat_model="local-model",
+            analysis_model="local-model",
+            copilot_model=None,
+            base_url="http://192.168.1.19:1234/v1",
+            api_key=None,
+            max_tokens=4096,
+            timeout_seconds=120,
+            label="LAN",
+            id="r",
+            created_at=None,
+            is_active=True,
+        )
+
+        class _Db:
+            def query(self, _model):
+                q = MagicMock()
+                q.filter.return_value = q
+                q.order_by.return_value = q
+                q.first.return_value = row
+                return q
+
+        settings = SimpleNamespace(
+            llm_allow_runtime_override=True,
+            anthropic_chat_model="claude-opus-5",
+            anthropic_analysis_model="claude-opus-5",
+            anthropic_max_tokens=8192,
+            copilot_model="claude-opus-5",
+            anthropic_copilot_model="",
+            anthropic_api_key="sk-from-render",
+            is_production=True,
+        )
+        with (
+            patch.object(llm_config, "get_settings", return_value=settings),
+            patch.object(llm_config, "backend_runtime", return_value="cloud"),
+            patch.object(llm_config, "backend_runtime_label", return_value="Render (frankfurt)"),
+        ):
+            resolved = llm_config.resolve(_Db())
+        self.assertEqual(resolved.provider, "anthropic")
+        self.assertEqual(resolved.source, "environment")
+        llm_config.invalidate_cache()
+
+    def test_settings_form_never_asks_for_the_anthropic_key(self):
+        import pathlib
+
+        page = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "frontend"
+            / "src"
+            / "pages"
+            / "SettingsPage.tsx"
+        )
+        source = page.read_text(encoding="utf-8")
+        self.assertIn('current.provider === "anthropic" ? null', source)
+        self.assertIn("Se lee de ANTHROPIC_API_KEY en el servidor", source)
+        self.assertIn("API de PsychDeep", source)
+        self.assertIn("Endpoint del modelo", source)
+

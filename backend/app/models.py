@@ -174,47 +174,6 @@ class Baseline(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class BiometricData(Base):
-    """Passively collected wearable measurements.
-
-    Columns mirror BiometricDataIn in app/schemas.py exactly, because
-    app/routers/metrics.py constructs this with **payload.model_dump().
-    """
-
-    __tablename__ = "biometric_data"
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
-    device_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    heart_rate_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    heart_rate_variability: Mapped[float | None] = mapped_column(Float, nullable=True)
-    sleep_duration_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
-    sleep_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    deep_sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rem_sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
-    steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    active_calories: Mapped[float | None] = mapped_column(Float, nullable=True)
-    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class AppUsageData(Base):
-    """Passively collected phone-usage statistics.
-
-    Columns mirror AppUsageDataIn in app/schemas.py exactly, because
-    app/routers/metrics.py constructs this with **payload.model_dump().
-    """
-
-    __tablename__ = "app_usage_data"
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
-    apps_usage_stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    screen_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    measured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
 class CheckIn(Base):
     __tablename__ = "check_ins"
 
@@ -612,7 +571,7 @@ class LLMEndpointConfig(Base):
             name="ck_llm_endpoint_base_url",
         ),
         CheckConstraint("max_tokens BETWEEN 256 AND 32768", name="ck_llm_endpoint_max_tokens"),
-        CheckConstraint("timeout_seconds BETWEEN 5 AND 600", name="ck_llm_endpoint_timeout"),
+        CheckConstraint("timeout_seconds BETWEEN 5 AND 5000", name="ck_llm_endpoint_timeout"),
         Index("ix_llm_endpoint_active", "is_active", "created_at"),
         # One active endpoint at a time, enforced by the database rather than
         # by the service that writes it: a second active row would make

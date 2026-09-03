@@ -80,10 +80,25 @@ def _status(db: Session, user: User) -> LLMEndpointStatusOut:
     settings = get_settings()
     active = llm_config.resolve(db)
     environment = llm_config.environment_config()
+    stored = llm_config.stored_override(db)
     allowed = settings.llm_allow_runtime_override
     is_admin = user.role == ADMIN_ROLE
+    runtime = llm_config.backend_runtime()
+    runtime_label = llm_config.backend_runtime_label()
 
-    if active.is_local:
+    ignored = None
+    if stored and stored.is_local and llm_config._is_unreachable_local(stored):
+        ignored = stored
+
+    if ignored:
+        notice = (
+            f"Hay un modelo propio guardado en {stored.base_url}, pero este backend "
+            f"corre en {runtime_label} y no puede alcanzarlo. Se está usando Claude "
+            f"(configuración del despliegue) para no quedarse colgado en un timeout. "
+            "Para un modelo en tu equipo: o bien FastAPI corre en el mismo equipo, "
+            "o bien publicas LM Studio detrás de un túnel HTTPS autenticado."
+        )
+    elif active.is_local:
         notice = WARNING_LOCAL
     elif not allowed:
         notice = WARNING_DISABLED
@@ -92,13 +107,28 @@ def _status(db: Session, user: User) -> LLMEndpointStatusOut:
     else:
         notice = None
 
+    payload = active.public_dict()
+    payload["backend_runtime"] = runtime
+    payload["backend_runtime_label"] = runtime_label
+    payload["local_endpoint_supported"] = runtime == "local"
+
+    env_payload = environment.public_dict()
+    env_payload["backend_runtime"] = runtime
+    env_payload["backend_runtime_label"] = runtime_label
+    env_payload["local_endpoint_supported"] = runtime == "local"
+
     return LLMEndpointStatusOut(
-        active=active.public_dict(),
-        environment_default=environment.public_dict(),
+        active=payload,
+        environment_default=env_payload,
         override_allowed=allowed,
         can_edit=allowed and is_admin,
         is_local=active.is_local,
         notice=notice,
+        backend_runtime=runtime,
+        backend_runtime_label=runtime_label,
+        local_endpoint_supported=runtime == "local",
+        ignored_override=ignored.public_dict() if ignored else None,
+        anthropic_api_key_configured=bool(settings.anthropic_api_key),
     )
 
 
@@ -213,7 +243,7 @@ def test_llm_endpoint(
         analysis_model=fields["analysis_model"],
         copilot_model=fields["copilot_model"],
         base_url=fields["base_url"],
-        api_key=payload.api_key or "",
+        api_key="" if fields["provider"] == llm_config.PROVIDER_ANTHROPIC else (payload.api_key or ""),
         max_tokens=512,
         timeout_seconds=payload.timeout_seconds,
     )
@@ -241,6 +271,20 @@ def test_llm_endpoint(
             error_code=exc.error_code,
             base_url=candidate.base_url,
         )
+    except RuntimeError as exc:
+        # AnthropicProvider raises this when ANTHROPIC_API_KEY is missing
+        # from the server environment — never from the settings form.
+        logger.warning("LLM endpoint test failed: %s", exc)
+        return LLMEndpointTestOut(
+            ok=False,
+            detail=(
+                "La clave de Anthropic se lee del entorno del servidor "
+                "(ANTHROPIC_API_KEY en Render), no de este formulario. "
+                "Revisa el secreto del servicio psychdeep-api."
+            ),
+            error_code="api_key_not_configured",
+            base_url=candidate.base_url,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM endpoint test failed: %s", type(exc).__name__)
         return LLMEndpointTestOut(
@@ -264,19 +308,32 @@ def test_llm_endpoint(
 
 def _test_failure_detail(safe_kind: str, error_code: str | None) -> str:
     if error_code == "local_endpoint_unreachable":
+        if llm_config.backend_runtime() == "cloud":
+            return (
+                f"Este backend corre en {llm_config.backend_runtime_label()} y no alcanzó el "
+                "servidor del modelo. Una IP de tu red local no es enrutable desde Frankfurt. "
+                "Usa Claude (la clave ya está en el servidor) o un túnel HTTPS público."
+            )
         return (
-            "No se llegó al servidor local. Asegúrate de que el servidor (LM Studio, Ollama, etc.) "
-            "está arrancado y escuchando en la URL configurada."
+            "No se llegó al servidor del modelo. Comprueba que LM Studio / Ollama está "
+            "arrancado y que la URI es exactamente la que escucha (por ejemplo "
+            "http://127.0.0.1:1234/v1)."
         )
     if error_code == "local_endpoint_timeout":
         return (
-            "El servidor no respondió a tiempo. Si el servidor está cargando el modelo en memoria (RAM/VRAM), "
-            "sube el tiempo de espera o intenta la prueba de nuevo."
+            "El servidor no respondió a tiempo. El fallo rápido de conexión es 10 s; "
+            "la espera de inferencia es la que configuraste. Si el modelo se está "
+            "cargando en memoria, sube el tiempo de espera (hasta 5.000 s)."
+        )
+    if error_code == "api_key_not_configured":
+        return (
+            "ANTHROPIC_API_KEY no está configurada en el servidor. Se lee del secreto "
+            "de entorno de Render, no de este formulario."
         )
     if error_code == "http_404":
         return "El servidor respondió 404. Suele faltar el sufijo /v1 en la URL o el modelo no existe."
     if error_code in ("http_401", "http_403"):
-        return "El servidor pide autenticación. Rellena la API key."
+        return "El servidor pide autenticación. Si es un modelo propio, rellena la API key opcional."
     if safe_kind == "configuration_error":
         return "Configuración rechazada por el servidor. Revisa la URL, la clave y el nombre del modelo."
     return f"El endpoint devolvió un error ({error_code or safe_kind})."

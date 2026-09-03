@@ -348,6 +348,7 @@ en orden fijo** y gana **la primera que se cumple**.
 | 2 | `N4_senal_linguistica_ideacion_directa` | 4 | Señal del Agente 2 con `ideation_direct = true` y **menos de 12 h** de antigüedad |
 | 3 | `N4_convergencia_critica_extrema` | 4 | score < 0.20 **y** rumiación > 0.85 **y** sueño empeorando |
 | 4 | `N3_declaracion_crisis_consumo` | 3 | Hecho confirmado `consumption_crisis` en 48 h |
+| 4b | `N3_declaracion_recaida` | 3 | Hecho confirmado `relapse` en 48 h: revisión profesional, no probabilidad ni emergencia 112 |
 | 5 | `N3_senal_linguistica_crisis_consumo` | 3 | Señal del Agente 2 con `consumption_crisis = true` (< 12 h) |
 | 6 | `N3_unstable_persistente_con_convergencia` | 3 | Banda `unstable` **y** ≥ 3 días naturales distintos inestables **y** (sueño empeorando **o** rumiación > 0.60) |
 | 7 | `N3_unstable_persistente` | 3 | Banda `unstable` **y** ≥ 5 días naturales distintos inestables |

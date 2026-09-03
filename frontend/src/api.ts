@@ -148,6 +148,8 @@ export interface PatientSummaryOut {
   latest_alert_level?: number | null;
   latest_structural_score?: number | null;
   latest_confidence_band?: string | null;
+  pending_alert_level?: number | null;
+  pending_alert_status?: string | null;
   open_alerts: number;
   checkin_count?: number;
   last_checkin_at?: string | null;
@@ -884,6 +886,10 @@ export interface LLMEndpointSummary {
   config_id: string | null;
   updated_at: string | null;
   has_api_key: boolean;
+  uses_server_api_key?: boolean;
+  backend_runtime?: "cloud" | "local" | string;
+  backend_runtime_label?: string;
+  local_endpoint_supported?: boolean;
 }
 
 export interface LLMEndpointStatusOut {
@@ -895,6 +901,11 @@ export interface LLMEndpointStatusOut {
   can_edit: boolean;
   is_local: boolean;
   notice: string | null;
+  backend_runtime?: "cloud" | "local" | string;
+  backend_runtime_label?: string;
+  local_endpoint_supported?: boolean;
+  ignored_override?: LLMEndpointSummary | null;
+  anthropic_api_key_configured?: boolean;
 }
 
 export interface LLMEndpointConfigIn {

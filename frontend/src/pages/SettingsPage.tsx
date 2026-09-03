@@ -40,20 +40,22 @@ interface FormState {
 
 // Defaults that match what the common local runtimes actually serve, so the
 // form is a starting point rather than a blank page.
-const PRESETS: { id: string; name: string; baseUrl: string; model: string; hint: string }[] = [
+const PRESETS: { id: string; name: string; baseUrl: string; model: string; hint: string; localOnly: boolean }[] = [
   {
     id: "ollama",
     name: "Ollama",
-    baseUrl: "http://localhost:11434/v1",
+    baseUrl: "http://127.0.0.1:11434/v1",
     model: "llama3.1:8b",
-    hint: "El nombre del modelo es el de «ollama list».",
+    hint: "El nombre del modelo es el de «ollama list». Solo válido si FastAPI corre en este mismo equipo.",
+    localOnly: true,
   },
   {
     id: "lmstudio",
     name: "LM Studio",
-    baseUrl: "http://localhost:1234/v1",
+    baseUrl: "http://127.0.0.1:1234/v1",
     model: "local-model",
-    hint: "Activa el servidor local en LM Studio (Developer / Local Server).",
+    hint: "Activa el servidor en LM Studio (Developer / Local Server). URI: http://127.0.0.1:1234/v1",
+    localOnly: true,
   },
   {
     id: "llamacpp",
@@ -61,13 +63,15 @@ const PRESETS: { id: string; name: string; baseUrl: string; model: string; hint:
     baseUrl: "http://127.0.0.1:8080/v1",
     model: "gguf-model",
     hint: "Levántalo con «llama-server -m modelo.gguf --port 8080».",
+    localOnly: true,
   },
   {
-    id: "vllm",
-    name: "vLLM",
-    baseUrl: "http://localhost:8000/v1",
-    model: "meta-llama/Llama-3.1-8B-Instruct",
-    hint: "El modelo es el identificador con el que arrancaste el servidor.",
+    id: "tunnel",
+    name: "Túnel HTTPS",
+    baseUrl: "https://tu-tunel.ejemplo.com/v1",
+    model: "local-model",
+    hint: "Cloudflare Tunnel o ngrok autenticado. Es la única forma de usar LM Studio cuando el backend está en Render.",
+    localOnly: false,
   },
 ];
 
@@ -175,7 +179,7 @@ export default function SettingsPage() {
       // An untouched field means "keep the stored key", never "clear it":
       // the current key is never sent to the browser, so a blank box here
       // carries no information about it.
-      api_key: current.apiKey ? current.apiKey : null,
+      api_key: current.provider === "anthropic" ? null : current.apiKey ? current.apiKey : null,
       max_tokens: current.maxTokens,
       timeout_seconds: current.timeoutSeconds,
       label: current.label,
@@ -194,7 +198,7 @@ export default function SettingsPage() {
         chat_model: form.chatModel,
         analysis_model: form.analysisModel || form.chatModel,
         copilot_model: form.copilotModel || form.chatModel,  // the test needs a concrete name
-        api_key: form.apiKey || null,
+        api_key: form.provider === "anthropic" ? null : form.apiKey || null,
         timeout_seconds: Math.min(form.timeoutSeconds, 60),
       });
       setTestResult(result);
@@ -249,16 +253,19 @@ export default function SettingsPage() {
   return (
     <div className="page">
       <h1>Ajustes</h1>
-      <p className="subtitle">Servidor de la aplicación y modelo de lenguaje que atiende a los agentes.</p>
+      <p className="subtitle">
+        Dos cosas distintas: la <strong>API de PsychDeep</strong> (este frontend habla con FastAPI) y el{" "}
+        <strong>endpoint del modelo</strong> (FastAPI habla con Claude o con un servidor OpenAI-compatible).
+      </p>
 
       <section className="card">
-        <h2>Servidor API activo</h2>
+        <h2>API de PsychDeep</h2>
         <p>
           <code>{apiBase || "mismo origen"}</code>
         </p>
         <p className="meta">
-          Es donde esta interfaz envía sus peticiones. Se fija en el despliegue y no se puede cambiar desde el
-          navegador.
+          Es donde esta interfaz envía sus peticiones. Se fija en el despliegue ({status?.backend_runtime_label || "servidor"})
+          y no se puede cambiar desde el navegador. No es el endpoint del modelo.
         </p>
         {legacyOverride && (
           <p className="info">
@@ -274,10 +281,11 @@ export default function SettingsPage() {
       </section>
 
       <section className="card">
-        <h2>Modelo de lenguaje</h2>
+        <h2>Endpoint del modelo</h2>
         <p className="meta">
-          Es el modelo al que el <strong>backend</strong> envía las llamadas del Agente 1 (conversación) y del Agente 2
-          y 4 (análisis). Puedes apuntarlo a un servidor propio para probar tu modelo local con la aplicación real.
+          Es el modelo al que el <strong>backend ({status?.backend_runtime_label || "servidor"})</strong> envía las
+          llamadas del Agente 1 (conversación) y del Agente 2 y 4 (análisis). Claude usa la clave{" "}
+          <code>ANTHROPIC_API_KEY</code> del servidor; no se pide aquí.
         </p>
 
         {loadError && <p className="error">No se pudo leer la configuración del modelo: {loadError}</p>}
@@ -300,7 +308,19 @@ export default function SettingsPage() {
               </div>
               <div>
                 <dt>Endpoint</dt>
-                <dd>{active.base_url ? <code>{active.base_url}</code> : "API oficial de Anthropic"}</dd>
+                <dd>{active.base_url ? <code>{active.base_url}</code> : "API oficial de Anthropic (clave del servidor)"}</dd>
+              </div>
+              <div>
+                <dt>Clave</dt>
+                <dd>
+                  {active.uses_server_api_key
+                    ? status?.anthropic_api_key_configured
+                      ? "ANTHROPIC_API_KEY del entorno (Render)"
+                      : "Falta ANTHROPIC_API_KEY en el servidor"
+                    : active.has_api_key
+                      ? "Guardada en el backend"
+                      : "Sin clave (normal en un modelo propio)"}
+                </dd>
               </div>
               <div>
                 <dt>Origen</dt>
@@ -314,7 +334,14 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {status?.notice && <p className={status.is_local ? "warning" : "info"}>{status.notice}</p>}
+        {status?.ignored_override && (
+          <p className="warning">
+            Había un modelo propio guardado en <code>{status.ignored_override.base_url}</code>, pero este backend no
+            puede alcanzarlo. Mientras tanto se usa Claude. Cámbialo abajo o pulsa «Volver al modelo del despliegue».
+          </p>
+        )}
+
+        {status?.notice && <p className={status.is_local || status.ignored_override ? "warning" : "info"}>{status.notice}</p>}
 
         {disabledByDeployment && (
           <p className="meta">
@@ -335,7 +362,9 @@ export default function SettingsPage() {
                 />
                 <span>
                   <strong>Claude (API de Anthropic)</strong>
-                  <span className="meta">La configuración con la que se despliega la aplicación.</span>
+                  <span className="meta">
+                    Usa <code>ANTHROPIC_API_KEY</code> del servidor. No se pide en este formulario.
+                  </span>
                 </span>
               </label>
               <label className={form.provider === "openai_compatible" ? "llm-option is-selected" : "llm-option"}>
@@ -347,7 +376,11 @@ export default function SettingsPage() {
                 />
                 <span>
                   <strong>Modelo propio</strong>
-                  <span className="meta">Cualquier servidor con API compatible con OpenAI.</span>
+                  <span className="meta">
+                    {status?.local_endpoint_supported
+                      ? "URI de LM Studio / Ollama en este equipo, p. ej. http://127.0.0.1:1234/v1"
+                      : "Solo un túnel HTTPS público: Render (Frankfurt) no alcanza tu IP local."}
+                  </span>
                 </span>
               </label>
             </div>
@@ -356,7 +389,7 @@ export default function SettingsPage() {
               <>
                 <div className="llm-presets">
                   <span className="meta">Rellenar con los valores de:</span>
-                  {PRESETS.map((preset) => (
+                  {PRESETS.filter((preset) => status?.local_endpoint_supported || !preset.localOnly).map((preset) => (
                     <button
                       key={preset.id}
                       type="button"
@@ -369,17 +402,29 @@ export default function SettingsPage() {
                   ))}
                 </div>
 
+                {!status?.local_endpoint_supported && (
+                  <p className="warning">
+                    FastAPI está en {status?.backend_runtime_label || "la nube"}. No puede hacer GET/POST a{" "}
+                    <code>192.168.x</code> ni a <code>127.0.0.1</code> de tu casa: no hay ruta. Si quieres un modelo en
+                    tu equipo, publica LM Studio con un túnel HTTPS autenticado y pega esa URI aquí. Si no, usa Claude.
+                  </p>
+                )}
+
                 <label className="field">
-                  <span>URL del servidor</span>
+                  <span>URI del servidor del modelo</span>
                   <input
                     type="url"
                     value={form.baseUrl}
-                    placeholder="http://localhost:11434/v1"
+                    placeholder={
+                      status?.local_endpoint_supported
+                        ? "http://127.0.0.1:1234/v1"
+                        : "https://tu-tunel.ejemplo.com/v1"
+                    }
                     onChange={(e) => patch({ baseUrl: e.target.value })}
                   />
                   <span className="meta">
-                    Puedes usar <code>http://localhost:1234/v1</code>. Si el backend corre en Docker,
-                    se conectará automáticamente a tu equipo (vía <code>host.docker.internal</code>).
+                    Se llama tal cual, sin Docker. LM Studio: <code>http://127.0.0.1:1234/v1</code> (solo si FastAPI
+                    corre en el mismo equipo). Sufijo <code>/v1</code>, no <code>/api/v1/chat</code>.
                   </span>
                 </label>
               </>
@@ -422,15 +467,27 @@ export default function SettingsPage() {
             </div>
 
             <div className="field-row">
-              <label className="field">
-                <span>API key {form.provider === "openai_compatible" && "(opcional)"}</span>
-                <input
-                  type="password"
-                  value={form.apiKey}
-                  placeholder={active?.has_api_key ? "Guardada — déjalo vacío para conservarla" : "Sin clave"}
-                  onChange={(e) => patch({ apiKey: e.target.value })}
-                />
-              </label>
+              {form.provider === "openai_compatible" ? (
+                <label className="field">
+                  <span>API key (opcional, casi nunca hace falta)</span>
+                  <input
+                    type="password"
+                    value={form.apiKey}
+                    placeholder={active?.has_api_key ? "Guardada — déjalo vacío para conservarla" : "Sin clave"}
+                    onChange={(e) => patch({ apiKey: e.target.value })}
+                  />
+                </label>
+              ) : (
+                <label className="field">
+                  <span>API key de Anthropic</span>
+                  <input type="password" value="" disabled placeholder="Se lee de ANTHROPIC_API_KEY en el servidor" />
+                  <span className="meta">
+                    {status?.anthropic_api_key_configured
+                      ? "Secreto de entorno presente. No se introduce ni se muestra aquí."
+                      : "El servidor no tiene ANTHROPIC_API_KEY. Configúrala en Render, no en este menú."}
+                  </span>
+                </label>
+              )}
               <label className="field">
                 <span>Tokens máximos</span>
                 <input
@@ -442,15 +499,18 @@ export default function SettingsPage() {
                 />
               </label>
               <label className="field">
-                <span>Espera máxima (s)</span>
+                <span>Espera de inferencia (s)</span>
                 <input
                   type="number"
                   min={5}
-                  max={600}
+                  max={5000}
                   value={form.timeoutSeconds}
                   onChange={(e) => patch({ timeoutSeconds: Number(e.target.value) })}
                 />
-                <span className="meta">Un modelo local en CPU puede tardar bastante.</span>
+                <span className="meta">
+                  Fallo rápido de conexión: 10 s. Hasta 5.000 s solo una vez establecida. Un timeout no significa que
+                  Frankfurt haya hablado con tu LAN.
+                </span>
               </label>
             </div>
 
@@ -507,8 +567,9 @@ export default function SettingsPage() {
             una señal que Claude sí marca. Las señales que sí detecte entran en el motor exactamente igual.
           </li>
           <li>
-            <strong>El texto del paciente viaja al servidor que indiques.</strong> Con un modelo en tu equipo no sale de
-            tu red; con uno remoto, va a donde apunte esa URL.
+            <strong>El texto del paciente viaja al servidor que indiques.</strong> Con Claude, va a la API de Anthropic
+            con la clave del servidor. Con un modelo en tu equipo, FastAPI tiene que poder abrir esa URI: si FastAPI
+            está en Frankfurt, tu IP local no existe en esa red.
           </li>
         </ul>
       </section>

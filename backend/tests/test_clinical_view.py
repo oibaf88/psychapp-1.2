@@ -370,6 +370,7 @@ class RuleCatalogTests(unittest.TestCase):
             "N4_convergencia_interpersonal_despedida",
             "N4_convergencia_critica_extrema",
             "N3_declaracion_crisis_consumo",
+            "N3_declaracion_recaida",
             "N3_senal_linguistica_crisis_consumo",
             "N3_unstable_persistente_con_convergencia",
             "N3_unstable_persistente",

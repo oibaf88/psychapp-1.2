@@ -23,8 +23,6 @@ from app.content.safety_resources import (
 from app.database import get_db
 from app.models import (
     Agent2AnalysisTrace,
-    AppUsageData,
-    BiometricData,
     AlfaSignal,
     CheckIn,
     ConfirmedFact,
@@ -360,15 +358,17 @@ def _patient_summary(db: Session, patient: User, status_label: str) -> PatientSu
         latest_score = assessment.input_signals.get("structural_score")
         latest_band = assessment.input_signals.get("confidence_band")
 
-    open_alerts = (
+    open_alert_rows = (
         db.query(ProfessionalAlert)
         .filter(
             ProfessionalAlert.user_id == patient.id,
             ProfessionalAlert.status.in_(["open", "acknowledged"]),
             ProfessionalAlert.source == "rule_engine",
         )
-        .count()
+        .order_by(ProfessionalAlert.alert_level.desc(), ProfessionalAlert.created_at.desc())
+        .all()
     )
+    pending = open_alert_rows[0] if open_alert_rows else None
     checkin_count = db.query(CheckIn).filter(CheckIn.user_id == patient.id).count()
     last_ci = (
         db.query(CheckIn)
@@ -384,7 +384,9 @@ def _patient_summary(db: Session, patient: User, status_label: str) -> PatientSu
         latest_alert_level=assessment.alert_level if assessment else None,
         latest_structural_score=latest_score,
         latest_confidence_band=latest_band,
-        open_alerts=open_alerts,
+        pending_alert_level=pending.alert_level if pending else None,
+        pending_alert_status=pending.status if pending else None,
+        open_alerts=len(open_alert_rows),
         checkin_count=checkin_count,
         last_checkin_at=last_ci.created_at if last_ci else None,
     )
@@ -417,6 +419,8 @@ def list_patients(db: Session = Depends(get_db), professional: User = Depends(re
                     email=patient.email,
                     assignment_status=status_label,
                     latest_alert_level=None,
+                    pending_alert_level=None,
+                    pending_alert_status=None,
                     open_alerts=0,
                     checkin_count=0,
                 )
@@ -820,21 +824,8 @@ def patient_dossier(
         .all()
     )
 
-    biometrics = (
-        db.query(BiometricData)
-        .filter(BiometricData.user_id == patient_id)
-        .order_by(BiometricData.measured_at.desc())
-        .limit(30)
-        .all()
-    )
-
-    app_usage = (
-        db.query(AppUsageData)
-        .filter(AppUsageData.user_id == patient_id)
-        .order_by(AppUsageData.measured_at.desc())
-        .limit(30)
-        .all()
-    )
+    biometrics = []
+    app_usage = []
 
     deep_analysis = DeepStatisticalAnalysisOut(
         biometrics=biometrics,

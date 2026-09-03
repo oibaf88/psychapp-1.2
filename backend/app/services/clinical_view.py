@@ -190,6 +190,22 @@ RULE_CATALOG: dict[str, dict[str, Any]] = {
             "automático: el sistema distingue crisis de consumo de riesgo autolítico."
         ),
     },
+    "N3_declaracion_recaida": {
+        "family": FAMILY_CONFIRMED_FACT,
+        "level": 3,
+        "title": "Recaída confirmada: revisión profesional",
+        "plain": (
+            "Hecho confirmado de categoría «recaída» en las últimas 48 horas. Es una "
+            "declaración, no una probabilidad ni una predicción. El motor no infiere "
+            "riesgo futuro: alguien (el paciente o un profesional) lo registró."
+        ),
+        "what_now": (
+            "Prioridad operativa N3: contacta y revisa el contexto de consumo, craving y "
+            "plan de prevención de recaídas. No dispara protocolo de emergencia 112. "
+            "Si la recaída ya está contenida, resuelve la alerta con una nota; un N0 "
+            "posterior no la cierra solo."
+        ),
+    },
     "N3_senal_linguistica_crisis_consumo": {
         "family": FAMILY_LINGUISTIC,
         "level": 3,
