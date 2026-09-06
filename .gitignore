@@ -4,6 +4,11 @@ frontend/.htpasswd
 .env.local
 remote-url.txt
 
+# Local/offline deployment secrets and generated replication credentials.
+ops/local/secrets/
+ops/sync/engines/*.properties
+!ops/sync/engines/*.properties.example
+
 # Dependencies and build output — rebuilt by CI/Render, never committed.
 node_modules/
 frontend/dist/

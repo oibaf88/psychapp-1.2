@@ -1,0 +1,17 @@
+# TEMPLATE ONLY. configure-sync.ps1 writes cloud.properties next to this file.
+# Never commit the generated .properties file: it contains database credentials.
+engine.name=cloud
+group.id=cloud
+external.id=psychdeep-cloud
+sync.url=http://localhost:31415/sync/cloud
+registration.url=
+
+db.driver=org.postgresql.Driver
+db.url=jdbc:postgresql://YOUR_SUPABASE_POOLER_HOST:5432/postgres?sslmode=require&currentSchema=psychdeep_sync
+db.user=YOUR_SUPABASE_DB_USER
+db.password=YOUR_SUPABASE_DB_PASSWORD
+
+# Root/cloud node. Configuration changes made here are distributed to the
+# registered laptop node by SymmetricDS.
+auto.registration=false
+auto.reload=true

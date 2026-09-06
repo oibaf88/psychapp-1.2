@@ -1,0 +1,15 @@
+# TEMPLATE ONLY. configure-sync.ps1 writes local.properties next to this file.
+# Never commit the generated .properties file: it contains database credentials.
+engine.name=local
+group.id=local
+external.id=psychdeep-laptop
+sync.url=http://localhost:31415/sync/local
+registration.url=http://localhost:31415/sync/cloud
+
+db.driver=org.postgresql.Driver
+db.url=jdbc:postgresql://db:5432/psychapp?currentSchema=psychdeep_sync
+db.user=psychapp
+db.password=YOUR_LOCAL_DB_PASSWORD
+
+auto.registration=false
+auto.reload=true
