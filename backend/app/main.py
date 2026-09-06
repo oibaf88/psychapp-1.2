@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.routers import (
+    admin_users,
     assignments,
     audit,
     auth,
@@ -200,6 +201,7 @@ def health():
 
 
 app.include_router(auth.router)
+app.include_router(admin_users.router)
 app.include_router(consents.router)
 app.include_router(checkins.router)
 app.include_router(diary.router)

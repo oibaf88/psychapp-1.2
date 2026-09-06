@@ -22,6 +22,7 @@ import AuditPage from "./pages/AuditPage";
 import SettingsPage from "./pages/SettingsPage";
 import CopilotPage from "./pages/CopilotPage";
 import ManualPage from "./pages/ManualPage";
+import AdminUsersPage from "./pages/AdminUsersPage";
 
 function Shell({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -151,6 +152,14 @@ export default function App() {
               element={
                 <ProtectedRoute professionalOnly>
                   <AssignmentsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/professional/users"
+              element={
+                <ProtectedRoute roles={["admin_clinical"]}>
+                  <AdminUsersPage />
                 </ProtectedRoute>
               }
             />

@@ -71,6 +71,7 @@ export default function NavBar() {
         {isAdmin && (
           <>
             <Link to="/professional">Roster</Link>
+            <Link to="/professional/users">Usuarios</Link>
             <Link to="/professional/assignments">Asignaciones</Link>
             <Link to="/professional/audit">Auditoría</Link>
             <Link to="/professional/manual">Manual</Link>
