@@ -32,6 +32,9 @@ alter table psychdeep_v12.llm_usage_events
     add column if not exists web_fetch_requests integer;
 
 alter table psychdeep_v12.llm_usage_events
+    drop constraint if exists ck_llm_usage_server_tools_nonnegative;
+
+alter table psychdeep_v12.llm_usage_events
     add constraint ck_llm_usage_server_tools_nonnegative
     check (
         (web_search_requests is null or web_search_requests >= 0)
