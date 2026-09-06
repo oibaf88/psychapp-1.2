@@ -1,7 +1,7 @@
 """
 Abstract LLM provider interface. The rest of the app only ever talks to
-this interface, never directly to the Anthropic SDK, so the model can be
-swapped later (see app/services/llm/__init__.py).
+this interface, never directly to an SDK, so the model can be swapped later
+(see app/services/llm/__init__.py).
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -12,26 +12,29 @@ from typing import Any
 class ProviderMetadata:
     """Non-clinical metadata returned by an LLM provider.
 
-    Request/response bodies deliberately do not belong here.  Agent 2's
-    source text and structured result already have their own clinical
-    records; the trace layer links to those records instead of duplicating
-    sensitive content.
+    Request/response bodies deliberately do not belong here. Clinical source
+    text and structured results already have their own records; the usage
+    layer stores only quantities needed for provenance and cost accounting.
     """
 
     provider: str
     requested_model: str
     response_model: str | None = None
-    # Where the call actually went. Recorded because "which model" is not
-    # answerable without it once the endpoint is configurable: two
-    # deployments can both report "llama-3.1-8b" and mean different weights.
     base_url: str | None = None
     message_id: str | None = None
     request_id: str | None = None
     stop_reason: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # Anthropic's authoritative output_tokens already INCLUDES thinking.
+    # This detail is only the decomposition, useful for explaining spend.
+    thinking_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    cache_creation_5m_input_tokens: int | None = None
+    cache_creation_1h_input_tokens: int | None = None
+    web_search_requests: int | None = None
+    web_fetch_requests: int | None = None
     latency_ms: int | None = None
 
 
@@ -43,13 +46,7 @@ class StructuredAnalysisResult:
 
 @dataclass(frozen=True)
 class ChatResult:
-    """A conversational reply plus the provenance of the call that made it.
-
-    ``chat()`` used to return a bare string, so an assistant turn recorded
-    the model the app *asked* for rather than the one the server said
-    answered. On a hosted API those agree; on a local runtime they routinely
-    do not, which is exactly the case the provenance exists for.
-    """
+    """A conversational reply plus the provenance of the call that made it."""
 
     text: str
     metadata: ProviderMetadata
@@ -65,7 +62,7 @@ class ChatResult:
 class StructuredAnalysisError(RuntimeError):
     """Safe Agent 2 failure with optional provider metadata.
 
-    ``safe_kind`` is persisted.  The provider's raw exception/body is not,
+    ``safe_kind`` is persisted. The provider's raw exception/body is not,
     because it may echo clinical input or authentication material.
     """
 
@@ -88,12 +85,7 @@ class LLMProvider(ABC):
     """One endpoint, serving every agent.
 
     ``model``, ``effort`` and ``max_tokens`` are per-call overrides. Omit
-    them and the call uses what the provider was constructed with — the
-    behaviour every existing call site relies on. They exist because the
-    three agents want different settings while sharing one endpoint, and
-    building three providers to say so would mean three clients, three
-    resolutions of the active configuration, and three chances for them to
-    disagree about which endpoint is in force.
+    them and the call uses what the provider was constructed with.
     """
 
     @abstractmethod
@@ -106,11 +98,10 @@ class LLMProvider(ABC):
         model: str | None = None,
         effort: str | None = None,
     ) -> ChatResult:
-        """A conversational turn. `messages` is [{"role": "user"|"assistant", "content": str}].
+        """A conversational turn.
 
         ``max_tokens`` defaults to None rather than a number: a truthy
-        default here silently shadowed the configured value for every caller
-        that did not pass one.
+        default here would silently shadow the configured value.
         """
         raise NotImplementedError
 
@@ -125,10 +116,5 @@ class LLMProvider(ABC):
         effort: str | None = None,
         max_tokens: int | None = None,
     ) -> StructuredAnalysisResult:
-        """
-        The analytic agent. Must return a dict matching
-        tool_schema["input_schema"], forced via structured outputs /
-        function calling so the result is reliably parseable JSON, never
-        free text.
-        """
+        """Return a dict matching ``tool_schema['input_schema']``."""
         raise NotImplementedError
