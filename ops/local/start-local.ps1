@@ -21,5 +21,13 @@ Write-Host 'PsychDeep local is ready at: http://127.0.0.1:5173' -ForegroundColor
 Write-Host 'API health:               http://127.0.0.1:8001/api/v1/health'
 Write-Host 'PostgreSQL:               127.0.0.1:5433 (local machine only)'
 Write-Host ''
-Write-Host 'For LM Studio, start its server on port 1234 and in PsychDeep Settings use:'
-Write-Host '  http://host.docker.internal:1234/v1'
+Write-Host 'LM Studio (needed because PsychDeep backend runs inside Docker):' -ForegroundColor Cyan
+Write-Host '  1. Developer > Server Settings > Require Authentication: ON'
+Write-Host '  2. Create/copy an LM Studio API token.'
+Write-Host '  3. Serve on Local Network: ON (or bind the server to 0.0.0.0).'
+Write-Host '  4. Start the server on port 1234.'
+Write-Host '  5. In PsychDeep Settings use:'
+Write-Host '       URL:     http://host.docker.internal:1234/v1'
+Write-Host '       API key: the LM Studio token'
+Write-Host ''
+Write-Host 'Keep Windows Firewall on; do not expose port 1234 to public networks.' -ForegroundColor Yellow
