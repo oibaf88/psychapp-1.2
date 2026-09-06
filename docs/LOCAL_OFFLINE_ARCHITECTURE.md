@@ -72,11 +72,12 @@ Do **not** enable synchronization for the first time directly against live clini
 1. Start local PsychDeep and verify it works independently.
 2. Run `.\ops\sync\configure-sync.ps1` to generate the two secret engine property files.
 3. Back up Supabase; preferably reproduce the remote database in staging first.
-4. Run `.\ops\sync\start-sync.ps1 -Initialize`.
-5. After the cloud engine creates `psychdeep_sync.sym_*`, apply `ops/sync/config/psychdeep-sync.sql` using DBeaver/psql to the cloud database.
-6. Open registration for the local node using the command printed by the script.
-7. Restart the SymmetricDS container and verify a non-clinical test row in both directions.
-8. During the first rollout, do not actively edit the same patient's record from local and hosted PsychDeep at the same time. Conflict policy should be validated before true multi-writer use.
+4. Apply `ops/sync/config/bootstrap-cloud.sql` to the cloud database. It only creates the private `psychdeep_sync` namespace and revokes API roles; it does not enable replication.
+5. Run `.\ops\sync\start-sync.ps1 -Initialize`.
+6. After the cloud engine creates `psychdeep_sync.sym_*`, apply `ops/sync/config/psychdeep-sync.sql` using DBeaver/psql to the cloud database.
+7. Open registration for the local node using the command printed by the script.
+8. Restart the SymmetricDS container and verify a non-clinical test row in both directions.
+9. During the first rollout, do not actively edit the same patient's record from local and hosted PsychDeep at the same time. Conflict policy should be validated before true multi-writer use.
 
 ## Security invariants
 
@@ -85,6 +86,7 @@ Do **not** enable synchronization for the first time directly against live clini
 - The Cloudflare tunnel exposes only the model endpoint and requires LM Studio API-token authentication.
 - Generated SymmetricDS engine files and Cloudflare tokens are not committed.
 - The local LLM usage ledger is created at database bootstrap so local inference remains auditable too.
+- `psychdeep_sync` is a custom database schema with access revoked from `anon`, `authenticated` and `service_role` before SymmetricDS initializes it.
 
 ## Stop safely
 
