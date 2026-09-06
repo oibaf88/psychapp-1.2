@@ -8,6 +8,14 @@ if (-not (Test-Path $cloud) -or -not (Test-Path $local)) {
     throw 'Missing generated engine files. Run .\ops\sync\configure-sync.ps1 first.'
 }
 
+if ($Initialize) {
+    Write-Host 'FIRST ROLLOUT - prerequisite before starting SymmetricDS:' -ForegroundColor Yellow
+    Write-Host 'Apply ops/sync/config/bootstrap-cloud.sql to Supabase using DBeaver/SQL Editor.'
+    Write-Host 'It only creates the private psychdeep_sync schema; it does NOT enable replication.'
+    Write-Host 'Continue only after backup/staging validation.'
+    Write-Host ''
+}
+
 Write-Host 'Starting SymmetricDS (opt-in sync profile)...' -ForegroundColor Cyan
 docker compose --env-file .env.local -f docker-compose.offline.yml --profile sync up -d symmetricds
 if ($LASTEXITCODE -ne 0) { throw 'SymmetricDS failed to start.' }
@@ -17,12 +25,11 @@ Write-Host 'When Internet is unavailable, local changes remain in the local Post
 
 if ($Initialize) {
     Write-Host ''
-    Write-Host 'FIRST ROLLOUT - do these only after backup/staging validation:' -ForegroundColor Yellow
-    Write-Host '1) Wait until the cloud engine has created psychdeep_sync.sym_* tables.'
-    Write-Host '2) Apply ops/sync/config/psychdeep-sync.sql to the CLOUD database using DBeaver/psql.'
-    Write-Host '3) Open registration inside the container:'
+    Write-Host 'After the cloud engine creates psychdeep_sync.sym_*:' -ForegroundColor Cyan
+    Write-Host '1) Apply ops/sync/config/psychdeep-sync.sql to the CLOUD database using DBeaver/psql.'
+    Write-Host '2) Open registration inside the container:'
     Write-Host '   docker compose --env-file .env.local -f docker-compose.offline.yml exec symmetricds /opt/symmetric-ds/bin/symadmin --engine cloud open-registration local psychdeep-laptop'
-    Write-Host '4) Restart SymmetricDS so the local engine registers:'
+    Write-Host '3) Restart SymmetricDS so the local engine registers:'
     Write-Host '   docker compose --env-file .env.local -f docker-compose.offline.yml restart symmetricds'
-    Write-Host '5) Verify both directions with a NON-CLINICAL test row before enabling normal use.'
+    Write-Host '4) Verify both directions with a NON-CLINICAL test row before enabling normal use.'
 }
