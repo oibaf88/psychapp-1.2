@@ -1,77 +1,94 @@
-# Modelo local (LM Studio / Ollama) → API en Render
+# Modelo local (LM Studio) → PsychDeep en Render
 
-Render (Frankfurt) no puede abrir TCP a `127.0.0.1` ni a `192.168.x` de tu
-PC. Docker no cambia eso. La vía **gratuita** es un túnel HTTPS de
-Cloudflare: tu portátil publica el servidor local y FastAPI llama a esa URI
-pública.
+Render no puede conectar directamente con `127.0.0.1` ni con una IP privada de tu casa. Para usar el modelo del portátil desde PsychDeep alojado, el diseño estable es un **Cloudflare Tunnel remoto/gestionado** con hostname fijo y autenticación propia de LM Studio.
 
-El navegador **no** habla con LM Studio. Habla con PsychDeep. PsychDeep
-(en Render) es quien llama al modelo.
-
+```text
+móvil / PC -> PsychDeep -> psychdeep-api (Render)
+                               |
+                               | HTTPS
+                               v
+                    https://<hostname>/v1
+                               |
+                         Cloudflare Tunnel
+                               |
+                               v
+                       LM Studio :1234
 ```
-móvil / PC  →  https://psychapp.bfab.io  →  psychdeep-api (Render)
-                                              ↓ HTTPS
-                                    https://xxxx.trycloudflare.com/v1
-                                              ↓
-                                    LM Studio en tu PC :1234
+
+El navegador nunca accede directamente a LM Studio. El backend de PsychDeep es el cliente del modelo.
+
+## Diseño recomendado
+
+1. LM Studio ejecuta el servidor OpenAI-compatible en el portátil.
+2. **Require Authentication** permanece activado en LM Studio y se usa un token de API independiente.
+3. Un túnel Cloudflare **remotely managed** publica únicamente `http://host.docker.internal:1234`.
+4. El conector `cloudflared` se autentica con un tunnel token guardado solo en:
+
+```text
+ops/local/secrets/cloudflare-tunnel-token.txt
 ```
 
-## Requisitos
+5. El hostname estable pertenece a una zona que ya esté gestionada por Cloudflare.
+6. PostgreSQL/SymmetricDS no usan este túnel.
 
-1. LM Studio (o Ollama / llama.cpp) con el servidor OpenAI-compatible
-   escuchando en el PC.
-2. [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/)
-   (gratis, sin tarjeta). En Windows: `winget install Cloudflare.cloudflared`.
+No es necesario ni deseable mover automáticamente `bfab.io` a Cloudflare solo para esta función. Si esa zona sigue en otro proveedor, usa otra zona ya administrada en Cloudflare o configura conscientemente una cuando quieras un hostname estable.
 
-## Cada vez que quieras usar el modelo local
+## Arranque
 
-1. En LM Studio: **Developer → Local Server → Start**. Puerto **1234**.
-   El modelo tiene que estar cargado.
-2. En PowerShell, desde la raíz del repo:
+Después de crear el túnel remoto en Cloudflare Zero Trust y configurar su Public Hostname para apuntar al servicio LM Studio:
 
-   ```powershell
-   .\start-model-tunnel.ps1
-   ```
+```powershell
+.\ops\local\start-tunnel.ps1
+```
 
-   Por defecto apunta a `http://127.0.0.1:1234`. Ollama: `.\start-model-tunnel.ps1 -Port 11434`.
-3. cloudflared imprime una URL `https://….trycloudflare.com`.
-4. En PsychDeep → Ajustes (cuenta `admin_clinical`):
-   - proveedor **Modelo propio**
-   - URI: `https://….trycloudflare.com/v1` (el sufijo `/v1` es obligatorio)
-   - nombre del modelo: el que muestra LM Studio
-   - **Probar el endpoint** → **Guardar**
+El script solicita el tunnel token la primera vez y lo guarda en el directorio de secretos ignorado por Git. Docker ejecuta `cloudflared tunnel --no-autoupdate run --token-file ...` mediante el perfil `tunnel` de `docker-compose.offline.yml`.
 
-Cuando apagues el túnel o el PC, Render deja de alcanzar el modelo. El
-backend ignora un override inalcanzable y vuelve a Claude en lugar de
-colgarse. Vuelve a Claude a mano con «Volver al modelo del despliegue»
-si no vas a dejar el túnel encendido.
+En PsychDeep, la configuración del modelo alojado debe usar:
 
-## Qué no funciona (y no lo intentes)
+```text
+Provider: OpenAI compatible
+Base URL: https://<hostname-estable>/v1
+API key:  <token API de LM Studio>
+Model:    <identificador exacto cargado por LM Studio>
+```
 
-| URI | Por qué falla |
+`llm_endpoint_configs` está excluida deliberadamente de la sincronización de PostgreSQL: el endpoint cloud y el endpoint local son configuraciones de nodo distintas.
+
+## Uso local
+
+Cuando PsychDeep se ejecuta localmente en Docker no necesita Cloudflare:
+
+```text
+Base URL: http://host.docker.internal:1234/v1
+```
+
+Esto evita sacar texto clínico a Internet cuando estás usando la aplicación local.
+
+## Quick Tunnel: solo diagnóstico
+
+Un Quick Tunnel `*.trycloudflare.com` puede seguir siendo útil para comprobar en minutos que Render alcanza LM Studio, pero no debe ser la configuración persistente:
+
+- la URL cambia al reiniciar;
+- no proporciona por sí solo una identidad estable del servicio;
+- obliga a reconfigurar PsychDeep cada vez.
+
+Si se usa temporalmente, LM Studio debe seguir exigiendo su API token.
+
+## Qué no hacer
+
+| Configuración | Problema |
 |---|---|
-| `http://127.0.0.1:1234/v1` | Eso es el loopback de Frankfurt, no el de tu casa |
-| `http://192.168.1.19:1234/v1` | No hay ruta desde la nube a tu LAN |
-| `http://host.docker.internal:1234/v1` | En Render ese nombre es el propio contenedor |
-| Abrir el puerto 1234 en el router | No es HTTPS; el backend lo rechaza desde la nube |
+| `http://127.0.0.1:1234/v1` desde Render | apunta al loopback del contenedor remoto |
+| `http://192.168.x.x:1234/v1` desde Render | no existe ruta desde Render a la LAN |
+| `http://host.docker.internal:1234/v1` desde Render | solo tiene sentido en Docker del propio portátil |
+| abrir 1234 en el router | expone directamente el servidor y evita el control HTTPS del túnel |
+| tunelizar PostgreSQL local | no es parte del diseño; la sincronización DB sale del portátil hacia Supabase |
+| guardar tunnel/API tokens en Git | compromete el endpoint local |
 
-## Túnel con nombre fijo (también gratis)
+## Disponibilidad
 
-La URL `trycloudflare.com` cambia en cada arranque. Si quieres
-`https://lm.bfab.io/v1` estable:
+Si el portátil, LM Studio o el túnel están apagados, el endpoint local remoto no está disponible. PsychDeep debe conservar Claude/Anthropic como configuración/fallback cloud cuando corresponda. Para funcionamiento sin Internet utiliza la instancia local de PsychDeep, PostgreSQL local y LM Studio local.
 
-1. Cuenta Cloudflare (plan Free) con `bfab.io`.
-2. `cloudflared tunnel login`
-3. `cloudflared tunnel create psychdeep-lm`
-4. DNS CNAME `lm.bfab.io` → `<tunnel-id>.cfargotunnel.com`
-5. `cloudflared tunnel route dns psychdeep-lm lm.bfab.io`
-6. `cloudflared tunnel run --url http://127.0.0.1:1234 psychdeep-lm`
+## Elección del modelo
 
-Eso sigue siendo gratis. El texto clínico viaja por el túnel: no lo dejes
-abierto sin necesidad y no lo compartas.
-
-## Privacidad
-
-Un túnel público expone el API del modelo a quien tenga la URL. Cloudflare
-Quick Tunnels no añaden autenticación. Úsalo solo mientras experimentas;
-en producción cotidiana deja Claude (`ANTHROPIC_API_KEY` en Render).
+No fijes en el repositorio un modelo concreto. La elección depende de GPU/VRAM, RAM y espacio reales del equipo. Primero se inspecciona el hardware y después se descarga en LM Studio el modelo/quantization que ofrezca el mejor equilibrio clínico entre calidad, contexto y latencia. Los pesos tampoco se versionan en Git.
