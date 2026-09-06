@@ -1,20 +1,8 @@
 """LLM provider factory.
 
-PsychApp's agents — Agent 1 (conversational), Agent 2 (linguistic analyst),
-Agent 3 (clinical copilot) and Agent 4 (psychosocial extractor) — run on
-whichever provider is configured. Two are supported:
-
-  * ``anthropic`` — Claude over the Anthropic API. The default, and what the
-    clinical prompts were tuned against.
-  * ``openai_compatible`` — a model you host yourself, reached over the
-    OpenAI chat-completions API that llama.cpp, Ollama, LM Studio, vLLM and
-    LocalAI all expose.
-
-The choice comes from ``app/services/llm_config.py``: the environment by
-default, overridden at runtime by the active row in ``llm_endpoint_configs``
-when the deployment allows it. Callers do not pass it — they ask for a
-provider and get whichever one is in force, with the metadata to prove which
-one answered.
+PsychApp's agents run on whichever provider is configured. Anthropic calls
+also receive a metadata-only usage recorder so every billable request can be
+reconciled independently of the clinical tables.
 """
 from app.services.llm.anthropic_provider import AnthropicProvider
 from app.services.llm.base import (
@@ -50,31 +38,28 @@ def build_provider(config) -> LLMProvider:
             analysis_model=config.analysis_model,
             copilot_model=config.copilot_model,
             api_key=config.api_key,
-            # A local endpoint has one budget for everything it serves, so
-            # the resolved value applies whether it came from a stored row
-            # or the environment.
             max_tokens=config.max_tokens,
             timeout_seconds=float(config.timeout_seconds),
         )
+
+    # Imported lazily to keep the provider module usable in isolated unit
+    # tests without opening a database session merely by importing it.
+    from app.services.llm_usage import record_usage_safely
+
     return AnthropicProvider(
         chat_model=config.chat_model,
         analysis_model=config.analysis_model,
         copilot_model=config.copilot_model,
         # Only a runtime override pins one budget across both roles. Passing
         # the environment's shared value here would shadow the per-role
-        # settings, which is how ANTHROPIC_MAX_TOKENS_CHAT / _ANALYSIS came
-        # to be documented while doing nothing.
+        # settings.
         max_tokens=config.explicit_max_tokens,
+        usage_recorder=record_usage_safely,
     )
 
 
 def get_llm_provider(db=None) -> LLMProvider:
-    """The provider currently in force.
-
-    ``db`` is optional so existing call sites keep working; passing it lets
-    the resolver see a configuration change made on another worker without
-    waiting for the cache to expire.
-    """
+    """Return the provider currently in force."""
     from app.services import llm_config
 
     return build_provider(llm_config.resolve(db))
