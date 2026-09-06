@@ -1,0 +1,93 @@
+name: psychdeep-local
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: psychapp
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-psychapp}
+      POSTGRES_DB: psychapp
+    volumes:
+      - psychdeep_offline_db:/var/lib/postgresql/data
+      - ./ops/local/postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psychapp -d psychapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      DATABASE_URL: postgresql://psychapp:${LOCAL_DB_PASSWORD:-psychapp}@db:5432/psychapp
+      DATABASE_SCHEMA: psychdeep_v12
+      APP_ENV: local
+      RUNNING_IN_DOCKER: "true"
+      SEED_DEMO_DATA: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "127.0.0.1:5173:80"
+    volumes:
+      - ./mobile-dist:/usr/share/nginx/html/download:ro
+
+  # Disabled by default. Start with --profile sync only after running
+  # ops/sync/configure-sync.ps1 and reviewing the generated engine files.
+  symmetricds:
+    profiles: ["sync"]
+    image: jumpmind/symmetricds:3.18.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./ops/sync/engines:/opt/symmetric-ds/engines
+      - ./ops/sync/config:/opt/symmetric-ds/psychdeep-config:ro
+      - psychdeep_sym_tmp:/opt/symmetric-ds/tmp
+      - psychdeep_sym_security:/opt/symmetric-ds/security
+    ports:
+      - "127.0.0.1:31415:31415"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Optional tunnel for the local LM Studio server. The tunnel is outbound-only;
+  # the database is NEVER exposed through Cloudflare Tunnel.
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
+    secrets:
+      - cloudflare_tunnel_token
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+secrets:
+  cloudflare_tunnel_token:
+    file: ./ops/local/secrets/cloudflare-tunnel-token.txt
+
+volumes:
+  psychdeep_offline_db:
+  psychdeep_sym_tmp:
+  psychdeep_sym_security:
