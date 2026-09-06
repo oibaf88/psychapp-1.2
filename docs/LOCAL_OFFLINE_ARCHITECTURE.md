@@ -27,11 +27,22 @@ Copy-Item .env.local.example .env.local
 
 Open `http://127.0.0.1:5173`.
 
-If LM Studio is running on Windows, configure the OpenAI-compatible endpoint in PsychDeep Settings as:
+### LM Studio when PsychDeep runs in Docker
+
+LM Studio normally listens only on loopback. The backend container reaches the Windows host through `host.docker.internal`, so configure LM Studio before testing the endpoint:
+
+1. Developer > Server Settings > **Require Authentication: ON**.
+2. Create an LM Studio API token and keep it private.
+3. Turn **Serve on Local Network: ON** (equivalent to binding the server to a non-loopback address). Keep Windows Firewall enabled and do not allow port 1234 on public networks.
+4. Start the server on port 1234.
+5. In PsychDeep Settings choose the OpenAI-compatible provider and use:
 
 ```text
-http://host.docker.internal:1234/v1
+Base URL: http://host.docker.internal:1234/v1
+API key:  <your LM Studio API token>
 ```
+
+Once the model weights have already been downloaded, this local path can operate without Internet access.
 
 ## Tunnel flow - model only
 
@@ -40,7 +51,7 @@ Render backend -> HTTPS hostname -> Cloudflare -> cloudflared (outbound tunnel)
                                               -> LM Studio :1234
 ```
 
-The database is **never** routed through Cloudflare Tunnel. Enable LM Studio API-token authentication before publishing its endpoint. Store the Cloudflare tunnel token in `ops/local/secrets/cloudflare-tunnel-token.txt` via `start-tunnel.ps1`; the directory is git-ignored.
+The database is **never** routed through Cloudflare Tunnel. Keep LM Studio API-token authentication enabled before publishing its endpoint. Store the Cloudflare tunnel token in `ops/local/secrets/cloudflare-tunnel-token.txt` via `start-tunnel.ps1`; the directory is git-ignored.
 
 ## Database synchronization
 
