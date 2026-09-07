@@ -56,6 +56,8 @@ Render backend -> HTTPS stable hostname -> Cloudflare Tunnel -> LM Studio :1234
 
 Only the model endpoint is tunneled. PostgreSQL is never routed through Cloudflare Tunnel. Use a remotely-managed named tunnel with a fixed hostname and keep LM Studio API-token authentication enabled. `ops/local/secrets/cloudflare-tunnel-token.txt` and every other generated secret are ignored by Git.
 
+Production has `LLM_ALLOW_RUNTIME_OVERRIDE=true`, but this does **not** switch away from Claude by itself. With no active `llm_endpoint_configs` row, the environment's Anthropic configuration remains in force. Only an authenticated `admin_clinical` account can test/save/reset a runtime endpoint, and every change is audited. Render also rejects private/LAN targets and non-HTTPS model URLs. This lets the operator switch to the authenticated Cloudflare hostname without redeploying while preserving Claude as the default/fallback.
+
 See `docs/LOCAL_MODEL_TUNNEL.md`.
 
 ## Database synchronization
@@ -140,7 +142,7 @@ The 19 replicated application tables may be multi-writer, but avoid concurrent e
 ## Security invariants
 
 - PostgreSQL, backend, frontend and SymmetricDS management ports bind to `127.0.0.1` on the laptop.
-- Production keeps `LLM_ALLOW_RUNTIME_OVERRIDE=false`; local development explicitly opts in.
+- Production permits runtime endpoint selection only for `admin_clinical`; Claude remains the default/fallback until an active, reachable HTTPS override is deliberately saved.
 - `psychdeep_sync` is NOINHERIT, not superuser, has no BYPASSRLS and is connection-limited.
 - The sync role has CRUD + TRIGGER only for the allowlist and no TRUNCATE.
 - `llm_endpoint_configs` and `password_reset_tokens` are not readable by the sync role.
